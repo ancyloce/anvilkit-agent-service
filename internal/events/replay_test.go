@@ -1,0 +1,154 @@
+package events
+
+import (
+	"context"
+	"errors"
+	"net/http/httptest"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+type cursorReader struct{ waitedAfter uint64 }
+
+func (r *cursorReader) Replay(context.Context, ReplayRequest) (ReplayPage, error) {
+	return ReplayPage{CurrentCursor: "event-7", CurrentSequence: 7}, nil
+}
+func (*cursorReader) Snapshot(context.Context, Scope, string) (SnapshotProjection, error) {
+	return SnapshotProjection{}, nil
+}
+func (r *cursorReader) Wait(_ context.Context, _ Scope, _ string, after uint64, _ time.Duration) error {
+	r.waitedAfter = after
+	return errors.New("stop")
+}
+
+func TestCursorResumeWaitsAfterResolvedSequence(t *testing.T) {
+	reader := &cursorReader{}
+	stream, err := NewStream(reader, &revokingAuthority{revokeAt: 100}, StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 100, Bounds: Bounds{MaximumBytes: 1024, MaximumFields: 4, MaximumFieldBytes: 32}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.Serve(context.Background(), httptest.NewRecorder(), Scope{WorkspaceID: "w", ProjectID: "p"}, "run", "event-7"); err == nil {
+		t.Fatal("reader stop was not returned")
+	}
+	if reader.waitedAfter != 7 {
+		t.Fatalf("waited after %d, want resolved cursor sequence 7", reader.waitedAfter)
+	}
+}
+
+func TestEventBoundsRejectProhibitedAndOversizedPayloads(t *testing.T) {
+	bounds := Bounds{MaximumBytes: 1024, MaximumFields: 2, MaximumFieldBytes: 16}
+	if err := ValidateBytes([]byte(validBoundedEvent), bounds); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{
+		strings.Replace(validBoundedEvent, `"state":"created"`, `"prompt":"classified"`, 1),
+		strings.Replace(validBoundedEvent, `"state":"created"`, `"a":"1","b":"2","c":"3"`, 1),
+		strings.Replace(validBoundedEvent, `"payload":{"state":"created"}`, `"payload":{"state":"created"},"artifactReference":{"artifactId":"artifact.1","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`, 1),
+		strings.Replace(validBoundedEvent, `"payload"`, `"unexpected"`, 1),
+	} {
+		if err := ValidateBytes([]byte(raw), bounds); err == nil {
+			t.Fatalf("invalid event accepted: %s", raw)
+		}
+	}
+}
+
+const validBoundedEvent = `{"apiVersion":"anvilkit.io/contracts/v1","kind":"AgentEvent","eventId":"event.1","runId":"run.1","sequence":1,"eventType":"run.created","occurredAt":"2026-08-13T00:00:00.000Z","traceContext":{"traceparent":"00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"},"contractBomReference":{"repository":"anvilkit/contracts","bomDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ociManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidenceManifestDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"payload":{"state":"created"}}`
+
+func TestGapDetection(t *testing.T) {
+	if err := ValidateContiguous([]Event{{Sequence: 2}, {Sequence: 4}}, 1); err == nil {
+		t.Fatal("gap accepted")
+	}
+	if err := ValidateContiguous([]Event{{Sequence: 2}, {Sequence: 3}}, 1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type onePageReader struct{ event Event }
+
+func (r onePageReader) Replay(context.Context, ReplayRequest) (ReplayPage, error) {
+	if r.event.ID == "" {
+		return ReplayPage{}, nil
+	}
+	event := r.event
+	r.event = Event{}
+	return ReplayPage{Events: []Event{event}, CurrentCursor: event.ID, CurrentSequence: event.Sequence}, nil
+}
+func (onePageReader) Snapshot(context.Context, Scope, string) (SnapshotProjection, error) {
+	return SnapshotProjection{}, nil
+}
+func (onePageReader) Wait(ctx context.Context, _ Scope, _ string, _ uint64, _ time.Duration) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type revokingAuthority struct {
+	calls    atomic.Int64
+	revokeAt int64
+}
+
+type visibilityObserver struct {
+	duration time.Duration
+	cancel   context.CancelFunc
+}
+
+func (o *visibilityObserver) ObserveEventVisibility(_ context.Context, _, _, _ string, duration time.Duration) {
+	o.duration = duration
+	o.cancel()
+}
+
+func TestAuthorizedVisibilityIsInstrumentedAfterFlush(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	observer := &visibilityObserver{cancel: cancel}
+	reader := onePageReader{event: Event{ID: "event-1", Sequence: 1, CreatedAt: time.Now().Add(-time.Second), Bytes: []byte(validBoundedEvent)}}
+	stream, err := NewStream(reader, &revokingAuthority{revokeAt: 100}, StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 100, Bounds: Bounds{MaximumBytes: 1024, MaximumFields: 4, MaximumFieldBytes: 32}, Observer: observer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	if err := stream.Serve(ctx, response, Scope{WorkspaceID: "w", ProjectID: "p"}, "run", ""); err == nil {
+		t.Fatal("cancelled stream returned no error")
+	}
+	if observer.duration < time.Second || !strings.Contains(response.Body.String(), "event-1") {
+		t.Fatalf("visibility was not measured after delivery: duration=%s body=%s", observer.duration, response.Body.String())
+	}
+}
+
+func TestHeartbeatDoesNotAdvanceEventState(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	stream, err := NewStream(onePageReader{}, &revokingAuthority{revokeAt: 1000}, StreamConfig{Heartbeat: time.Millisecond, Revalidation: time.Second, ReplayLimit: 100, Bounds: Bounds{MaximumBytes: 256, MaximumFields: 4, MaximumFieldBytes: 32}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	_ = stream.Serve(ctx, response, Scope{WorkspaceID: "w", ProjectID: "p"}, "run", "")
+	if !strings.Contains(response.Body.String(), ": heartbeat") || strings.Contains(response.Body.String(), "id:") {
+		t.Fatalf("heartbeat changed event state: %s", response.Body.String())
+	}
+}
+
+func (a *revokingAuthority) Revalidate(context.Context) error {
+	if a.calls.Add(1) >= a.revokeAt {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestRevocationTerminatesBeforeAnotherProtectedEvent(t *testing.T) {
+	reader := onePageReader{event: Event{ID: "event-1", Sequence: 1, Bytes: []byte(`{"payload":{"state":"created"}}`)}}
+	authority := &revokingAuthority{revokeAt: 2}
+	stream, err := NewStream(reader, authority, StreamConfig{Heartbeat: time.Millisecond, Revalidation: time.Millisecond, ReplayLimit: 100, Bounds: Bounds{MaximumBytes: 256, MaximumFields: 4, MaximumFieldBytes: 32}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	err = stream.Serve(context.Background(), response, Scope{WorkspaceID: "w", ProjectID: "p"}, "run", "")
+	if err == nil {
+		t.Fatal("revocation did not terminate stream")
+	}
+	if strings.Contains(response.Body.String(), "event-1") {
+		t.Fatalf("event sent after revalidation failed: %s", response.Body.String())
+	}
+}
