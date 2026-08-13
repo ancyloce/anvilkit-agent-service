@@ -1,0 +1,9 @@
+DROP INDEX IF EXISTS agent_control.run_progress_scan_idx;
+DROP INDEX IF EXISTS agent_control.run_children_parent_idx;
+DROP INDEX IF EXISTS agent_control.approval_requests_current_idx;
+DROP INDEX IF EXISTS agent_control.input_requests_current_idx;
+DROP TABLE IF EXISTS agent_control.run_progress;
+DROP TABLE IF EXISTS agent_control.run_children;
+DROP TABLE IF EXISTS agent_control.lifecycle_controls;
+DROP TABLE IF EXISTS agent_control.approval_requests;
+DROP TABLE IF EXISTS agent_control.input_requests;

@@ -1,0 +1,12 @@
+DROP SCHEMA IF EXISTS agent_evaluation CASCADE;
+DROP SCHEMA IF EXISTS agent_memory CASCADE;
+DROP SCHEMA IF EXISTS agent_artifacts CASCADE;
+DROP SCHEMA IF EXISTS agent_workflow CASCADE;
+DROP SCHEMA IF EXISTS agent_events CASCADE;
+DROP SCHEMA IF EXISTS agent_control CASCADE;
+DROP ROLE IF EXISTS agent_authority_rw;
+DROP ROLE IF EXISTS agent_evaluation_rw;
+DROP ROLE IF EXISTS agent_artifacts_rw;
+DROP ROLE IF EXISTS agent_workflow_rw;
+DROP ROLE IF EXISTS agent_events_rw;
+DROP ROLE IF EXISTS agent_control_rw;

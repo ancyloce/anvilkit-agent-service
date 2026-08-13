@@ -1,0 +1,14 @@
+{
+  "datasetVersion": 1,
+  "datasetId": "agent-service-typed-plan-v1",
+  "owner": "Agent Service contract evaluation",
+  "cases": [
+    {"id":"valid","scenario":"valid","weight":200,"eligible":true,"invalid":false,"forbidden":false,"expectedOutcome":"accepted","expectedTool":"fake.execute","expectedDispatchAllowed":true},
+    {"id":"maximum-bound","scenario":"maximum-bound","weight":200,"eligible":true,"invalid":false,"forbidden":false,"expectedOutcome":"accepted","expectedTool":"fake.execute","expectedDispatchAllowed":true},
+    {"id":"repairable","scenario":"repairable","weight":200,"eligible":true,"invalid":false,"forbidden":false,"expectedOutcome":"repaired","expectedTool":"fake.execute","expectedDispatchAllowed":true},
+    {"id":"malformed","scenario":"malformed","weight":100,"eligible":false,"invalid":true,"forbidden":false,"expectedOutcome":"rejected","expectedTool":"","expectedDispatchAllowed":false},
+    {"id":"ambiguous","scenario":"ambiguous","weight":100,"eligible":false,"invalid":true,"forbidden":false,"expectedOutcome":"rejected","expectedTool":"","expectedDispatchAllowed":false},
+    {"id":"policy-denied","scenario":"policy-denied","weight":100,"eligible":false,"invalid":false,"forbidden":true,"expectedOutcome":"policy-denied","expectedTool":"admin.delete","expectedDispatchAllowed":false},
+    {"id":"adversarial","scenario":"adversarial","weight":100,"eligible":false,"invalid":false,"forbidden":true,"expectedOutcome":"policy-denied","expectedTool":"admin.delete","expectedDispatchAllowed":false}
+  ]
+}

@@ -1,0 +1,14 @@
+DROP TRIGGER IF EXISTS worker_result_immutable ON agent_workflow.worker_results;
+DROP FUNCTION IF EXISTS agent_workflow.guard_worker_result_immutable();
+DROP INDEX IF EXISTS agent_workflow.tasks_active_attempt_idx;
+DROP INDEX IF EXISTS agent_workflow.tasks_queue_idx;
+DROP INDEX IF EXISTS agent_workflow.tasks_reclaim_idx;
+DROP INDEX IF EXISTS agent_control.usage_attempt_meter_sequence_idx;
+DROP INDEX IF EXISTS agent_control.usage_provider_event_dedup_idx;
+ALTER TABLE agent_control.usage_observations DROP COLUMN IF EXISTS observation_digest,DROP COLUMN IF EXISTS repaired,DROP COLUMN IF EXISTS traceparent,DROP COLUMN IF EXISTS build_identity,DROP COLUMN IF EXISTS provider,DROP COLUMN IF EXISTS currency,DROP COLUMN IF EXISTS unit,DROP COLUMN IF EXISTS quantity,DROP COLUMN IF EXISTS meter,DROP COLUMN IF EXISTS provider_event_id;
+DROP TABLE IF EXISTS agent_events.queue_deliveries;
+DROP TABLE IF EXISTS agent_workflow.worker_dlq;
+DROP TABLE IF EXISTS agent_workflow.result_diagnostics;
+DROP TABLE IF EXISTS agent_workflow.worker_results;
+DROP TABLE IF EXISTS agent_workflow.worker_attempts;
+DROP TABLE IF EXISTS agent_workflow.agent_tasks;

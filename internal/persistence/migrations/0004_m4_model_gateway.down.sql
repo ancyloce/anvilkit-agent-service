@@ -1,0 +1,14 @@
+DROP INDEX IF EXISTS agent_evaluation.tool_decisions_run_idx;
+DROP INDEX IF EXISTS agent_evaluation.context_evidence_run_idx;
+DROP INDEX IF EXISTS agent_workflow.provider_continuations_expiry_idx;
+DROP INDEX IF EXISTS agent_workflow.provider_invocations_run_idx;
+DROP TRIGGER IF EXISTS provider_invocation_identity ON agent_workflow.provider_invocations;
+DROP TRIGGER IF EXISTS provider_invocation_evidence ON agent_workflow.provider_invocations;
+DROP FUNCTION IF EXISTS agent_workflow.guard_provider_invocation_identity();
+DROP FUNCTION IF EXISTS agent_workflow.guard_provider_invocation_evidence();
+DROP TABLE IF EXISTS agent_evaluation.tool_decisions;
+DROP TABLE IF EXISTS agent_evaluation.context_evidence;
+DROP TABLE IF EXISTS agent_workflow.provider_continuations;
+DROP TABLE IF EXISTS agent_workflow.run_tool_profiles;
+DROP TABLE IF EXISTS agent_workflow.provider_invocations;
+DROP TABLE IF EXISTS agent_control.provider_registry_snapshots;
