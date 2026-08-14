@@ -21,7 +21,7 @@ func New(database *pgxpool.Pool) (*Store, error) {
 	return &Store{database: database}, nil
 }
 func (s *Store) ActiveForRun(ctx context.Context, scope domaincommit.Scope, runID runs.ID) (domaincommit.Operation, bool, error) {
-	row := s.database.QueryRow(ctx, `SELECT operation_id,authorization_id,authorization_jws,action_digest,artifact_digest,expected_revision,status,authorization_consumed,created_at,updated_at FROM agent_control.domain_operations WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND status IN ('recorded','issued','awaiting-domain-confirmation')`, scope.WorkspaceID, scope.ProjectID, runID)
+	row := s.database.QueryRow(ctx, `SELECT operation_id,authorization_id,authorization_jws,action_digest,artifact_digest,expected_revision,idempotency_key,request_digest,status,authorization_consumed,created_at,updated_at FROM agent_control.domain_operations WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND status IN ('recorded','issued','awaiting-domain-confirmation')`, scope.WorkspaceID, scope.ProjectID, runID)
 	value, err := scan(row, scope, runID)
 	if err == pgx.ErrNoRows {
 		return domaincommit.Operation{}, false, nil
@@ -32,7 +32,7 @@ func (s *Store) ActiveForRun(ctx context.Context, scope domaincommit.Scope, runI
 	return value, true, nil
 }
 func (s *Store) Create(ctx context.Context, value domaincommit.Operation) error {
-	_, err := s.database.Exec(ctx, `INSERT INTO agent_control.domain_operations(workspace_id,project_id,run_id,operation_id,authorization_id,authorization_jws,action_digest,artifact_digest,expected_revision,status,authorization_consumed,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, value.Scope.WorkspaceID, value.Scope.ProjectID, value.RunID, value.ID, value.AuthorizationID, value.AuthorizationJWS, value.ActionDigest, value.ArtifactDigest, value.ExpectedRevision, value.Status, value.AuthorizationConsumed, value.CreatedAt, value.UpdatedAt)
+	_, err := s.database.Exec(ctx, `INSERT INTO agent_control.domain_operations(workspace_id,project_id,run_id,operation_id,authorization_id,authorization_jws,action_digest,artifact_digest,expected_revision,idempotency_key,request_digest,status,authorization_consumed,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`, value.Scope.WorkspaceID, value.Scope.ProjectID, value.RunID, value.ID, value.AuthorizationID, value.AuthorizationJWS, value.ActionDigest, value.ArtifactDigest, value.ExpectedRevision, value.IdempotencyKey, value.RequestDigest, value.Status, value.AuthorizationConsumed, value.CreatedAt, value.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("persist domain operation: %w", err)
 	}
@@ -45,6 +45,9 @@ func (s *Store) MarkAwaiting(ctx context.Context, scope domaincommit.Scope, id s
 	return s.update(ctx, scope, id, domaincommit.Awaiting, false, now)
 }
 func (s *Store) Finalize(ctx context.Context, scope domaincommit.Scope, id string, status domaincommit.Status, now time.Time) error {
+	if status != domaincommit.Applied && status != domaincommit.Conflicted && status != domaincommit.Rejected {
+		return problem.New(problem.CodeInvalidTransition, "")
+	}
 	return s.update(ctx, scope, id, status, true, now)
 }
 func (s *Store) update(ctx context.Context, scope domaincommit.Scope, id string, status domaincommit.Status, consumed bool, now time.Time) error {
@@ -58,11 +61,11 @@ func (s *Store) update(ctx context.Context, scope domaincommit.Scope, id string,
 	return nil
 }
 func (s *Store) Get(ctx context.Context, scope domaincommit.Scope, id string) (domaincommit.Operation, error) {
-	row := s.database.QueryRow(ctx, `SELECT run_id,operation_id,authorization_id,authorization_jws,action_digest,artifact_digest,expected_revision,status,authorization_consumed,created_at,updated_at FROM agent_control.domain_operations WHERE workspace_id=$1 AND project_id=$2 AND operation_id=$3`, scope.WorkspaceID, scope.ProjectID, id)
+	row := s.database.QueryRow(ctx, `SELECT run_id,operation_id,authorization_id,authorization_jws,action_digest,artifact_digest,expected_revision,idempotency_key,request_digest,status,authorization_consumed,created_at,updated_at FROM agent_control.domain_operations WHERE workspace_id=$1 AND project_id=$2 AND operation_id=$3`, scope.WorkspaceID, scope.ProjectID, id)
 	var runID runs.ID
 	var value domaincommit.Operation
 	value.Scope = scope
-	if err := row.Scan(&runID, &value.ID, &value.AuthorizationID, &value.AuthorizationJWS, &value.ActionDigest, &value.ArtifactDigest, &value.ExpectedRevision, &value.Status, &value.AuthorizationConsumed, &value.CreatedAt, &value.UpdatedAt); err != nil {
+	if err := row.Scan(&runID, &value.ID, &value.AuthorizationID, &value.AuthorizationJWS, &value.ActionDigest, &value.ArtifactDigest, &value.ExpectedRevision, &value.IdempotencyKey, &value.RequestDigest, &value.Status, &value.AuthorizationConsumed, &value.CreatedAt, &value.UpdatedAt); err != nil {
 		if err == pgx.ErrNoRows {
 			return domaincommit.Operation{}, problem.New(problem.CodeResourceNotFound, "")
 		}
@@ -76,7 +79,7 @@ type scanner interface{ Scan(...any) error }
 
 func scan(row scanner, scope domaincommit.Scope, runID runs.ID) (domaincommit.Operation, error) {
 	value := domaincommit.Operation{Scope: scope, RunID: runID}
-	err := row.Scan(&value.ID, &value.AuthorizationID, &value.AuthorizationJWS, &value.ActionDigest, &value.ArtifactDigest, &value.ExpectedRevision, &value.Status, &value.AuthorizationConsumed, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.AuthorizationID, &value.AuthorizationJWS, &value.ActionDigest, &value.ArtifactDigest, &value.ExpectedRevision, &value.IdempotencyKey, &value.RequestDigest, &value.Status, &value.AuthorizationConsumed, &value.CreatedAt, &value.UpdatedAt)
 	return value, err
 }
 

@@ -33,6 +33,7 @@ type Operation struct {
 	AuthorizationID                                applyauth.AuthorizationID
 	AuthorizationJWS                               string
 	ActionDigest, ArtifactDigest, ExpectedRevision string
+	IdempotencyKey, RequestDigest                  string
 	Status                                         Status
 	AuthorizationConsumed                          bool
 	CreatedAt, UpdatedAt                           time.Time
@@ -94,7 +95,10 @@ func (c *Coordinator) Start(ctx context.Context, input Start) (Operation, error)
 	if prior, ok, err := c.store.ActiveForRun(ctx, input.Scope, input.RunID); err != nil {
 		return Operation{}, err
 	} else if ok {
-		return prior, nil
+		if prior.ExpectedRevision != input.ExpectedRevision || prior.IdempotencyKey != input.Metadata.IdempotencyKey || prior.RequestDigest != input.Metadata.RequestDigest {
+			return Operation{}, problem.New(problem.CodeIdempotencyConflict, "")
+		}
+		return c.resume(ctx, input, prior)
 	}
 	currentRun, err := c.runs.Current(ctx, input.Scope, input.RunID)
 	if err != nil {
@@ -115,34 +119,79 @@ func (c *Coordinator) Start(ctx context.Context, input Start) (Operation, error)
 		return Operation{}, fmt.Errorf("allocate domain operation identity: empty identity")
 	}
 	now := c.clock.Now().UTC()
-	operation := Operation{Scope: input.Scope, RunID: input.RunID, ID: operationID, AuthorizationID: issued.ID, AuthorizationJWS: issued.Compact, ActionDigest: issued.Payload.ActionDigest, ArtifactDigest: issued.Payload.ArtifactDigest, ExpectedRevision: issued.Payload.BaseRevision, Status: Recorded, CreatedAt: now, UpdatedAt: now}
+	operation := Operation{Scope: input.Scope, RunID: input.RunID, ID: operationID, AuthorizationID: issued.ID, AuthorizationJWS: issued.Compact, ActionDigest: issued.Payload.ActionDigest, ArtifactDigest: issued.Payload.ArtifactDigest, ExpectedRevision: issued.Payload.BaseRevision, IdempotencyKey: input.Metadata.IdempotencyKey, RequestDigest: input.Metadata.RequestDigest, Status: Recorded, CreatedAt: now, UpdatedAt: now}
 	if operation.ExpectedRevision != input.ExpectedRevision {
 		return Operation{}, problem.New(problem.CodeCommitProofMissing, "")
 	}
 	if err := c.store.Create(ctx, operation); err != nil {
 		return Operation{}, fmt.Errorf("durably record domain operation: %w", err)
 	}
-	_, err = c.runs.Transition(ctx, input.Scope, input.RunID, input.ExpectedRunVersion, runs.Command{Kind: runs.Approve, Traceparent: input.Metadata.Traceparent, Commit: runs.CommitProof{ApprovalRechecked: true, ArtifactEligible: true, ActionBindingExact: true, AuthorizationDurable: true, AuthorizationID: string(issued.ID), DomainOperationID: operationID, ActionDigest: operation.ActionDigest, ArtifactDigest: operation.ArtifactDigest}})
+	return c.resume(ctx, input, operation)
+}
+
+func (c *Coordinator) resume(ctx context.Context, input Start, operation Operation) (Operation, error) {
+	if operation.Status == Awaiting {
+		return operation, nil
+	}
+	current, err := c.runs.Current(ctx, input.Scope, input.RunID)
 	if err != nil {
 		return operation, err
 	}
-	// This write-ahead marker prevents a restored workflow checkpoint from ever
-	// treating absence as permission to send a second command.
-	if err := c.store.MarkIssued(ctx, input.Scope, operationID, c.clock.Now().UTC()); err != nil {
-		return operation, fmt.Errorf("record command issuance intent: %w", err)
+	if operation.Status == Recorded {
+		if current.State == runs.AwaitingApproval {
+			if current.Version != input.ExpectedRunVersion {
+				return operation, problem.New(problem.CodeVersionConflict, "")
+			}
+			current, err = c.runs.Transition(ctx, input.Scope, input.RunID, current.Version, runs.Command{Kind: runs.Approve, Traceparent: input.Metadata.Traceparent, Commit: runs.CommitProof{ApprovalRechecked: true, ArtifactEligible: true, ActionBindingExact: true, AuthorizationDurable: true, AuthorizationID: string(operation.AuthorizationID), DomainOperationID: operation.ID, ActionDigest: operation.ActionDigest, ArtifactDigest: operation.ArtifactDigest}})
+			if err != nil {
+				return operation, err
+			}
+		}
+		if current.State != runs.Committing {
+			return operation, problem.New(problem.CodeInvalidTransition, "")
+		}
+		// This write-ahead marker prevents a restored workflow checkpoint from
+		// treating absence as permission to send a second command.
+		if err := c.store.MarkIssued(ctx, input.Scope, operation.ID, c.clock.Now().UTC()); err != nil {
+			return operation, fmt.Errorf("record command issuance intent: %w", err)
+		}
+		operation.Status = Issued
+		operation.UpdatedAt = c.clock.Now().UTC()
+		command := pagixclient.DomainCommand{Metadata: input.Metadata, OperationID: operation.ID, AuthorizationJWS: operation.AuthorizationJWS, AuthorizationID: string(operation.AuthorizationID), ActionDigest: operation.ActionDigest, ArtifactDigest: operation.ArtifactDigest, ExpectedRevision: operation.ExpectedRevision}
+		_, persistErr := c.pagix.Persist(ctx, command)
+		return c.awaitConfirmation(ctx, input, operation, persistErr)
 	}
-	command := pagixclient.DomainCommand{Metadata: input.Metadata, OperationID: operationID, AuthorizationJWS: issued.Compact, AuthorizationID: string(issued.ID), ActionDigest: operation.ActionDigest, ArtifactDigest: operation.ArtifactDigest, ExpectedRevision: operation.ExpectedRevision}
-	_, persistErr := c.pagix.Persist(ctx, command)
+	if operation.Status == Issued {
+		// Issued is deliberately reconcile-first: the command may have crossed
+		// the boundary before a process failure, so this path never sends again.
+		outcome, found, reconcileErr := c.pagix.Reconcile(ctx, input.Scope.WorkspaceID, operation.ID)
+		if reconcileErr != nil {
+			return operation, reconcileErr
+		}
+		if found && (outcome.OperationID != operation.ID || outcome.AuthorizationID != string(operation.AuthorizationID)) {
+			return operation, problem.New(problem.CodeIdempotencyConflict, "")
+		}
+		uncertain := problem.New(problem.CodeDomainOutcomeUncertain, "")
+		return c.awaitConfirmation(ctx, input, operation, uncertain)
+	}
+	return operation, problem.New(problem.CodeInvalidTransition, "")
+}
+
+func (c *Coordinator) awaitConfirmation(ctx context.Context, input Start, operation Operation, persistErr error) (Operation, error) {
 	current, err := c.runs.Current(ctx, input.Scope, input.RunID)
 	if err != nil {
 		return operation, err
 	}
 	if current.State == runs.Committing {
-		if _, err := c.runs.Transition(ctx, input.Scope, input.RunID, current.Version, runs.Command{Kind: runs.BeginDomainConfirmation, Traceparent: input.Metadata.Traceparent}); err != nil {
+		current, err = c.runs.Transition(ctx, input.Scope, input.RunID, current.Version, runs.Command{Kind: runs.BeginDomainConfirmation, Traceparent: input.Metadata.Traceparent})
+		if err != nil {
 			return operation, err
 		}
 	}
-	if err := c.store.MarkAwaiting(ctx, input.Scope, operationID, c.clock.Now().UTC()); err != nil {
+	if current.State != runs.AwaitingDomainConfirmation {
+		return operation, problem.New(problem.CodeInvalidTransition, "")
+	}
+	if err := c.store.MarkAwaiting(ctx, input.Scope, operation.ID, c.clock.Now().UTC()); err != nil {
 		return operation, err
 	}
 	operation.Status = Awaiting
@@ -160,13 +209,16 @@ func (c *Coordinator) Reconcile(ctx context.Context, scope Scope, runID runs.ID)
 	if !ok {
 		return Operation{}, problem.New(problem.CodeResourceNotFound, "")
 	}
-	_, _, err = c.pagix.Reconcile(ctx, scope.WorkspaceID, operation.ID)
+	outcome, found, err := c.pagix.Reconcile(ctx, scope.WorkspaceID, operation.ID)
+	if err == nil && found && (outcome.OperationID != operation.ID || outcome.AuthorizationID != string(operation.AuthorizationID)) {
+		return operation, problem.New(problem.CodeIdempotencyConflict, "")
+	}
 	return operation, err
 }
 
 func (c *Coordinator) HandleEvent(ctx context.Context, scope Scope, event pagixclient.DomainEvent) (runs.Run, bool, error) {
 	outcome, accepted, err := c.pagix.Consume(ctx, event)
-	if err != nil || !accepted {
+	if err != nil {
 		return runs.Run{}, accepted, err
 	}
 	operation, err := c.store.Get(ctx, scope, outcome.OperationID)
@@ -202,14 +254,23 @@ func (c *Coordinator) HandleEvent(ctx context.Context, scope Scope, event pagixc
 	default:
 		return runs.Run{}, false, problem.New(problem.CodeDomainOutcomeUncertain, "")
 	}
-	updated, err := c.runs.Transition(ctx, scope, operation.RunID, current.Version, command)
-	if err != nil {
-		return runs.Run{}, false, err
+	updated := current
+	if current.State == runs.AwaitingDomainConfirmation {
+		updated, err = c.runs.Transition(ctx, scope, operation.RunID, current.Version, command)
+		if err != nil {
+			return runs.Run{}, accepted, err
+		}
+	} else if !terminalMatches(current.State, status) {
+		return runs.Run{}, accepted, problem.New(problem.CodeInvalidTransition, "")
 	}
 	if err := c.store.Finalize(ctx, scope, operation.ID, status, c.clock.Now().UTC()); err != nil {
-		return runs.Run{}, false, err
+		return runs.Run{}, accepted, err
 	}
-	return updated, true, nil
+	return updated, accepted, nil
+}
+
+func terminalMatches(state runs.State, status Status) bool {
+	return status == Applied && state == runs.Completed || status == Conflicted && state == runs.Conflict || status == Rejected && state == runs.Failed
 }
 
 func (c *Coordinator) Cancel(context.Context, Scope, runs.ID) error {
@@ -262,6 +323,9 @@ func (s *MemoryStore) update(scope Scope, id string, status Status, now time.Tim
 	if !ok {
 		return problem.New(problem.CodeResourceNotFound, "")
 	}
+	if now.Before(value.UpdatedAt) || !statusTransition(value.Status, status) || consumed != (status == Applied || status == Conflicted || status == Rejected) {
+		return problem.New(problem.CodeInvalidTransition, "")
+	}
 	value.Status = status
 	value.UpdatedAt = now
 	value.AuthorizationConsumed = value.AuthorizationConsumed || consumed
@@ -282,6 +346,22 @@ func (s *MemoryStore) Finalize(_ context.Context, scope Scope, id string, status
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	return s.update(scope, id, status, now, true)
+}
+
+func statusTransition(current, next Status) bool {
+	if current == next {
+		return true
+	}
+	switch current {
+	case Recorded:
+		return next == Issued
+	case Issued:
+		return next == Awaiting || next == Applied || next == Conflicted || next == Rejected
+	case Awaiting:
+		return next == Applied || next == Conflicted || next == Rejected
+	default:
+		return false
+	}
 }
 func (s *MemoryStore) Get(_ context.Context, scope Scope, id string) (Operation, error) {
 	s.lock.Lock()

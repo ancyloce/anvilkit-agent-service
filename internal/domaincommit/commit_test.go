@@ -68,6 +68,7 @@ func (r *runStore) Transition(_ context.Context, _ Scope, _ runs.ID, expected ui
 type fakePagix struct {
 	lock       sync.Mutex
 	commands   int
+	reconciles int
 	events     map[string]pagixclient.DomainEvent
 	effect     pagixclient.DomainOutcome
 	hasEffect  bool
@@ -83,6 +84,7 @@ func (p *fakePagix) Persist(_ context.Context, command pagixclient.DomainCommand
 func (p *fakePagix) Reconcile(context.Context, string, string) (pagixclient.DomainOutcome, bool, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
+	p.reconciles++
 	return p.effect, p.hasEffect, nil
 }
 func (p *fakePagix) Consume(_ context.Context, event pagixclient.DomainEvent) (pagixclient.DomainOutcome, bool, error) {
@@ -235,5 +237,92 @@ func TestCancellationDuringCommitReportsReconciliation(t *testing.T) {
 	var details problem.Details
 	if !errors.As(err, &details) || details.Code != string(problem.CodeCancellationUnreconciled) || runsStore.value.State == runs.Cancelled {
 		t.Fatalf("cancel=%v state=%s", err, runsStore.value.State)
+	}
+}
+
+type flakyFinalizeStore struct {
+	*MemoryStore
+	failOnce bool
+}
+
+func (s *flakyFinalizeStore) Finalize(ctx context.Context, scope Scope, id string, status Status, now time.Time) error {
+	if s.failOnce {
+		s.failOnce = false
+		return errors.New("injected finalize failure")
+	}
+	return s.MemoryStore.Finalize(ctx, scope, id, status, now)
+}
+
+func TestDuplicateAuthoritativeEventRepairsPartialLocalFinalization(t *testing.T) {
+	pagix := &fakePagix{}
+	issuer := &fakeIssuer{}
+	base := NewMemoryStore()
+	store := &flakyFinalizeStore{MemoryStore: base, failOnce: true}
+	runsStore := &runStore{value: approvedRun(t)}
+	service, err := New(store, runsStore, issuer, pagix, &ids{}, fixedClock{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := input(runsStore.value.Version)
+	operation, err := service.Start(context.Background(), start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := pagixclient.DomainEvent{MessageID: "event-repair", OperationID: operation.ID, AuthorizationID: string(operation.AuthorizationID), Traceparent: start.Metadata.Traceparent, Outcome: pagixclient.DomainOutcome{OperationID: operation.ID, AuthorizationID: string(operation.AuthorizationID), Kind: pagixclient.OutcomeApplied, Revision: "revision-2", EventID: "event-repair", Recorded: true}}
+	if _, accepted, err := service.HandleEvent(context.Background(), start.Scope, event); err == nil || !accepted || runsStore.value.State != runs.Completed {
+		t.Fatalf("first delivery accepted=%v state=%s err=%v", accepted, runsStore.value.State, err)
+	}
+	updated, accepted, err := service.HandleEvent(context.Background(), start.Scope, event)
+	if err != nil || accepted || updated.State != runs.Completed {
+		t.Fatalf("repair delivery accepted=%v state=%s err=%v", accepted, updated.State, err)
+	}
+	record, err := base.Get(context.Background(), start.Scope, operation.ID)
+	if err != nil || record.Status != Applied || !record.AuthorizationConsumed {
+		t.Fatalf("repaired operation=%#v err=%v", record, err)
+	}
+}
+
+func TestRecordedOperationResumesAndIssuedOperationReconcilesBeforeSend(t *testing.T) {
+	for _, status := range []Status{Recorded, Issued} {
+		t.Run(string(status), func(t *testing.T) {
+			pagix := &fakePagix{}
+			issuer := &fakeIssuer{}
+			store := NewMemoryStore()
+			runsStore := &runStore{value: approvedRun(t)}
+			start := input(runsStore.value.Version)
+			operation := Operation{Scope: start.Scope, RunID: start.RunID, ID: "operation-restart", AuthorizationID: "authorization-restart", AuthorizationJWS: "header.payload.signature", ActionDigest: "sha256:" + strings.Repeat("a", 64), ArtifactDigest: "sha256:" + strings.Repeat("b", 64), ExpectedRevision: start.ExpectedRevision, IdempotencyKey: start.Metadata.IdempotencyKey, RequestDigest: start.Metadata.RequestDigest, Status: status, CreatedAt: commitNow, UpdatedAt: commitNow}
+			if status == Issued {
+				var err error
+				runsStore.value, _, err = runsStore.value.Apply(runs.Command{Kind: runs.Approve, Commit: runs.CommitProof{ApprovalRechecked: true, ArtifactEligible: true, ActionBindingExact: true, AuthorizationDurable: true, AuthorizationID: string(operation.AuthorizationID), DomainOperationID: operation.ID, ActionDigest: operation.ActionDigest, ArtifactDigest: operation.ArtifactDigest}})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := store.Create(context.Background(), operation); err != nil {
+				t.Fatal(err)
+			}
+			service, err := New(store, runsStore, issuer, pagix, &ids{}, fixedClock{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resumed, err := service.Start(context.Background(), start)
+			if resumed.Status != Awaiting || runsStore.value.State != runs.AwaitingDomainConfirmation || issuer.calls != 0 {
+				t.Fatalf("resumed=%#v state=%s issues=%d err=%v", resumed, runsStore.value.State, issuer.calls, err)
+			}
+			if status == Recorded && (err != nil || pagix.commands != 1 || pagix.reconciles != 0) {
+				t.Fatalf("recorded commands=%d reconciles=%d err=%v", pagix.commands, pagix.reconciles, err)
+			}
+			if status == Issued {
+				var details problem.Details
+				if !errors.As(err, &details) || details.Code != string(problem.CodeDomainOutcomeUncertain) || pagix.commands != 0 || pagix.reconciles != 1 {
+					t.Fatalf("issued commands=%d reconciles=%d err=%v", pagix.commands, pagix.reconciles, err)
+				}
+			}
+			changed := start
+			changed.Metadata.RequestDigest = "sha256:" + strings.Repeat("d", 64)
+			if _, err := service.Start(context.Background(), changed); err == nil {
+				t.Fatal("changed restart identity accepted")
+			}
+		})
 	}
 }
