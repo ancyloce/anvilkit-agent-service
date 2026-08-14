@@ -72,3 +72,25 @@ func TestInvalidCandidateRecordedButCannotReachReview(t *testing.T) {
 		t.Fatalf("evidence=%#v err=%v", evidence, err)
 	}
 }
+
+func TestValidationBoundsAndCancellationFailClosed(t *testing.T) {
+	if _, err := New(&runtime{}, &recorder{}, sleeper{}, clock{}, 1, 31*time.Second); err == nil {
+		t.Fatal("unbounded retry delay accepted")
+	}
+	orchestrator, _ := New(&runtime{result: Result{Valid: true, ValidatorVersion: "validator-v1"}}, &recorder{}, sleeper{}, clock{}, 1, 0)
+	oversized := request(Plan)
+	oversized.Payload = make([]byte, 16*1024*1024+1)
+	if _, err := orchestrator.Validate(context.Background(), oversized); err == nil {
+		t.Fatal("oversized validation payload accepted")
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := orchestrator.Validate(cancelled, request(Plan)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation became a retryable outage: %v", err)
+	}
+	malformed := &runtime{result: Result{Valid: true, ValidatorVersion: "validator-v1", Findings: make([]problem.FieldError, 257)}}
+	orchestrator, _ = New(malformed, &recorder{}, sleeper{}, clock{}, 1, 0)
+	if _, err := orchestrator.Validate(context.Background(), request(Plan)); err == nil {
+		t.Fatal("unbounded Contract Runtime evidence accepted")
+	}
+}

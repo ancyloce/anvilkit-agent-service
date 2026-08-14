@@ -57,18 +57,24 @@ type Orchestrator struct {
 }
 
 func New(runtime Runtime, recorder Recorder, sleeper Sleeper, clock Clock, attempts int, backoff time.Duration) (*Orchestrator, error) {
-	if runtime == nil || recorder == nil || sleeper == nil || clock == nil || attempts < 1 || attempts > 5 || backoff < 0 {
+	if runtime == nil || recorder == nil || sleeper == nil || clock == nil || attempts < 1 || attempts > 5 || backoff < 0 || backoff > 30*time.Second {
 		return nil, fmt.Errorf("contract validation dependencies or bounds are invalid")
 	}
 	return &Orchestrator{runtime, recorder, sleeper, clock, attempts, backoff}, nil
 }
 func (o *Orchestrator) Validate(ctx context.Context, request Request) (Evidence, error) {
-	if request.WorkspaceID == "" || request.ProjectID == "" || request.RunID == "" || (request.Kind != Plan && request.Kind != Artifact) || len(request.Payload) == 0 || !digest(request.BOMDigest) || !digest(request.SchemaDigest) || !digest(request.CatalogDigest) {
+	if request.WorkspaceID == "" || request.ProjectID == "" || request.RunID == "" || (request.Kind != Plan && request.Kind != Artifact) || len(request.Payload) == 0 || len(request.Payload) > 16*1024*1024 || !digest(request.BOMDigest) || !digest(request.SchemaDigest) || !digest(request.CatalogDigest) {
 		return Evidence{}, problem.New(problem.CodeRequestInvalid, "")
 	}
 	for attempt := 1; attempt <= o.attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return Evidence{}, err
+		}
 		result, err := o.runtime.CompileValidate(ctx, request)
 		if err != nil {
+			if contextErr := ctx.Err(); contextErr != nil {
+				return Evidence{}, contextErr
+			}
 			if attempt < o.attempts {
 				if err := o.sleeper.Sleep(ctx, o.backoff*time.Duration(attempt)); err != nil {
 					return Evidence{}, err
@@ -76,10 +82,14 @@ func (o *Orchestrator) Validate(ctx context.Context, request Request) (Evidence,
 			}
 			continue
 		}
-		if result.ValidatorVersion == "" {
-			return Evidence{}, fmt.Errorf("Contract Runtime omitted validator version")
+		if !validResult(result) {
+			return Evidence{}, fmt.Errorf("Contract Runtime returned invalid bounded evidence")
 		}
-		evidence := Evidence{request.WorkspaceID, request.ProjectID, request.RunID, request.Kind, request.BOMDigest, request.SchemaDigest, result.ValidatorVersion, request.CatalogDigest, result.Valid, append([]problem.FieldError(nil), result.Findings...), o.clock.Now()}
+		validatedAt := o.clock.Now()
+		if validatedAt.IsZero() {
+			return Evidence{}, fmt.Errorf("Contract Runtime evidence time is unavailable")
+		}
+		evidence := Evidence{request.WorkspaceID, request.ProjectID, request.RunID, request.Kind, request.BOMDigest, request.SchemaDigest, result.ValidatorVersion, request.CatalogDigest, result.Valid, append([]problem.FieldError(nil), result.Findings...), validatedAt}
 		if err := o.recorder.Record(ctx, evidence); err != nil {
 			return Evidence{}, fmt.Errorf("record validation evidence: %w", err)
 		}
@@ -94,6 +104,18 @@ func (o *Orchestrator) Validate(ctx context.Context, request Request) (Evidence,
 	details := problem.New(problem.CodeValidationUnavailable, "")
 	details.Detail = "Contract Runtime remained unavailable after bounded retry"
 	return Evidence{}, details
+}
+
+func validResult(result Result) bool {
+	if len(result.ValidatorVersion) < 1 || len(result.ValidatorVersion) > 128 || len(result.Findings) > 256 {
+		return false
+	}
+	for _, finding := range result.Findings {
+		if len(finding.Code) < 1 || len(finding.Code) > 128 || len(finding.InstancePath) > 1024 || len(finding.SchemaPath) > 1024 || len(finding.Message) > 4096 {
+			return false
+		}
+	}
+	return true
 }
 func (o *Orchestrator) RequireForReview(evidence Evidence) error {
 	if evidence.RunID == "" || !evidence.Valid || evidence.ValidatorVersion == "" || !digest(evidence.BOMDigest) || !digest(evidence.SchemaDigest) || !digest(evidence.CatalogDigest) {
