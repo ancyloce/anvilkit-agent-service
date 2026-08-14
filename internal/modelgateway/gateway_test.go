@@ -12,7 +12,7 @@ import (
 )
 
 func providers() Snapshot {
-	return Snapshot{Version: "v1", Providers: []Provider{{ID: "preferred", ModelVersion: "m1", Regions: []string{"us"}, DataClasses: []DataClass{Public, Internal}, Capabilities: []string{"plan"}, SafetyLevel: 3, MaximumCostMicros: 100, Priority: 1, Enabled: true}, {ID: "backup", ModelVersion: "m2", Regions: []string{"eu"}, DataClasses: []DataClass{Public}, Capabilities: []string{"plan"}, Retention: true, Training: true, SafetyLevel: 1, MaximumCostMicros: 1000, Priority: 2, Enabled: true}}}
+	return Snapshot{Version: "v1", Providers: []Provider{{ID: "preferred", ModelVersion: "preferred-v1", Regions: []string{"us"}, DataClasses: []DataClass{Public, Internal}, Capabilities: []string{"plan"}, SafetyLevel: 3, MaximumCostMicros: 100, Priority: 1, Enabled: true}, {ID: "backup", ModelVersion: "backup-v1", Regions: []string{"eu"}, DataClasses: []DataClass{Public}, Capabilities: []string{"plan"}, Retention: true, Training: true, SafetyLevel: 1, MaximumCostMicros: 1000, Priority: 2, Enabled: true}}}
 }
 func policy() Policy {
 	return Policy{Version: "p1", AllowedProviders: []ProviderID{"preferred", "backup"}, AllowedRegions: []string{"us"}, DataClasses: []DataClass{Internal}, Capability: "plan", MinimumSafety: 2, MaximumCostMicros: 200}
@@ -39,6 +39,16 @@ func TestEligibilityReasonsRefusalBeforeDisclosureAndHistoricalReplay(t *testing
 	replayed, err := registry.Replay(old, "workspace", policy())
 	if err != nil || !reflect.DeepEqual(selection, replayed) {
 		t.Fatalf("historical=%#v err=%v", replayed, err)
+	}
+	record := InvocationRecord{WorkspaceID: "workspace", RegistrySnapshotDigest: selection.SnapshotDigest, PolicyVersion: selection.PolicyVersion, PolicyDigest: selection.PolicyDigest, PolicySnapshot: selection.PolicySnapshot, Provider: selection.Provider.ID, ModelVersion: selection.Provider.ModelVersion, Region: selection.Region}
+	replayed, err = registry.ReplayInvocation(record)
+	if err != nil || !reflect.DeepEqual(selection, replayed) {
+		t.Fatalf("invocation evidence replay=%#v err=%v", replayed, err)
+	}
+	forged := record
+	forged.PolicySnapshot.MaximumCostMicros++
+	if _, err := registry.ReplayInvocation(forged); err == nil {
+		t.Fatal("mutable policy content replayed under an old digest")
 	}
 	removals := map[string]bool{}
 	_, err = registry.Select("workspace", Policy{Version: "deny", AllowedProviders: []ProviderID{"backup"}, AllowedRegions: []string{"us"}, DataClasses: []DataClass{Restricted}, Capability: "missing", MinimumSafety: 5, MaximumCostMicros: 1})
@@ -114,6 +124,41 @@ func TestRegistryDigestCanonicalizesSetOrdering(t *testing.T) {
 	right, _ := NewRegistry(second)
 	if left.Current().Digest != right.Current().Digest {
 		t.Fatalf("equivalent registry order changed digest: %s != %s", left.Current().Digest, right.Current().Digest)
+	}
+}
+
+func TestRegistryAndPolicyRejectDuplicateOrUnboundedAuthority(t *testing.T) {
+	invalid := providers()
+	invalid.Providers[0].Regions = []string{"us", "us"}
+	if _, err := NewRegistry(invalid); err == nil {
+		t.Fatal("duplicate provider region accepted")
+	}
+	registry, _ := NewRegistry(providers())
+	reusedVersion := providers()
+	reusedVersion.Providers[0].Enabled = false
+	if err := registry.Update(reusedVersion); err == nil {
+		t.Fatal("registry version was reused for different content")
+	}
+	duplicatePolicy := policy()
+	duplicatePolicy.DataClasses = []DataClass{Internal, Internal}
+	if _, err := registry.Select("workspace", duplicatePolicy); err == nil {
+		t.Fatal("duplicate policy data class accepted")
+	}
+	if _, err := registry.Select("workspace", policy()); err != nil {
+		t.Fatal(err)
+	}
+	reusedPolicy := policy()
+	reusedPolicy.MaximumCostMicros++
+	if _, err := registry.Select("workspace", reusedPolicy); err == nil {
+		t.Fatal("policy version was reused for different content")
+	}
+	tooMany := policy()
+	tooMany.AllowedRegions = make([]string, 65)
+	for index := range tooMany.AllowedRegions {
+		tooMany.AllowedRegions[index] = fmt.Sprintf("region-%d", index)
+	}
+	if _, err := registry.Select("workspace", tooMany); err == nil {
+		t.Fatal("unbounded policy regions accepted")
 	}
 }
 
@@ -208,7 +253,7 @@ func TestInvocationRecordsIdentityBeforeDisclosureAndEnforcesBounds(t *testing.T
 	provider := &adapter{retry: 1, response: AdapterResponse{Output: []byte(`{"ok":true}`), InputTokens: 2, OutputTokens: 2, CostMicros: 3}}
 	gateway, _ := NewGateway(map[ProviderID]Adapter{"preferred": provider}, recording, ids{}, clock{time.Unix(1, 0)}, sleeper{})
 	response, record, err := gateway.Invoke(context.Background(), InvokeRequest{RunID: "run", WorkspaceID: "workspace", ProjectID: "project", Selection: selection, Context: []byte("minimal"), DataClasses: []DataClass{Internal}, MaximumOutputBytes: 100, MaximumInputTokens: 10, MaximumOutputTokens: 10, MaximumCostMicros: 10, Timeout: time.Second, MaximumAttempts: 2, RetryBudget: time.Second})
-	if err != nil || string(response.Output) != `{"ok":true}` || len(record.PhysicalAttempts) != 2 || record.RegistrySnapshotDigest != selection.SnapshotDigest || record.PolicyVersion != "p1" || record.Provider != "preferred" || record.ModelVersion != "m1" || record.Region != "us" || recording.before != 1 {
+	if err != nil || string(response.Output) != `{"ok":true}` || len(record.PhysicalAttempts) != 2 || record.RegistrySnapshotDigest != selection.SnapshotDigest || record.PolicyVersion != "p1" || record.PolicyDigest != selection.PolicyDigest || !reflect.DeepEqual(record.PolicySnapshot, selection.PolicySnapshot) || record.Provider != "preferred" || record.ModelVersion != "preferred-v1" || record.Region != "us" || recording.before != 1 {
 		t.Fatalf("record=%#v response=%#v err=%v", record, response, err)
 	}
 	provider.response.Output = make([]byte, 101)
@@ -257,6 +302,21 @@ func TestAdapterTimeoutCancellationRetryJitterAndBudget(t *testing.T) {
 		t.Fatalf("retry budget escaped: record=%#v delays=%v err=%v", record, sleeper.delays, err)
 	}
 
+	clock.now = time.Unix(1, 0)
+	sleeper.delays = nil
+	slowFailure := AdapterFunc(func(context.Context, AdapterRequest) (AdapterResponse, error) {
+		clock.lock.Lock()
+		clock.now = clock.now.Add(2 * time.Second)
+		clock.lock.Unlock()
+		return AdapterResponse{}, RetryableError{errors.New("slow retryable failure")}
+	})
+	gateway, _ = NewGateway(map[ProviderID]Adapter{"preferred": slowFailure}, &recorder{}, ids{}, clock, sleeper)
+	base.RunID = "slow-budget"
+	base.RetryBudget = time.Second
+	if _, record, err := gateway.Invoke(context.Background(), base); err == nil || len(record.PhysicalAttempts) != 1 || len(sleeper.delays) != 0 {
+		t.Fatalf("adapter duration escaped retry budget: record=%#v delays=%v err=%v", record, sleeper.delays, err)
+	}
+
 	blocking := AdapterFunc(func(ctx context.Context, _ AdapterRequest) (AdapterResponse, error) {
 		<-ctx.Done()
 		return AdapterResponse{}, ctx.Err()
@@ -293,6 +353,7 @@ func TestAdapterAccountingLimitsFailClosed(t *testing.T) {
 		{Output: []byte(`{}`), OutputTokens: 11},
 		{Output: []byte(`{}`), CostMicros: 11},
 		{Output: []byte(`{}`), InputTokens: -1},
+		{Output: []byte(`{}`), Continuation: make([]byte, 16385)},
 	}
 	for index, response := range responses {
 		t.Run(fmt.Sprintf("limit-%d", index), func(t *testing.T) {

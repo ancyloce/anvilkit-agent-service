@@ -28,6 +28,8 @@ type Continuation struct {
 	ExpiresAt        string        `json:"expiresAt"`
 	RestartPolicy    RestartPolicy `json:"restartPolicy"`
 	BindingDigest    string        `json:"bindingDigest"`
+	// KeyReference is persistence metadata, not part of ProviderContinuationV1.
+	KeyReference string `json:"-"`
 }
 type KeySource interface {
 	Key(context.Context, string) ([]byte, error)
@@ -46,7 +48,7 @@ type Continuations struct {
 }
 
 func NewContinuations(keys KeySource, keyRef string, store ContinuationStore, clock Clock) (*Continuations, error) {
-	if keys == nil || keyRef == "" || store == nil || clock == nil {
+	if keys == nil || !validKeyReference(keyRef) || store == nil || clock == nil {
 		return nil, fmt.Errorf("continuation encryption dependencies required")
 	}
 	return &Continuations{keys, keyRef, store, clock, rand.Reader}, nil
@@ -71,7 +73,7 @@ func (c *Continuations) Save(ctx context.Context, id string, provider ProviderID
 	if _, err := io.ReadFull(c.random, nonce); err != nil {
 		return err
 	}
-	record := Continuation{APIVersion: "anvilkit.io/contracts/v1", Kind: "ProviderContinuation", Provider: provider, ExpiresAt: expires.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z"), RestartPolicy: policy, BindingDigest: bindingDigest}
+	record := Continuation{APIVersion: "anvilkit.io/contracts/v1", Kind: "ProviderContinuation", Provider: provider, ExpiresAt: expires.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z"), RestartPolicy: policy, BindingDigest: bindingDigest, KeyReference: c.keyRef}
 	sealed := aead.Seal(nonce, nonce, plaintext, continuationAAD(id, record))
 	record.EncryptedBinding = base64.RawURLEncoding.EncodeToString(sealed)
 	return c.store.Put(ctx, id, record)
@@ -95,7 +97,14 @@ func (c *Continuations) Resume(ctx context.Context, id, bindingDigest, safeCheck
 	if err != nil || record.APIVersion != "anvilkit.io/contracts/v1" || record.Kind != "ProviderContinuation" || record.Provider == "" || !isSHA256(record.BindingDigest) || record.RestartPolicy != ResumeIfValid && record.RestartPolicy != RestartStage && record.RestartPolicy != RestartRun || !c.clock.Now().Before(expires) || record.BindingDigest != bindingDigest {
 		return Resume{Checkpoint: safeCheckpoint, Restarted: true}, nil
 	}
-	key, err := c.keys.Key(ctx, c.keyRef)
+	keyReference := record.KeyReference
+	if keyReference == "" {
+		keyReference = c.keyRef
+	}
+	if !validKeyReference(keyReference) {
+		return Resume{Checkpoint: safeCheckpoint, Restarted: true}, nil
+	}
+	key, err := c.keys.Key(ctx, keyReference)
 	if err != nil {
 		return Resume{Checkpoint: safeCheckpoint, Restarted: true}, nil
 	}
@@ -118,7 +127,19 @@ func (c *Continuations) Resume(ctx context.Context, id, bindingDigest, safeCheck
 	return Resume{Continuation: plaintext}, nil
 }
 func continuationAAD(id string, record Continuation) []byte {
-	return []byte(id + "\x00" + string(record.Provider) + "\x00" + record.ExpiresAt + "\x00" + string(record.RestartPolicy) + "\x00" + record.BindingDigest)
+	return []byte(id + "\x00" + record.KeyReference + "\x00" + string(record.Provider) + "\x00" + record.ExpiresAt + "\x00" + string(record.RestartPolicy) + "\x00" + record.BindingDigest)
+}
+
+func validKeyReference(value string) bool {
+	if len(value) < 1 || len(value) > 512 {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x21 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 type MemoryContinuationStore struct {

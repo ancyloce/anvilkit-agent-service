@@ -45,15 +45,15 @@ type Snapshot struct {
 	Digest    string     `json:"-"`
 }
 type Policy struct {
-	Version           string
-	AllowedProviders  []ProviderID
-	AllowedRegions    []string
-	DataClasses       []DataClass
-	Capability        string
-	AllowRetention    bool
-	AllowTraining     bool
-	MinimumSafety     int
-	MaximumCostMicros int64
+	Version           string       `json:"version"`
+	AllowedProviders  []ProviderID `json:"allowedProviders"`
+	AllowedRegions    []string     `json:"allowedRegions"`
+	DataClasses       []DataClass  `json:"dataClasses"`
+	Capability        string       `json:"capability"`
+	AllowRetention    bool         `json:"allowRetention"`
+	AllowTraining     bool         `json:"allowTraining"`
+	MinimumSafety     int          `json:"minimumSafety"`
+	MaximumCostMicros int64        `json:"maximumCostMicros"`
 }
 type Removal struct {
 	Provider ProviderID
@@ -66,17 +66,21 @@ type Selection struct {
 	MaximumCostMicros int64
 	SnapshotDigest    string
 	PolicyVersion     string
+	PolicyDigest      string
+	PolicySnapshot    Policy
 	Removed           []Removal
 	eligible          bool
 }
 type Registry struct {
-	lock      sync.RWMutex
-	current   string
-	snapshots map[string]Snapshot
+	lock           sync.RWMutex
+	current        string
+	snapshots      map[string]Snapshot
+	versions       map[string]string
+	policyVersions map[string]string
 }
 
 func NewRegistry(snapshot Snapshot) (*Registry, error) {
-	r := &Registry{snapshots: map[string]Snapshot{}}
+	r := &Registry{snapshots: map[string]Snapshot{}, versions: map[string]string{}, policyVersions: map[string]string{}}
 	if err := r.Update(snapshot); err != nil {
 		return nil, err
 	}
@@ -94,6 +98,9 @@ func (r *Registry) Update(snapshot Snapshot) error {
 	snapshot.Digest = digest
 	r.lock.Lock()
 	defer r.lock.Unlock()
+	if prior, ok := r.versions[snapshot.Version]; ok && prior != digest {
+		return fmt.Errorf("registry version %s is already pinned to different content", snapshot.Version)
+	}
 	if old, ok := r.snapshots[digest]; ok {
 		if !equalSnapshot(old, snapshot) {
 			return fmt.Errorf("registry digest collision")
@@ -102,6 +109,7 @@ func (r *Registry) Update(snapshot Snapshot) error {
 		return nil
 	}
 	r.snapshots[digest] = cloneSnapshot(snapshot)
+	r.versions[snapshot.Version] = digest
 	r.current = digest
 	return nil
 }
@@ -117,21 +125,67 @@ func (r *Registry) ByDigest(digest string) (Snapshot, bool) {
 	return cloneSnapshot(value), ok
 }
 func (r *Registry) Select(workspace string, policy Policy) (Selection, error) {
+	if err := r.rememberPolicy(policy); err != nil {
+		return Selection{}, err
+	}
 	return selectSnapshot(r.Current(), workspace, policy)
 }
 func (r *Registry) Replay(digest, workspace string, policy Policy) (Selection, error) {
+	if err := r.rememberPolicy(policy); err != nil {
+		return Selection{}, err
+	}
 	snapshot, ok := r.ByDigest(digest)
 	if !ok {
 		return Selection{}, problem.New(problem.CodeResourceNotFound, "")
 	}
 	return selectSnapshot(snapshot, workspace, policy)
 }
+
+func (r *Registry) rememberPolicy(policy Policy) error {
+	normalized := normalizePolicy(policy)
+	digest, err := policyDigest(normalized)
+	if err != nil {
+		return problem.New(problem.CodeRequestInvalid, "")
+	}
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	if prior, ok := r.policyVersions[normalized.Version]; ok && prior != digest {
+		return fmt.Errorf("provider policy version %s is already pinned to different content", normalized.Version)
+	}
+	r.policyVersions[normalized.Version] = digest
+	return nil
+}
+
+// ReplayInvocation reconstructs a historical selection from the immutable
+// registry and policy evidence pinned before disclosure.
+func (r *Registry) ReplayInvocation(record InvocationRecord) (Selection, error) {
+	if record.RegistrySnapshotDigest == "" || record.PolicyDigest == "" || record.WorkspaceID == "" {
+		return Selection{}, problem.New(problem.CodeRequestInvalid, "")
+	}
+	digest, err := policyDigest(record.PolicySnapshot)
+	if err != nil || digest != record.PolicyDigest || record.PolicySnapshot.Version != record.PolicyVersion {
+		return Selection{}, problem.New(problem.CodeContractInvalid, "")
+	}
+	selection, err := r.Replay(record.RegistrySnapshotDigest, record.WorkspaceID, record.PolicySnapshot)
+	if err != nil {
+		return selection, err
+	}
+	if selection.PolicyDigest != record.PolicyDigest || selection.Provider.ID != record.Provider || selection.Provider.ModelVersion != record.ModelVersion || selection.Region != record.Region {
+		return Selection{}, problem.New(problem.CodeContractInvalid, "")
+	}
+	return selection, nil
+}
 func selectSnapshot(snapshot Snapshot, workspace string, policy Policy) (Selection, error) {
+	policy = normalizePolicy(policy)
 	if workspace == "" || !validPolicy(policy) {
 		return Selection{}, problem.New(problem.CodeRequestInvalid, "")
 	}
+	digest, err := policyDigest(policy)
+	if err != nil {
+		return Selection{}, problem.New(problem.CodeRequestInvalid, "")
+	}
 	var eligible []Provider
-	selection := Selection{SnapshotDigest: snapshot.Digest, PolicyVersion: policy.Version, DataClasses: append([]DataClass(nil), policy.DataClasses...), MaximumCostMicros: policy.MaximumCostMicros}
+	selection := Selection{SnapshotDigest: snapshot.Digest, PolicyVersion: policy.Version, PolicyDigest: digest, PolicySnapshot: clonePolicy(policy), DataClasses: append([]DataClass(nil), policy.DataClasses...), MaximumCostMicros: policy.MaximumCostMicros}
 	for _, provider := range snapshot.Providers {
 		var reasons []string
 		if !provider.Enabled {
@@ -238,6 +292,8 @@ type InvocationRecord struct {
 	PhysicalAttempts                      []AttemptID
 	RunID, WorkspaceID, ProjectID         string
 	RegistrySnapshotDigest, PolicyVersion string
+	PolicyDigest                          string
+	PolicySnapshot                        Policy
 	Provider                              ProviderID
 	ModelVersion, Region                  string
 	DisclosedDataClasses                  []DataClass
@@ -277,7 +333,8 @@ func NewGateway(adapters map[ProviderID]Adapter, recorder Recorder, ids IDs, clo
 	return &Gateway{copyAdapters, recorder, ids, clock, sleeper}, nil
 }
 func (g *Gateway) Invoke(ctx context.Context, request InvokeRequest) (AdapterResponse, InvocationRecord, error) {
-	if !request.Selection.eligible || request.Selection.Provider.ID == "" || request.Selection.Region == "" || !contains(request.Selection.Provider.Regions, request.Selection.Region) || !isSHA256(request.Selection.SnapshotDigest) || request.RunID == "" || request.WorkspaceID == "" || request.ProjectID == "" || len(request.DataClasses) == 0 || !containsAllClasses(request.Selection.Provider.DataClasses, request.DataClasses) || !containsAllClasses(request.Selection.DataClasses, request.DataClasses) || request.MaximumCostMicros < 0 || request.MaximumCostMicros > request.Selection.MaximumCostMicros || request.MaximumOutputBytes < 1 || request.MaximumAttempts < 1 || request.Timeout <= 0 || request.RetryBudget < 0 {
+	policyDigest, policyErr := policyDigest(request.Selection.PolicySnapshot)
+	if !request.Selection.eligible || request.Selection.Provider.ID == "" || request.Selection.Region == "" || !contains(request.Selection.Provider.Regions, request.Selection.Region) || !isSHA256(request.Selection.SnapshotDigest) || policyErr != nil || policyDigest != request.Selection.PolicyDigest || request.Selection.PolicyVersion != request.Selection.PolicySnapshot.Version || request.RunID == "" || request.WorkspaceID == "" || request.ProjectID == "" || len(request.Context) == 0 || len(request.DataClasses) == 0 || !uniqueDataClasses(request.DataClasses) || !containsAllClasses(request.Selection.Provider.DataClasses, request.DataClasses) || !containsAllClasses(request.Selection.DataClasses, request.DataClasses) || request.MaximumInputTokens < 1 || request.MaximumInputTokens > 1_000_000_000 || request.MaximumOutputTokens < 1 || request.MaximumOutputTokens > 1_000_000_000 || int64(len(request.Context)) > request.MaximumInputTokens*4 || request.MaximumCostMicros < 0 || request.MaximumCostMicros > request.Selection.MaximumCostMicros || request.MaximumOutputBytes < 1 || request.MaximumOutputBytes > 16*1024*1024 || request.MaximumAttempts < 1 || request.MaximumAttempts > 100 || request.Timeout <= 0 || request.Timeout > 30*time.Minute || request.RetryBudget < 0 || request.RetryBudget > 24*time.Hour {
 		return AdapterResponse{}, InvocationRecord{}, problem.New(problem.CodeRequestInvalid, "")
 	}
 	adapter := g.adapters[request.Selection.Provider.ID]
@@ -288,7 +345,7 @@ func (g *Gateway) Invoke(ctx context.Context, request InvokeRequest) (AdapterRes
 	if invocationID == "" {
 		return AdapterResponse{}, InvocationRecord{}, fmt.Errorf("empty provider invocation identity")
 	}
-	record := InvocationRecord{InvocationID: invocationID, RunID: request.RunID, WorkspaceID: request.WorkspaceID, ProjectID: request.ProjectID, RegistrySnapshotDigest: request.Selection.SnapshotDigest, PolicyVersion: request.Selection.PolicyVersion, Provider: request.Selection.Provider.ID, ModelVersion: request.Selection.Provider.ModelVersion, Region: request.Selection.Region, DisclosedDataClasses: append([]DataClass(nil), request.DataClasses...), StartedAt: g.clock.Now()}
+	record := InvocationRecord{InvocationID: invocationID, RunID: request.RunID, WorkspaceID: request.WorkspaceID, ProjectID: request.ProjectID, RegistrySnapshotDigest: request.Selection.SnapshotDigest, PolicyVersion: request.Selection.PolicyVersion, PolicyDigest: request.Selection.PolicyDigest, PolicySnapshot: clonePolicy(request.Selection.PolicySnapshot), Provider: request.Selection.Provider.ID, ModelVersion: request.Selection.Provider.ModelVersion, Region: request.Selection.Region, DisclosedDataClasses: append([]DataClass(nil), request.DataClasses...), StartedAt: g.clock.Now()}
 	if err := g.recorder.BeforeDisclosure(ctx, record); err != nil {
 		return AdapterResponse{}, record, fmt.Errorf("record invocation before disclosure: %w", err)
 	}
@@ -318,7 +375,8 @@ func (g *Gateway) Invoke(ctx context.Context, request InvokeRequest) (AdapterRes
 				break
 			}
 			delay := retryJitter(record.InvocationID, attempt)
-			if elapsed+delay > request.RetryBudget {
+			elapsed = g.clock.Now().Sub(started)
+			if elapsed < 0 || elapsed+delay > request.RetryBudget {
 				break
 			}
 			if err := g.sleeper.Sleep(ctx, delay); err != nil {
@@ -327,7 +385,7 @@ func (g *Gateway) Invoke(ctx context.Context, request InvokeRequest) (AdapterRes
 			}
 			continue
 		}
-		if len(response.Output) > request.MaximumOutputBytes || response.InputTokens < 0 || response.OutputTokens < 0 || response.CostMicros < 0 || response.InputTokens > request.MaximumInputTokens || response.OutputTokens > request.MaximumOutputTokens || response.CostMicros > request.MaximumCostMicros {
+		if len(response.Output) > request.MaximumOutputBytes || len(response.Continuation) > 16384 || response.InputTokens < 0 || response.OutputTokens < 0 || response.CostMicros < 0 || response.InputTokens > request.MaximumInputTokens || response.OutputTokens > request.MaximumOutputTokens || response.CostMicros > request.MaximumCostMicros || response.CostMicros > request.Selection.Provider.MaximumCostMicros {
 			last = problem.New(problem.CodeProviderLimitExceeded, "")
 			break
 		}
@@ -401,13 +459,31 @@ func normalizeSnapshot(value Snapshot) Snapshot {
 	sort.Slice(value.Providers, func(i, j int) bool { return value.Providers[i].ID < value.Providers[j].ID })
 	return value
 }
+func normalizePolicy(value Policy) Policy {
+	value = clonePolicy(value)
+	sort.Slice(value.AllowedProviders, func(i, j int) bool { return value.AllowedProviders[i] < value.AllowedProviders[j] })
+	sort.Strings(value.AllowedRegions)
+	sort.Slice(value.DataClasses, func(i, j int) bool { return value.DataClasses[i] < value.DataClasses[j] })
+	return value
+}
+func policyDigest(value Policy) (string, error) {
+	value = normalizePolicy(value)
+	if !validPolicy(value) {
+		return "", fmt.Errorf("provider policy is invalid")
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return digest(raw), nil
+}
 func validateSnapshot(value Snapshot) error {
-	if value.Version == "" || len(value.Providers) == 0 || len(value.Providers) > 128 {
+	if !bounded(value.Version, 128) || len(value.Providers) == 0 || len(value.Providers) > 128 {
 		return fmt.Errorf("provider registry snapshot is empty or unbounded")
 	}
 	seen := map[ProviderID]bool{}
 	for _, provider := range value.Providers {
-		if provider.ID == "" || seen[provider.ID] || provider.ModelVersion == "" || len(provider.Regions) == 0 || len(provider.DataClasses) == 0 || len(provider.Capabilities) == 0 || provider.SafetyLevel < 0 || provider.MaximumCostMicros < 0 {
+		if !bounded(string(provider.ID), 128) || seen[provider.ID] || !bounded(provider.ModelVersion, 128) || len(provider.Regions) == 0 || len(provider.Regions) > 64 || !uniqueBounded(provider.Regions, 128) || len(provider.DataClasses) == 0 || len(provider.DataClasses) > 4 || !uniqueDataClasses(provider.DataClasses) || len(provider.Capabilities) == 0 || len(provider.Capabilities) > 64 || !uniqueBounded(provider.Capabilities, 128) || len(provider.DisabledWorkspaces) > 1024 || !uniqueBounded(provider.DisabledWorkspaces, 128) || provider.Priority < 0 || provider.SafetyLevel < 0 || provider.SafetyLevel > 100 || provider.MaximumCostMicros < 0 {
 			return fmt.Errorf("provider registry entry %q is invalid", provider.ID)
 		}
 		seen[provider.ID] = true
@@ -420,13 +496,61 @@ func validateSnapshot(value Snapshot) error {
 	return nil
 }
 func validPolicy(value Policy) bool {
-	if value.Version == "" || value.Capability == "" || len(value.DataClasses) == 0 || value.MinimumSafety < 0 || value.MaximumCostMicros < 0 {
+	if !bounded(value.Version, 128) || !bounded(value.Capability, 128) || len(value.AllowedProviders) > 128 || !uniqueProviders(value.AllowedProviders) || len(value.AllowedRegions) > 64 || !uniqueBounded(value.AllowedRegions, 128) || len(value.DataClasses) == 0 || len(value.DataClasses) > 4 || !uniqueDataClasses(value.DataClasses) || value.MinimumSafety < 0 || value.MinimumSafety > 100 || value.MaximumCostMicros < 0 {
 		return false
 	}
 	for _, class := range value.DataClasses {
 		if class != Public && class != Internal && class != Confidential && class != Restricted {
 			return false
 		}
+	}
+	return true
+}
+func clonePolicy(value Policy) Policy {
+	raw, _ := json.Marshal(value)
+	var result Policy
+	_ = json.Unmarshal(raw, &result)
+	return result
+}
+func bounded(value string, maximum int) bool {
+	if len(value) < 1 || len(value) > maximum {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '.' || character == '_' || character == ':' || character == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+func uniqueBounded(values []string, maximum int) bool {
+	seen := map[string]bool{}
+	for _, value := range values {
+		if !bounded(value, maximum) || seen[value] {
+			return false
+		}
+		seen[value] = true
+	}
+	return true
+}
+func uniqueProviders(values []ProviderID) bool {
+	seen := map[ProviderID]bool{}
+	for _, value := range values {
+		if !bounded(string(value), 128) || seen[value] {
+			return false
+		}
+		seen[value] = true
+	}
+	return true
+}
+func uniqueDataClasses(values []DataClass) bool {
+	seen := map[DataClass]bool{}
+	for _, value := range values {
+		if value != Public && value != Internal && value != Confidential && value != Restricted || seen[value] {
+			return false
+		}
+		seen[value] = true
 	}
 	return true
 }
