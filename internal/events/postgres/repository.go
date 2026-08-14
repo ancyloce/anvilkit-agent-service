@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 )
 
@@ -26,10 +27,16 @@ type FailureInjector func(FailurePoint) error
 type Repository struct {
 	database *pgxpool.Pool
 	inject   FailureInjector
+	guard    *contractguard.Guard
+	bounds   events.Bounds
 }
 
-func New(database *pgxpool.Pool, inject FailureInjector) *Repository {
-	return &Repository{database: database, inject: inject}
+func New(database *pgxpool.Pool, inject FailureInjector, guard *contractguard.Guard, configured ...events.Bounds) *Repository {
+	bounds := events.DefaultBounds()
+	if len(configured) == 1 {
+		bounds = configured[0]
+	}
+	return &Repository{database: database, inject: inject, guard: guard, bounds: bounds}
 }
 
 func (r *Repository) Commit(ctx context.Context, change events.Transition) (events.Committed, error) {
@@ -38,6 +45,15 @@ func (r *Repository) Commit(ctx context.Context, change events.Transition) (even
 	}
 	if change.RunID == "" || change.EventID == "" || change.OutboxID == "" || change.WorkflowID == "" || change.WorkflowVersion < 1 || change.Checkpoint == "" {
 		return events.Committed{}, fmt.Errorf("commit event transition: stable identities are required")
+	}
+	if r.guard == nil {
+		return events.Committed{}, fmt.Errorf("commit event transition: contract guard is required")
+	}
+	if err := events.ValidateEnvelope(change.EventBytes, r.bounds, change.EventID, change.RunID, 0); err != nil {
+		return events.Committed{}, fmt.Errorf("commit event transition: %w", err)
+	}
+	if err := r.guard.Require(ctx, contractguard.EventIn, agentEventSchema, change.EventBytes); err != nil {
+		return events.Committed{}, err
 	}
 	tx, err := r.database.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
@@ -54,6 +70,9 @@ func (r *Repository) Commit(ctx context.Context, change events.Transition) (even
 	}
 	if err := r.fail(AfterRunUpdate); err != nil {
 		return events.Committed{}, err
+	}
+	if err := events.ValidateEnvelope(change.EventBytes, r.bounds, change.EventID, change.RunID, uint64(committed.Sequence)); err != nil {
+		return events.Committed{}, fmt.Errorf("commit event transition: allocated sequence mismatch: %w", err)
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id, project_id, run_id, sequence, event_id, event_bytes) VALUES($1,$2,$3,$4,$5,$6)`, change.Scope.WorkspaceID, change.Scope.ProjectID, change.RunID, committed.Sequence, change.EventID, change.EventBytes)
 	if err != nil {
@@ -115,3 +134,5 @@ func (r *Repository) fail(point FailurePoint) error {
 
 var _ events.Repository = (*Repository)(nil)
 var _ events.Inbox = (*Repository)(nil)
+
+const agentEventSchema = "anvilkit://schema/agent-event.v1@1.0.0?digest=sha256:f19775b8dfdd34cac0318fce8067460988671840987a2b9aaeaa3c85710591ab"

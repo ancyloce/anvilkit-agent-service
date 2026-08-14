@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 )
 
@@ -45,9 +46,26 @@ type Reader interface {
 
 type Bounds struct{ MaximumBytes, MaximumFields, MaximumFieldBytes int }
 
+func DefaultBounds() Bounds {
+	return Bounds{MaximumBytes: 64 * 1024, MaximumFields: 32, MaximumFieldBytes: 512}
+}
+
+func (b Bounds) Validate() error {
+	if b.MaximumBytes < 1 || b.MaximumFields < 1 || b.MaximumFieldBytes < 1 {
+		return fmt.Errorf("event bounds must be positive")
+	}
+	return nil
+}
+
 func ValidateBytes(raw []byte, bounds Bounds) error {
-	if bounds.MaximumBytes < 1 || len(raw) == 0 || len(raw) > bounds.MaximumBytes {
+	if err := bounds.Validate(); err != nil {
+		return eventProblem(err.Error())
+	}
+	if len(raw) == 0 || len(raw) > bounds.MaximumBytes {
 		return eventProblem("event exceeds byte bound")
+	}
+	if _, err := contractvalidator.Admit(raw); err != nil {
+		return eventProblem("event violates strict JSON admission")
 	}
 	for _, prohibited := range []string{"prompt", "puckData", "canvas", "pageIR", "componentSource", "imageBytes", "signedURL", "continuation", "secret"} {
 		if strings.Contains(strings.ToLower(string(raw)), strings.ToLower(prohibited)) {
@@ -92,6 +110,24 @@ func ValidateBytes(raw []byte, bounds Bounds) error {
 	}
 	if event.Payload != nil && len(event.ArtifactReference) != 0 {
 		return eventProblem("event cannot inline payload and artifact reference together")
+	}
+	return nil
+}
+
+func ValidateEnvelope(raw []byte, bounds Bounds, eventID, runID string, sequence uint64) error {
+	if err := ValidateBytes(raw, bounds); err != nil {
+		return err
+	}
+	var retained struct {
+		EventID  string `json:"eventId"`
+		RunID    string `json:"runId"`
+		Sequence uint64 `json:"sequence"`
+	}
+	if err := json.Unmarshal(raw, &retained); err != nil {
+		return eventProblem("event identity cannot be decoded")
+	}
+	if retained.EventID != eventID || retained.RunID != runID || sequence != 0 && retained.Sequence != sequence {
+		return eventProblem("event body identity does not match its retained envelope")
 	}
 	return nil
 }

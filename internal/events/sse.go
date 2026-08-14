@@ -28,7 +28,7 @@ type Stream struct {
 }
 
 func NewStream(reader Reader, authority StreamAuthority, config StreamConfig) (*Stream, error) {
-	if reader == nil || authority == nil || config.Heartbeat <= 0 || config.Revalidation <= 0 || config.ReplayLimit < 1 || config.ReplayLimit > 1000 {
+	if reader == nil || authority == nil || config.Heartbeat <= 0 || config.Revalidation <= 0 || config.ReplayLimit < 1 || config.ReplayLimit > 1000 || config.Bounds.Validate() != nil {
 		return nil, fmt.Errorf("SSE stream configuration is invalid")
 	}
 	return &Stream{reader: reader, authority: authority, config: config}, nil
@@ -59,7 +59,10 @@ func (s *Stream) Serve(ctx context.Context, response http.ResponseWriter, scope 
 			if err := s.authority.Revalidate(ctx); err != nil {
 				return err
 			}
-			if err := ValidateBytes(event.Bytes, s.config.Bounds); err != nil {
+			if event.RunID != runID {
+				return fmt.Errorf("event replay returned a different run identity")
+			}
+			if err := ValidateEnvelope(event.Bytes, s.config.Bounds, event.ID, event.RunID, event.Sequence); err != nil {
 				return err
 			}
 			if _, err := fmt.Fprintf(response, "id: %s\nevent: agent-event\ndata: %s\n\n", event.ID, event.Bytes); err != nil {

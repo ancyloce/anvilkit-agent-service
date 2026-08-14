@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 )
@@ -17,10 +18,16 @@ import (
 type Reader struct {
 	database     *pgxpool.Pool
 	pollInterval time.Duration
+	guard        *contractguard.Guard
+	bounds       events.Bounds
 }
 
-func NewReader(database *pgxpool.Pool) *Reader {
-	return &Reader{database: database, pollInterval: 25 * time.Millisecond}
+func NewReader(database *pgxpool.Pool, guard *contractguard.Guard, configured ...events.Bounds) *Reader {
+	bounds := events.DefaultBounds()
+	if len(configured) == 1 {
+		bounds = configured[0]
+	}
+	return &Reader{database: database, pollInterval: 25 * time.Millisecond, guard: guard, bounds: bounds}
 }
 
 func (r *Reader) Append(ctx context.Context, scope events.Scope, event events.Event) error {
@@ -29,6 +36,15 @@ func (r *Reader) Append(ctx context.Context, scope events.Scope, event events.Ev
 	}
 	if event.ID == "" || event.RunID == "" || event.Sequence == 0 || len(event.Bytes) == 0 {
 		return fmt.Errorf("append event: identity, run, sequence, and bytes are required")
+	}
+	if r.guard == nil {
+		return fmt.Errorf("append event: contract guard is required")
+	}
+	if err := events.ValidateEnvelope(event.Bytes, r.bounds, event.ID, event.RunID, event.Sequence); err != nil {
+		return fmt.Errorf("append event: %w", err)
+	}
+	if err := r.guard.Require(ctx, contractguard.EventIn, agentEventSchema, event.Bytes); err != nil {
+		return err
 	}
 	result, err := r.database.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, scope.WorkspaceID, scope.ProjectID, event.RunID, event.Sequence, event.ID, event.Bytes, event.CreatedAt)
 	if err != nil {
@@ -82,6 +98,15 @@ func (r *Reader) Replay(ctx context.Context, request events.ReplayRequest) (even
 		event.RunID = request.RunID
 		if err := rows.Scan(&event.ID, &event.Sequence, &event.Bytes, &event.CreatedAt); err != nil {
 			return events.ReplayPage{}, err
+		}
+		if r.guard == nil {
+			return events.ReplayPage{}, fmt.Errorf("replay event: contract guard is required")
+		}
+		if err := events.ValidateEnvelope(event.Bytes, r.bounds, event.ID, event.RunID, event.Sequence); err != nil {
+			return events.ReplayPage{}, fmt.Errorf("authoritative event store corruption: %w", err)
+		}
+		if err := r.guard.Require(ctx, contractguard.EventIn, agentEventSchema, event.Bytes); err != nil {
+			return events.ReplayPage{}, fmt.Errorf("authoritative event store corruption: %w", err)
 		}
 		page.Events = append(page.Events, event)
 	}
