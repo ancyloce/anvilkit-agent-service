@@ -11,6 +11,7 @@ import (
 	"time"
 
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
+	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 )
 
@@ -42,7 +43,11 @@ func binding() Binding {
 
 func issuer(t *testing.T, authority *fixedAuthority, audit Audit, ring *MemoryKeyRing) *IssuerService {
 	t.Helper()
-	service, err := New(authority, fixedIDs{"authorization-01"}, ring, audit, fixedClock{authNow}, 2*time.Minute)
+	guard, err := contractguard.NewGuard("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := New(authority, fixedIDs{"authorization-01"}, ring, audit, journal.NewMemoryStore(), guard, fixedClock{authNow}, 2*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +97,8 @@ func TestIssuanceFailsClosedWithoutAuthoritativeTime(t *testing.T) {
 	value := binding()
 	authority := &fixedAuthority{proof: Proof{Approved: value, Current: value, ApprovalCurrent: true, ArtifactEligible: true}}
 	ring, _ := NewMemoryKeyRing("urn:anvilkit:key:apply-time")
-	service, _ := New(authority, fixedIDs{"authorization-time"}, ring, &MemoryAudit{}, fixedClock{}, time.Minute)
+	guard, _ := contractguard.NewGuard("../..")
+	service, _ := New(authority, fixedIDs{"authorization-time"}, ring, &MemoryAudit{}, journal.NewMemoryStore(), guard, fixedClock{}, time.Minute)
 	if _, err := service.Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01"}); err == nil {
 		t.Fatal("authorization issued without authoritative time")
 	}
@@ -169,5 +175,47 @@ func TestAuditFailureAndCallerAuthoredPayloadCannotEscape(t *testing.T) {
 		if typ.Field(index).Type == reflect.TypeOf(Payload{}) || strings.Contains(strings.ToLower(typ.Field(index).Name), "payload") || strings.Contains(strings.ToLower(typ.Field(index).Name), "jws") {
 			t.Fatalf("caller-authored authorization surface exists: %s", typ.Field(index).Name)
 		}
+	}
+}
+
+func TestIssuanceCannotAcknowledgeWithoutReceiptJournal(t *testing.T) {
+	value := binding()
+	authority := &fixedAuthority{proof: Proof{Approved: value, Current: value, ApprovalCurrent: true, ArtifactEligible: true}}
+	ring, _ := NewMemoryKeyRing("urn:anvilkit:key:apply-2026-08-a")
+	receipts := journal.NewMemoryStore()
+	receipts.SetAvailable(false)
+	guard, _ := contractguard.NewGuard("../..")
+	service, err := New(authority, fixedIDs{"authorization-journal"}, ring, &MemoryAudit{}, receipts, guard, fixedClock{authNow}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01"}); err == nil {
+		t.Fatal("authorization acknowledged without receipt journal")
+	}
+}
+
+func TestVerifyRejectsNonProfileTimestampEvenWhenSignatureIsValid(t *testing.T) {
+	ring, err := NewMemoryKeyRing("urn:anvilkit:key:apply-timestamp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyID, _ := ring.ActiveKeyID(context.Background())
+	payload := payloadFor("authorization-timestamp", keyID, binding(), authNow, authNow.Add(time.Minute))
+	payload.IssuedAt = authNow.Format(time.RFC3339)
+	payload.NotBefore = authNow.Format(time.RFC3339)
+	payloadBytes, err := canonicalJSON(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	headerBytes, _ := canonicalJSON(protectedHeader{Algorithm: "EdDSA", KeyID: keyID, Type: Type})
+	header := base64.RawURLEncoding.EncodeToString(headerBytes)
+	body := base64.RawURLEncoding.EncodeToString(payloadBytes)
+	signature, err := ring.Sign(context.Background(), keyID, []byte(header+"."+body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	compact := header + "." + body + "." + base64.RawURLEncoding.EncodeToString(signature)
+	if _, err := Verify(context.Background(), compact, ring, authNow.Add(time.Second)); err == nil {
+		t.Fatal("validly signed non-profile timestamps were accepted")
 	}
 }

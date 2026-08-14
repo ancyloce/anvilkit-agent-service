@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
+	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
+	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 )
 
@@ -133,15 +135,17 @@ type IssuerService struct {
 	ids       IDs
 	signer    SigningPort
 	audit     Audit
+	receipts  journal.Store
+	guard     *contractguard.Guard
 	clock     Clock
 	ttl       time.Duration
 }
 
-func New(authority Authority, ids IDs, signer SigningPort, audit Audit, clock Clock, ttl time.Duration) (*IssuerService, error) {
-	if authority == nil || ids == nil || signer == nil || audit == nil || clock == nil || ttl <= 0 || ttl > 5*time.Minute {
+func New(authority Authority, ids IDs, signer SigningPort, audit Audit, receipts journal.Store, guard *contractguard.Guard, clock Clock, ttl time.Duration) (*IssuerService, error) {
+	if authority == nil || ids == nil || signer == nil || audit == nil || receipts == nil || guard == nil || clock == nil || ttl <= 0 || ttl > 5*time.Minute {
 		return nil, fmt.Errorf("apply authorization dependencies and TTL are invalid")
 	}
-	return &IssuerService{authority: authority, ids: ids, signer: signer, audit: audit, clock: clock, ttl: ttl}, nil
+	return &IssuerService{authority: authority, ids: ids, signer: signer, audit: audit, receipts: receipts, guard: guard, clock: clock, ttl: ttl}, nil
 }
 
 func (s *IssuerService) Issue(ctx context.Context, command Command) (Authorization, error) {
@@ -183,6 +187,9 @@ func (s *IssuerService) Issue(ctx context.Context, command Command) (Authorizati
 	if err != nil {
 		return Authorization{}, fmt.Errorf("canonicalize authorization payload: %w", err)
 	}
+	if err := s.guard.Require(ctx, contractguard.PagixOut, applyAuthorizationSchema, payloadBytes); err != nil {
+		return Authorization{}, fmt.Errorf("validate apply authorization boundary: %w", err)
+	}
 	headerBytes, err := canonicalJSON(protectedHeader{Algorithm: "EdDSA", KeyID: keyID, Type: Type})
 	if err != nil {
 		return Authorization{}, fmt.Errorf("canonicalize authorization header: %w", err)
@@ -194,13 +201,37 @@ func (s *IssuerService) Issue(ctx context.Context, command Command) (Authorizati
 	if err != nil {
 		return Authorization{}, fmt.Errorf("sign authorization: %w", err)
 	}
+	if len(signature) != ed25519.SignatureSize {
+		return Authorization{}, fmt.Errorf("sign authorization: invalid EdDSA signature size")
+	}
 	compact := header + "." + body + "." + base64.RawURLEncoding.EncodeToString(signature)
 	record := AuditRecord{AuthorizationID: id, WorkspaceID: command.WorkspaceID, ProjectID: command.ProjectID, RunID: command.RunID, KeyID: keyID, PayloadDigest: hash(payloadBytes), TokenDigest: hash([]byte(compact)), IssuedAt: now, ExpiresAt: expires}
 	if err := s.audit.Record(ctx, record); err != nil {
 		return Authorization{}, fmt.Errorf("durably audit authorization issuance: %w", err)
 	}
-	return Authorization{ID: id, KeyID: keyID, Compact: compact, Payload: payload, IssuedAt: now, ExpiresAt: expires}, nil
+	authorization := Authorization{ID: id, KeyID: keyID, Compact: compact, Payload: payload, IssuedAt: now, ExpiresAt: expires}
+	factBytes, err := canonicalJSON(struct {
+		Command       Command       `json:"command"`
+		Authorization Authorization `json:"authorization"`
+	}{command, authorization})
+	if err != nil {
+		return Authorization{}, fmt.Errorf("canonicalize authorization receipt: %w", err)
+	}
+	projection, err := json.Marshal(authorization)
+	if err != nil {
+		return Authorization{}, fmt.Errorf("marshal authorization receipt projection: %w", err)
+	}
+	fact, err := journal.NewFact(command.WorkspaceID+":authorization:"+string(id), command.WorkspaceID, command.ProjectID, journal.FactAuthorization, factBytes, projection)
+	if err != nil {
+		return Authorization{}, err
+	}
+	if _, err := s.receipts.Append(ctx, fact); err != nil {
+		return Authorization{}, fmt.Errorf("authorization fact remains unacknowledged: %w", err)
+	}
+	return authorization, nil
 }
+
+const applyAuthorizationSchema = "anvilkit://schema/apply-authorization.v1@1.0.0?digest=sha256:67ce757f4792deccb1fc6c442611bfed2fff76aa1cac39ad1aa5ff70eddf97a3"
 
 func payloadFor(id AuthorizationID, keyID string, binding Binding, issued, expires time.Time) Payload {
 	return Payload{APIVersion: "anvilkit.io/contracts/v1", Kind: "ApplyAuthorization", AuthorizationID: id, KeyID: keyID, Issuer: Issuer, Audience: Audience, IssuedAt: timestamp(issued), NotBefore: timestamp(issued), ExpiresAt: timestamp(expires), RunID: binding.RunID, ActionDigest: binding.ActionDigest, ArtifactDigest: binding.ArtifactDigest, Target: binding.Target, BaseRevision: binding.BaseRevision, ActorID: binding.ActorID, WorkspaceID: binding.WorkspaceID, ApprovalVersion: binding.ApprovalVersion, ContractBOMDigest: binding.ContractBOMDigest, PolicyDigest: binding.PolicyDigest}
@@ -324,7 +355,7 @@ func Verify(ctx context.Context, compact string, keys SigningPort, now time.Time
 	nbf, nbfErr := time.Parse(time.RFC3339Nano, payload.NotBefore)
 	iat, iatErr := time.Parse(time.RFC3339Nano, payload.IssuedAt)
 	exp, expErr := time.Parse(time.RFC3339Nano, payload.ExpiresAt)
-	if nbfErr != nil || iatErr != nil || expErr != nil || !iat.Equal(nbf) || now.Before(nbf) || !now.Before(exp) || exp.Sub(nbf) > 5*time.Minute || !validBinding(Binding{RunID: payload.RunID, ActionDigest: payload.ActionDigest, ArtifactDigest: payload.ArtifactDigest, Target: payload.Target, BaseRevision: payload.BaseRevision, ActorID: payload.ActorID, WorkspaceID: payload.WorkspaceID, ApprovalVersion: payload.ApprovalVersion, ContractBOMDigest: payload.ContractBOMDigest, PolicyDigest: payload.PolicyDigest}) {
+	if nbfErr != nil || iatErr != nil || expErr != nil || payload.NotBefore != timestamp(nbf) || payload.IssuedAt != timestamp(iat) || payload.ExpiresAt != timestamp(exp) || !iat.Equal(nbf) || now.IsZero() || now.Before(nbf) || !now.Before(exp) || exp.Sub(nbf) > 5*time.Minute || !validBinding(Binding{RunID: payload.RunID, ActionDigest: payload.ActionDigest, ArtifactDigest: payload.ArtifactDigest, Target: payload.Target, BaseRevision: payload.BaseRevision, ActorID: payload.ActorID, WorkspaceID: payload.WorkspaceID, ApprovalVersion: payload.ApprovalVersion, ContractBOMDigest: payload.ContractBOMDigest, PolicyDigest: payload.PolicyDigest}) {
 		return Payload{}, denied("authorization is expired, premature, or incompletely bound")
 	}
 	return payload, nil
