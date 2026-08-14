@@ -110,13 +110,14 @@ func (c *Controller) ReserveInitial(ctx context.Context, estimate Estimate, gene
 }
 func (c *Controller) ReserveReplacement(ctx context.Context, estimate Estimate, generation Generation, prior ReservationID) (Reservation, error) {
 	previous, err := c.ledger.Reservation(ctx, prior)
-	if err != nil || previous.Released || previous.RootRunID != estimate.RootRunID {
+	if err != nil || previous.Released || previous.RootRunID != estimate.RootRunID || previous.WorkspaceID != estimate.WorkspaceID {
 		return Reservation{}, budgetProblem("prior reservation must remain open for replacement or fallback")
 	}
 	return c.reserve(ctx, estimate, generation)
 }
 func (c *Controller) reserve(ctx context.Context, estimate Estimate, generation Generation) (Reservation, error) {
-	if estimate.RootRunID == "" || estimate.RunID == "" || estimate.WorkspaceID == "" || estimate.PolicyVersion == "" || estimate.BudgetVersion == "" || estimate.MaximumCostMicros < 1 || estimate.ExpiresAt.IsZero() || generation == 0 || generation != c.Current(estimate.RootRunID) {
+	now := c.clock.Now()
+	if estimate.RootRunID == "" || estimate.RunID == "" || estimate.WorkspaceID == "" || estimate.PolicyVersion == "" || estimate.BudgetVersion == "" || estimate.MaximumCostMicros < 1 || now.IsZero() || !now.Before(estimate.ExpiresAt) || generation == 0 || generation != c.Current(estimate.RootRunID) {
 		return Reservation{}, budgetProblem("reservation estimate or controller generation is invalid")
 	}
 	reservations, err := c.ledger.RootReservations(ctx, estimate.RootRunID)
@@ -126,7 +127,11 @@ func (c *Controller) reserve(ctx context.Context, estimate Estimate, generation 
 	var held int64
 	for _, reservation := range reservations {
 		if !reservation.Released {
-			held += reservation.UpperBoundMicros
+			var ok bool
+			held, ok = addMicros(held, reservation.UpperBoundMicros)
+			if !ok {
+				return Reservation{}, budgetProblem("held reservation total is invalid")
+			}
 		}
 	}
 	if held > c.policy.MaximumReservedMicros-estimate.MaximumCostMicros {
@@ -139,7 +144,13 @@ func (c *Controller) reserve(ctx context.Context, estimate Estimate, generation 
 	if reserved.ID == "" {
 		return Reservation{}, fmt.Errorf("ledger returned empty reservation identity")
 	}
-	currentHeld := held + reserved.UpperBoundMicros
+	if reserved.RootRunID != estimate.RootRunID || reserved.RunID != estimate.RunID || reserved.WorkspaceID != estimate.WorkspaceID || reserved.PolicyVersion != estimate.PolicyVersion || reserved.BudgetVersion != estimate.BudgetVersion || reserved.Generation != generation || reserved.UpperBoundMicros != estimate.MaximumCostMicros || reserved.ObservedMicros != 0 || reserved.AttemptFinal || !reserved.ExpiresAt.Equal(estimate.ExpiresAt) || reserved.Released {
+		return Reservation{}, budgetProblem("authoritative reservation binding is invalid")
+	}
+	currentHeld, ok := addMicros(held, reserved.UpperBoundMicros)
+	if !ok {
+		return Reservation{}, budgetProblem("held reservation total overflowed")
+	}
 	_ = c.exposure.ObserveExposure(ctx, estimate.RootRunID, currentHeld, rootObserved(reservations), c.review(currentHeld))
 	return reserved, nil
 }
@@ -151,7 +162,8 @@ func (c *Controller) Dispatch(ctx context.Context, id ReservationID, generation 
 		return fmt.Errorf("dispatch function is required")
 	}
 	reservation, err := c.ledger.Reservation(ctx, id)
-	if err != nil || reservation.Released || reservation.Generation != generation || generation != c.Current(reservation.RootRunID) || c.clock.Now().After(reservation.ExpiresAt) {
+	now := c.clock.Now()
+	if err != nil || reservation.Released || reservation.Generation != generation || generation != c.Current(reservation.RootRunID) || now.IsZero() || !now.Before(reservation.ExpiresAt) {
 		return budgetProblem("expensive dispatch lacks a current reservation")
 	}
 	return dispatch(ctx, reservation)
@@ -193,7 +205,10 @@ func (c *Controller) Reconcile(ctx context.Context, id ReservationID, generation
 	return settled, nil
 }
 func (c *Controller) review(held int64) bool {
-	return held*10_000 >= c.policy.MaximumReservedMicros*int64(c.policy.ReviewAtBasisPoints)
+	whole := c.policy.MaximumReservedMicros / 10_000
+	remainder := c.policy.MaximumReservedMicros % 10_000
+	threshold := whole*int64(c.policy.ReviewAtBasisPoints) + (remainder*int64(c.policy.ReviewAtBasisPoints)+9_999)/10_000
+	return held >= threshold
 }
 func (c *Controller) RootTotal(ctx context.Context, rootRunID string) (int64, error) {
 	values, err := c.ledger.RootReservations(ctx, rootRunID)
@@ -202,10 +217,14 @@ func (c *Controller) RootTotal(ctx context.Context, rootRunID string) (int64, er
 	}
 	var total int64
 	for _, value := range values {
+		charge := value.UpperBoundMicros
 		if value.AttemptFinal {
-			total += value.ObservedMicros
-		} else {
-			total += value.UpperBoundMicros
+			charge = value.ObservedMicros
+		}
+		var ok bool
+		total, ok = addMicros(total, charge)
+		if !ok {
+			return 0, budgetProblem("root usage total overflowed")
 		}
 	}
 	return total, nil
@@ -214,7 +233,11 @@ func rootHeld(values []Reservation) int64 {
 	var total int64
 	for _, value := range values {
 		if !value.Released {
-			total += value.UpperBoundMicros
+			var ok bool
+			total, ok = addMicros(total, value.UpperBoundMicros)
+			if !ok {
+				return maxMicros
+			}
 		}
 	}
 	return total
@@ -222,9 +245,22 @@ func rootHeld(values []Reservation) int64 {
 func rootObserved(values []Reservation) int64 {
 	var total int64
 	for _, value := range values {
-		total += value.ObservedMicros
+		var ok bool
+		total, ok = addMicros(total, value.ObservedMicros)
+		if !ok {
+			return maxMicros
+		}
 	}
 	return total
+}
+
+const maxMicros = int64(^uint64(0) >> 1)
+
+func addMicros(left, right int64) (int64, bool) {
+	if left < 0 || right < 0 || right > maxMicros-left {
+		return 0, false
+	}
+	return left + right, true
 }
 func budgetProblem(detail string) problem.Details {
 	value := problem.New(problem.CodeBudgetDenied, "")
@@ -272,10 +308,10 @@ func (l *MemoryLedger) Observe(_ context.Context, value Observation) error {
 	if !ok || reservation.RootRunID != value.RootRunID {
 		return budgetProblem("observation reservation mismatch")
 	}
-	reservation.ObservedMicros += value.CostMicros
-	if reservation.ObservedMicros > reservation.UpperBoundMicros {
+	if reservation.Released || value.CostMicros > reservation.UpperBoundMicros-reservation.ObservedMicros {
 		return budgetProblem("observed usage exceeds reservation")
 	}
+	reservation.ObservedMicros += value.CostMicros
 	reservation.AttemptFinal = reservation.AttemptFinal || value.Final
 	l.values[value.ReservationID] = reservation
 	l.observations[value.ID] = value

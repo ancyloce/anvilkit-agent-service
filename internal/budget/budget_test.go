@@ -187,4 +187,77 @@ func TestReservationFailureNeverDispatches(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+type alteredLedger struct {
+	Ledger
+	alter func(Reservation) Reservation
+}
+
+func (l alteredLedger) Reserve(ctx context.Context, estimate Estimate, generation Generation) (Reservation, error) {
+	value, err := l.Ledger.Reserve(ctx, estimate, generation)
+	if err != nil {
+		return value, err
+	}
+	return l.alter(value), nil
+}
+
+func TestReservationBindingExpiryAndArithmeticFailClosed(t *testing.T) {
+	now := time.Unix(100, 0)
+	identifier := &ids{}
+	base := NewMemoryLedger(identifier)
+	ledger := alteredLedger{Ledger: base, alter: func(value Reservation) Reservation {
+		value.WorkspaceID = "substituted-workspace"
+		return value
+	}}
+	controller, err := New(ledger, identifier, &exposure{}, clock{now}, HeadroomPolicy{MaximumReservedMicros: maxMicros, ReviewAtBasisPoints: 8000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation, _ := controller.Activate("root")
+	value := estimate("run", 10)
+	value.ExpiresAt = now.Add(time.Minute)
+	if _, err := controller.ReserveInitial(context.Background(), value, generation); err == nil {
+		t.Fatal("ledger-substituted reservation binding accepted")
+	}
+
+	expiredController, expiredLedger, _, expiredGeneration := controllerForTime(t, now)
+	expired := estimate("run", 10)
+	expired.ExpiresAt = now
+	if _, err := expiredController.ReserveInitial(context.Background(), expired, expiredGeneration); err == nil {
+		t.Fatal("reservation accepted at its expiry boundary")
+	}
+	expired.ExpiresAt = now.Add(time.Minute)
+	reserved, err := expiredController.ReserveInitial(context.Background(), expired, expiredGeneration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredController.clock = clock{reserved.ExpiresAt}
+	called := false
+	if err := expiredController.Dispatch(context.Background(), reserved.ID, expiredGeneration, func(context.Context, Reservation) error { called = true; return nil }); err == nil || called {
+		t.Fatal("dispatch occurred at the exact reservation expiry")
+	}
+
+	expiredLedger.values["overflow-a"] = Reservation{ID: "overflow-a", RootRunID: "overflow", UpperBoundMicros: maxMicros}
+	expiredLedger.values["overflow-b"] = Reservation{ID: "overflow-b", RootRunID: "overflow", UpperBoundMicros: 1}
+	if _, err := expiredController.RootTotal(context.Background(), "overflow"); err == nil {
+		t.Fatal("root accounting overflow was not rejected")
+	}
+}
+
+func controllerForTime(t *testing.T, now time.Time) (*Controller, *MemoryLedger, *exposure, Generation) {
+	t.Helper()
+	identifier := &ids{}
+	ledger := NewMemoryLedger(identifier)
+	metric := &exposure{}
+	controller, err := New(ledger, identifier, metric, clock{now}, HeadroomPolicy{MaximumReservedMicros: 1_000_000, ReviewAtBasisPoints: 8000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation, err := controller.Activate("root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return controller, ledger, metric, generation
+}
+
 func ptr(value int64) *int64 { return &value }
