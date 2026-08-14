@@ -30,13 +30,51 @@ func TestNoisyWorkspaceCannotStarveAnother(t *testing.T) {
 	if decision := manager.Admit(request("quiet", "q2")); !decision.Queued {
 		t.Fatal("quiet queue missing")
 	}
-	next, ok := manager.Complete("noisy")
+	next, ok := manager.Complete("noisy", "n1")
 	if !ok || next.WorkspaceID != "noisy" {
 		t.Fatalf("next=%#v", next)
 	}
-	next, ok = manager.Complete("quiet")
+	next, ok = manager.Complete("quiet", "q1")
 	if !ok || next.WorkspaceID != "quiet" {
 		t.Fatalf("fair next=%#v", next)
+	}
+}
+
+func TestAdmissionIdentityIsIdempotentAndCompletionIsScoped(t *testing.T) {
+	manager, _ := New(limits())
+	value := request("workspace", "run")
+	if !manager.Admit(value).Admitted {
+		t.Fatal("initial request not admitted")
+	}
+	if decision := manager.Admit(value); !decision.Duplicate || decision.Admitted || decision.Queued {
+		t.Fatalf("duplicate decision=%#v", decision)
+	}
+	changed := value
+	changed.Tools++
+	if decision := manager.Admit(changed); decision.Code != string(problem.CodeIdempotencyConflict) {
+		t.Fatalf("changed replay decision=%#v", decision)
+	}
+	if _, ok := manager.Complete("workspace", "other-run"); ok {
+		t.Fatal("wrong run completed active admission")
+	}
+	if _, ok := manager.Complete("workspace", "run"); ok {
+		t.Fatal("unexpected queued successor")
+	}
+}
+
+func TestNegativeBoundAndRetryJitterAreBounded(t *testing.T) {
+	manager, _ := New(limits())
+	value := request("workspace", "negative")
+	value.Tools = -1
+	if decision := manager.Admit(value); decision.Code != string(problem.CodeLimitExceeded) || manager.DurableRecords() != 0 {
+		t.Fatalf("negative decision=%#v", decision)
+	}
+	budget, _ := NewRetryBudget(RetryPolicy{MaximumAttempts: 2, Base: time.Second, Maximum: time.Second, Jitter: 1, MaximumCostMicros: 2}, 2)
+	for range 2 {
+		delay, err := budget.Next(1)
+		if err != nil || delay > time.Second {
+			t.Fatalf("delay=%v err=%v", delay, err)
+		}
 	}
 }
 func TestEveryBoundStableRejectsWithoutDurableRecord(t *testing.T) {

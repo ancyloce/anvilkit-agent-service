@@ -36,9 +36,9 @@ type Request struct {
 	SSEConnections                                                                                                int
 }
 type Decision struct {
-	Admitted, Queued bool
-	RetryAfter       time.Duration
-	Code             string
+	Admitted, Queued, Duplicate bool
+	RetryAfter                  time.Duration
+	Code                        string
 }
 type Manager struct {
 	lock        sync.Mutex
@@ -50,24 +50,38 @@ type Manager struct {
 	global      int
 	queuedTotal int
 	durable     int
+	records     map[string]record
+}
+
+type record struct {
+	request Request
+	state   string
 }
 
 func New(l Limits) (*Manager, error) {
 	if err := l.Validate(); err != nil {
 		return nil, err
 	}
-	return &Manager{limits: l, active: map[string]int{}, queued: map[string][]Request{}}, nil
+	return &Manager{limits: l, active: map[string]int{}, queued: map[string][]Request{}, records: map[string]record{}}, nil
 }
 func (m *Manager) Admit(v Request) Decision {
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	if v.WorkspaceID == "" || v.RunID == "" || m.exceeds(v) {
+	if !validIdentity(v.WorkspaceID) || !validIdentity(v.RunID) || m.exceeds(v) {
 		return Decision{Code: string(problem.CodeLimitExceeded)}
+	}
+	identity := requestKey(v.WorkspaceID, v.RunID)
+	if prior, ok := m.records[identity]; ok {
+		if prior.request != v {
+			return Decision{Code: string(problem.CodeIdempotencyConflict)}
+		}
+		return Decision{Duplicate: true}
 	}
 	if m.global < m.limits.GlobalActive && m.active[v.WorkspaceID] < m.limits.WorkspaceActive {
 		m.global++
 		m.active[v.WorkspaceID]++
 		m.durable++
+		m.records[identity] = record{request: v, state: "active"}
 		return Decision{Admitted: true}
 	}
 	if m.queuedTotal >= m.limits.GlobalQueued || len(m.queued[v.WorkspaceID]) >= m.limits.WorkspaceQueued {
@@ -79,11 +93,19 @@ func (m *Manager) Admit(v Request) Decision {
 	m.queued[v.WorkspaceID] = append(m.queued[v.WorkspaceID], v)
 	m.queuedTotal++
 	m.durable++
+	m.records[identity] = record{request: v, state: "queued"}
 	return Decision{Queued: true, Code: string(problem.CodeAdmissionOverloaded), RetryAfter: time.Second}
 }
-func (m *Manager) Complete(workspace string) (Request, bool) {
+func (m *Manager) Complete(workspace, run string) (Request, bool) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
+	identity := requestKey(workspace, run)
+	prior, ok := m.records[identity]
+	if !ok || prior.state != "active" {
+		return Request{}, false
+	}
+	prior.state = "complete"
+	m.records[identity] = prior
 	if m.active[workspace] > 0 {
 		m.active[workspace]--
 		m.global--
@@ -114,12 +136,28 @@ func (m *Manager) next() (Request, bool) {
 		}
 		m.active[workspace]++
 		m.global++
+		record := m.records[requestKey(value.WorkspaceID, value.RunID)]
+		record.state = "active"
+		m.records[requestKey(value.WorkspaceID, value.RunID)] = record
 		return value, true
 	}
 	return Request{}, false
 }
 func (m *Manager) exceeds(v Request) bool {
-	return v.ChildDepth > m.limits.ChildDepth || v.ChildFanout > m.limits.ChildFanout || v.Turns > m.limits.Turns || v.Tools > m.limits.Tools || v.Repairs > m.limits.Repairs || v.Retries > m.limits.Retries || v.ContextTokens > m.limits.ContextTokens || v.InputTokens > m.limits.InputTokens || v.OutputTokens > m.limits.OutputTokens || v.EventBytes > m.limits.EventBytes || v.ArtifactBytes > m.limits.ArtifactBytes || v.SSEConnections > m.limits.SSEConnections
+	return v.ChildDepth < 0 || v.ChildFanout < 0 || v.Turns < 0 || v.Tools < 0 || v.Repairs < 0 || v.Retries < 0 || v.ContextTokens < 0 || v.InputTokens < 0 || v.OutputTokens < 0 || v.EventBytes < 0 || v.ArtifactBytes < 0 || v.SSEConnections < 0 || v.ChildDepth > m.limits.ChildDepth || v.ChildFanout > m.limits.ChildFanout || v.Turns > m.limits.Turns || v.Tools > m.limits.Tools || v.Repairs > m.limits.Repairs || v.Retries > m.limits.Retries || v.ContextTokens > m.limits.ContextTokens || v.InputTokens > m.limits.InputTokens || v.OutputTokens > m.limits.OutputTokens || v.EventBytes > m.limits.EventBytes || v.ArtifactBytes > m.limits.ArtifactBytes || v.SSEConnections > m.limits.SSEConnections
+}
+func requestKey(workspace, run string) string { return workspace + "\x00" + run }
+func validIdentity(value string) bool {
+	if len(value) < 1 || len(value) > 128 {
+		return false
+	}
+	for index, character := range value {
+		if (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || (index > 0 && (character == '.' || character == '_' || character == ':' || character == '-')) {
+			continue
+		}
+		return false
+	}
+	return true
 }
 func (m *Manager) DurableRecords() int { m.lock.Lock(); defer m.lock.Unlock(); return m.durable }
 
@@ -138,7 +176,7 @@ type RetryBudget struct {
 }
 
 func NewRetryBudget(p RetryPolicy, seed int64) (*RetryBudget, error) {
-	if p.MaximumAttempts < 1 || p.Base <= 0 || p.Maximum < p.Base || p.Jitter < 0 || p.Jitter > 1 || p.MaximumCostMicros < 1 {
+	if p.MaximumAttempts < 1 || p.MaximumAttempts > 100 || p.Base <= 0 || p.Maximum < p.Base || p.Maximum > 24*time.Hour || p.Jitter < 0 || p.Jitter > 1 || p.MaximumCostMicros < 1 {
 		return nil, fmt.Errorf("retry policy invalid")
 	}
 	return &RetryBudget{policy: p, random: rand.New(rand.NewSource(seed))}, nil
@@ -160,7 +198,11 @@ func (b *RetryBudget) Next(cost int64) (time.Duration, error) {
 	factor := 1 - b.policy.Jitter + 2*b.policy.Jitter*b.random.Float64()
 	b.attempts++
 	b.cost += cost
-	return time.Duration(float64(delay) * factor), nil
+	delay = time.Duration(float64(delay) * factor)
+	if delay > b.policy.Maximum {
+		delay = b.policy.Maximum
+	}
+	return delay, nil
 }
 func (b *RetryBudget) Cost() int64 { b.lock.Lock(); defer b.lock.Unlock(); return b.cost }
 
@@ -173,7 +215,7 @@ type Circuit struct {
 }
 
 func NewCircuit(threshold int, cooldown time.Duration) (*Circuit, error) {
-	if threshold < 1 || cooldown <= 0 {
+	if threshold < 1 || threshold > 1000 || cooldown <= 0 || cooldown > 24*time.Hour {
 		return nil, fmt.Errorf("circuit config invalid")
 	}
 	return &Circuit{threshold: threshold, cooldown: cooldown}, nil
@@ -181,6 +223,9 @@ func NewCircuit(threshold int, cooldown time.Duration) (*Circuit, error) {
 func (c *Circuit) Allow(now time.Time) error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
+	if now.IsZero() {
+		return problem.New(problem.CodeCircuitOpen, "")
+	}
 	if !c.openedAt.IsZero() && now.Sub(c.openedAt) < c.cooldown {
 		return problem.New(problem.CodeCircuitOpen, "")
 	}
