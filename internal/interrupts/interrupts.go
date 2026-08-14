@@ -194,6 +194,7 @@ type Repository interface {
 	OpenApproval(context.Context, Write, ApprovalRequest, string) (ApprovalRequest, OperationResult, error)
 	DecideApproval(context.Context, Write, ApprovalDecisionCommand, string, time.Time) (OperationResult, error)
 	RequestCancellation(context.Context, Write, string, time.Time) (Cancellation, OperationResult, error)
+	RecordCancellation(context.Context, Write, Cancellation) error
 	FinishCancellation(context.Context, Write, Cancellation) (OperationResult, error)
 	RecordedRetry(context.Context, Write, string) (RetryOutcome, bool, error)
 	Retry(context.Context, Write, string, string) (RetryOutcome, error)
@@ -205,7 +206,9 @@ type Repository interface {
 	Descendants(context.Context, runs.Scope, runs.ID) ([]Child, error)
 	RecordProgress(context.Context, runs.Scope, runs.ID, runs.State, time.Time) error
 	Progress(context.Context) ([]Progress, error)
-	MarkStuck(context.Context, runs.Scope, runs.ID, runs.State, time.Time) (bool, error)
+	// MarkStuck atomically records the stuck marker, durable run event, and
+	// durable operator alert. A false result means another scanner already won.
+	MarkStuck(context.Context, Progress, time.Time, string) (bool, error)
 }
 
 type SchemaValidator interface {
@@ -222,6 +225,10 @@ type Runtime interface {
 	Signal(context.Context, string, string, json.RawMessage, string) error
 	StartChild(context.Context, Child) error
 	OpenWait(context.Context, runs.Scope, string, string, time.Duration) error
+	StopRun(context.Context, runs.Scope, runs.ID, uint64) error
+	// ResumeRun must be idempotent for a run, execution generation, and resume
+	// key. An empty key identifies the generation-level explicit retry.
+	ResumeRun(context.Context, runs.Scope, runs.Snapshot, string, string) error
 }
 
 type LeaseRevoker interface {
@@ -234,10 +241,6 @@ type CancellationReconciler interface {
 
 type Reservation interface {
 	ReserveChild(context.Context, runs.Scope, runs.ID, runs.ID, ChildMode) error
-}
-
-type EventSink interface {
-	Stuck(context.Context, Progress, time.Time) error
 }
 
 type AlertSink interface {

@@ -1,4 +1,4 @@
-// Package postgres implements durable M3 control authority in the same
+// Package postgres implements durable Control control authority in the same
 // Postgres transaction as run state, events, outbox, and checkpoints.
 package postgres
 
@@ -100,7 +100,7 @@ func (s *Store) AcceptInput(ctx context.Context, write interrupts.Write, command
 			return nil, interruptsProblem(problem.CodeInputAlreadyResponded, "input response is immutable")
 		}
 		if !now.Before(expires) {
-			return nil, interruptsProblem(problem.CodeInputRequestExpired, "expired input remains awaiting input until Gate E closes")
+			return nil, interruptsProblem(problem.CodeInputRequestExpired, "expired input remains awaiting input until the timeout policy is finalized")
 		}
 		if _, err := tx.Exec(ctx, `UPDATE agent_control.input_requests SET response_bytes=$5,response_digest=$6,response_actor_id=$7,responded_at=$8 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 AND responded_at IS NULL`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, command.RequestID, command.Value, digest, write.Scope.ActorID, now); err != nil {
 			return nil, err
@@ -178,7 +178,7 @@ func (s *Store) DecideApproval(ctx context.Context, write interrupts.Write, comm
 			return nil, interruptsProblem(problem.CodeApprovalAlreadyDecided, "approval decision is immutable")
 		}
 		if !now.Before(expires) {
-			return nil, interruptsProblem(problem.CodeApprovalRequestExpired, "expired approval remains awaiting approval until Gate E closes")
+			return nil, interruptsProblem(problem.CodeApprovalRequestExpired, "expired approval remains awaiting approval until the timeout policy is finalized")
 		}
 		if _, err := tx.Exec(ctx, `UPDATE agent_control.approval_requests SET decision=$5,decision_reason=$6,reviewer_id=$7,decided_at=$8 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 AND decided_at IS NULL`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, command.RequestID, command.Decision, command.Reason, write.Scope.ActorID, now); err != nil {
 			return nil, err
@@ -224,7 +224,7 @@ func (s *Store) RequestCancellation(ctx context.Context, write interrupts.Write,
 		} else if err := s.controlEvent(ctx, tx, write, snapshot, "run.cancellation-requested", now); err != nil {
 			return nil, err
 		}
-		c := interrupts.Cancellation{RequestedAt: now, RequestedBy: write.Scope.ActorID, CommitPhase: commit, DispatchStopped: true}
+		c := interrupts.Cancellation{RequestedAt: now, RequestedBy: write.Scope.ActorID, CommitPhase: commit}
 		evidence, _ := json.Marshal(c)
 		if _, err := tx.Exec(ctx, `INSERT INTO agent_control.lifecycle_controls(workspace_id,project_id,run_id,control_id,control_kind,run_version,execution_generation,actor_id,request_digest,evidence,created_at) VALUES($1,$2,$3,$4,'cancel',$5,$6,$7,$8,$9,$10)`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, write.IdempotencyKey, write.ExpectedVersion, snapshot.ExecutionGeneration, write.Scope.ActorID, digest, evidence, now); err != nil {
 			return nil, err
@@ -238,13 +238,28 @@ func (s *Store) RequestCancellation(ctx context.Context, write interrupts.Write,
 	return value.Cancellation, value.Result, nil
 }
 
+func (s *Store) RecordCancellation(ctx context.Context, write interrupts.Write, cancellation interrupts.Cancellation) error {
+	evidence, err := json.Marshal(cancellation)
+	if err != nil {
+		return err
+	}
+	tag, err := s.database.Exec(ctx, `UPDATE agent_control.lifecycle_controls SET evidence=$5 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND control_id=$4 AND control_kind='cancel'`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, write.IdempotencyKey, evidence)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return problem.New(problem.CodeVersionConflict, "")
+	}
+	return nil
+}
+
 func (s *Store) FinishCancellation(ctx context.Context, write interrupts.Write, c interrupts.Cancellation) (interrupts.OperationResult, error) {
 	if c.CommitPhase || c.ExternalUncertain || !c.Reconciled {
 		return interrupts.OperationResult{}, interruptsProblem(problem.CodeCancellationUnreconciled, "cancellation has not reconciled")
 	}
 	var result interrupts.OperationResult
 	replay, err := s.execute(ctx, write, "cancel-reconciled", "sha256:reconciled", func(ctx context.Context, tx pgx.Tx) (any, error) {
-		snapshot, err := s.transition(ctx, tx, write, runs.Command{Kind: runs.ReconcileCancellation, Traceparent: write.Traceparent}, c.RequestedAt)
+		snapshot, err := s.transition(ctx, tx, write, runs.Command{Kind: runs.ReconcileCancellation, Traceparent: write.Traceparent}, s.clock().UTC())
 		if err != nil {
 			return nil, err
 		}
@@ -477,29 +492,42 @@ func (s *Store) Progress(ctx context.Context) ([]interrupts.Progress, error) {
 	}
 	return result, rows.Err()
 }
-func (s *Store) MarkStuck(ctx context.Context, scope runs.Scope, id runs.ID, state runs.State, at time.Time) (bool, error) {
-	tag, err := s.database.Exec(ctx, `UPDATE agent_control.run_progress SET stuck_at=$5 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND state=$4 AND stuck_at IS NULL`, scope.WorkspaceID, scope.ProjectID, id, state, at)
-	return tag.RowsAffected() == 1, err
-}
-
-func (s *Store) Stuck(ctx context.Context, progress interrupts.Progress, at time.Time) error {
+func (s *Store) MarkStuck(ctx context.Context, progress interrupts.Progress, at time.Time, owner string) (bool, error) {
 	tx, err := s.database.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	write := interrupts.Write{Scope: progress.Scope, RunID: progress.RunID, Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"}
 	snapshot, err := s.load(ctx, tx, progress.Scope, progress.RunID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if snapshot.Status != progress.State {
-		return problem.New(problem.CodeVersionConflict, "")
+		return false, nil
+	}
+	tag, err := tx.Exec(ctx, `UPDATE agent_control.run_progress SET stuck_at=$5 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND state=$4 AND stuck_at IS NULL`, progress.Scope.WorkspaceID, progress.Scope.ProjectID, progress.RunID, progress.State, at)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() != 1 {
+		return false, tx.Commit(ctx)
 	}
 	if err := s.controlEvent(ctx, tx, write, snapshot, "run.stuck", at); err != nil {
-		return err
+		return false, err
 	}
-	return tx.Commit(ctx)
+	alertID := fmt.Sprintf("%s:dwell:%s:%d", progress.RunID, progress.State, progress.EnteredAt.UnixNano())
+	evidence, err := json.Marshal(map[string]any{"enteredAt": progress.EnteredAt, "progressAt": progress.ProgressAt, "breachedAt": at})
+	if err != nil {
+		return false, err
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO agent_control.run_alerts(workspace_id,project_id,alert_id,run_id,state,alert_kind,owner,evidence,created_at) VALUES($1,$2,$3,$4,$5,'run-dwell-deadline',$6,$7,$8)`, progress.Scope.WorkspaceID, progress.Scope.ProjectID, alertID, progress.RunID, progress.State, owner, evidence, at); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) execute(ctx context.Context, write interrupts.Write, operation, digest string, handler func(context.Context, pgx.Tx) (any, error), target any) (bool, error) {
@@ -549,6 +577,9 @@ func (s *Store) transition(ctx context.Context, tx pgx.Tx, write interrupts.Writ
 	}
 	var sequence uint64
 	err = tx.QueryRow(ctx, `UPDATE agent_control.agent_runs SET state=$4,version=$5,execution_generation=$6,next_event_sequence=next_event_sequence+1,snapshot=$7,updated_at=$8 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND version=$9 RETURNING next_event_sequence-1`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, updated.State, updated.Version, updated.ExecutionGeneration, raw, now, write.ExpectedVersion).Scan(&sequence)
+	if err == pgx.ErrNoRows {
+		return runs.Snapshot{}, problem.New(problem.CodeVersionConflict, "")
+	}
 	if err != nil {
 		return runs.Snapshot{}, translate(err)
 	}

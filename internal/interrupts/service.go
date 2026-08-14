@@ -107,6 +107,9 @@ func (s *Service) RespondInput(ctx context.Context, write Write, command InputRe
 	if err := s.runtime.Signal(ctx, inputWaitWorkflowID(write.RunID, command.RequestID), inputTopic(command.RequestID), payload, write.IdempotencyKey); err != nil {
 		return OperationResult{}, fmt.Errorf("signal durable input wait after accepted fact: %w", err)
 	}
+	if err := s.runtime.ResumeRun(ctx, write.Scope, result.Snapshot, request.ResumeCheckpoint, "input:"+string(request.ID)); err != nil {
+		return OperationResult{}, fmt.Errorf("resume input wait at recorded checkpoint: %w", err)
+	}
 	return result, nil
 }
 
@@ -169,6 +172,11 @@ func (s *Service) DecideApproval(ctx context.Context, write Write, command Appro
 	if err := s.runtime.Signal(ctx, approvalWaitWorkflowID(write.RunID, command.RequestID), approvalTopic(command.RequestID), payload, write.IdempotencyKey); err != nil {
 		return OperationResult{}, fmt.Errorf("signal durable approval wait after accepted fact: %w", err)
 	}
+	if command.Decision == DecisionReject || command.Decision == DecisionChange {
+		if err := s.runtime.ResumeRun(ctx, write.Scope, result.Snapshot, request.ResumeCheckpoint, "approval:"+string(request.ID)); err != nil {
+			return OperationResult{}, fmt.Errorf("resume approval wait at recorded checkpoint: %w", err)
+		}
+	}
 	return result, nil
 }
 
@@ -177,6 +185,9 @@ func (s *Service) Cancel(ctx context.Context, write Write) (OperationResult, err
 	cancellation, result, err := s.repository.RequestCancellation(ctx, write, digest, s.clock.Now().UTC())
 	if err != nil {
 		return OperationResult{}, err
+	}
+	if err := s.runtime.StopRun(ctx, write.Scope, write.RunID, result.Snapshot.ExecutionGeneration); err != nil {
+		return result, fmt.Errorf("stop run dispatch: %w", err)
 	}
 	if err := s.leases.RevokeRun(ctx, write.Scope, write.RunID); err != nil {
 		return result, fmt.Errorf("revoke cancellation leases: %w", err)
@@ -192,8 +203,15 @@ func (s *Service) Cancel(ctx context.Context, write Write) (OperationResult, err
 		// parent lookup proves the requested run is scoped to this hierarchy.
 	}
 	for _, child := range descendants {
-		if err := s.runtime.Signal(ctx, workflowID(child.RunID), "cancel", json.RawMessage(`{"requested":true}`), write.IdempotencyKey+":"+string(child.RunID)); err != nil {
-			return result, fmt.Errorf("propagate child cancellation: %w", err)
+		childSnapshot, err := currentSnapshot(ctx, s.repository, Write{Scope: write.Scope, RunID: child.RunID})
+		if err != nil {
+			return result, fmt.Errorf("load descendant generation: %w", err)
+		}
+		if err := s.runtime.StopRun(ctx, write.Scope, child.RunID, childSnapshot.ExecutionGeneration); err != nil {
+			return result, fmt.Errorf("stop descendant workflow: %w", err)
+		}
+		if err := s.leases.RevokeRun(ctx, write.Scope, child.RunID); err != nil {
+			return result, fmt.Errorf("revoke descendant leases: %w", err)
 		}
 	}
 	clear, authoritative, err := s.reconciler.Reconcile(ctx, write.Scope, write.RunID, cancellation.CommitPhase)
@@ -202,6 +220,9 @@ func (s *Service) Cancel(ctx context.Context, write Write) (OperationResult, err
 	}
 	cancellation.DispatchStopped, cancellation.LeasesRevoked, cancellation.ChildrenPropagated = true, true, true
 	cancellation.Reconciled, cancellation.ExternalUncertain = clear, !clear
+	if err := s.repository.RecordCancellation(ctx, write, cancellation); err != nil {
+		return result, fmt.Errorf("record cancellation progress: %w", err)
+	}
 	if authoritative != nil || !clear {
 		// Commit-phase cancellation and uncertainty stay visible; neither may be
 		// projected as cancelled by this service.
@@ -226,6 +247,9 @@ func (s *Service) Retry(ctx context.Context, write Write) (RetryOutcome, error) 
 		if err != nil {
 			return RetryOutcome{}, err
 		}
+		if err := s.runtime.ResumeRun(ctx, write.Scope, outcome.Snapshot, outcome.ResumeCheckpoint, ""); err != nil {
+			return RetryOutcome{}, fmt.Errorf("resume durable retry workflow: %w", err)
+		}
 		if err := s.acknowledge(ctx, write, journal.FactRetry, digest, struct{}{}, outcome); err != nil {
 			return RetryOutcome{}, err
 		}
@@ -248,6 +272,9 @@ func (s *Service) Retry(ctx context.Context, write Write) (RetryOutcome, error) 
 	outcome, err := s.repository.Retry(ctx, write, digest, checkpoint)
 	if err != nil {
 		return RetryOutcome{}, err
+	}
+	if err := s.runtime.ResumeRun(ctx, write.Scope, outcome.Snapshot, outcome.ResumeCheckpoint, ""); err != nil {
+		return RetryOutcome{}, fmt.Errorf("resume durable retry workflow: %w", err)
 	}
 	if err := s.acknowledge(ctx, write, journal.FactRetry, digest, struct{}{}, outcome); err != nil {
 		return RetryOutcome{}, err
@@ -341,7 +368,10 @@ func digestFor(write Write, value any) (string, error) {
 }
 
 func clone(value json.RawMessage) json.RawMessage { return append(json.RawMessage(nil), value...) }
-func workflowID(id runs.ID) string                { return string(id) + ":v1" }
+func executionWorkflowID(id runs.ID, generation uint64) string {
+	return fmt.Sprintf("%s:v%d", id, generation)
+}
+func workflowID(id runs.ID) string { return executionWorkflowID(id, 1) }
 func inputWaitWorkflowID(id runs.ID, request RequestID) string {
 	return workflowID(id) + ":input:" + string(request)
 }
@@ -363,15 +393,25 @@ func validDigest(value string) bool {
 }
 
 func (s *Service) acknowledge(ctx context.Context, write Write, class journal.FactClass, digest string, command, projection any) error {
-	canonicalBytes, err := json.Marshal(command)
+	raw, err := json.Marshal(struct {
+		Scope           runs.Scope `json:"scope"`
+		RunID           runs.ID    `json:"runId"`
+		ExpectedVersion uint64     `json:"expectedVersion"`
+		CanonicalDigest string     `json:"canonicalDigest"`
+		Command         any        `json:"command"`
+	}{write.Scope, write.RunID, write.ExpectedVersion, digest, command})
 	if err != nil {
 		return fmt.Errorf("marshal acknowledged control fact: %w", err)
+	}
+	canonicalBytes, err := canonical.Bytes(raw)
+	if err != nil {
+		return fmt.Errorf("canonicalize acknowledged control fact: %w", err)
 	}
 	projectionBytes, err := json.Marshal(projection)
 	if err != nil {
 		return fmt.Errorf("marshal acknowledged control projection: %w", err)
 	}
-	fact, err := journal.NewFact(write.Scope.WorkspaceID+":"+string(write.RunID)+":"+string(class)+":"+write.IdempotencyKey, write.Scope.WorkspaceID, write.Scope.ProjectID, class, write.ExpectedVersion, canonicalBytes, projectionBytes)
+	fact, err := journal.NewFact(write.Scope.WorkspaceID+":"+string(write.RunID)+":"+string(class)+":"+write.IdempotencyKey, write.Scope.WorkspaceID, write.Scope.ProjectID, class, canonicalBytes, projectionBytes)
 	if err != nil {
 		return err
 	}
@@ -380,7 +420,7 @@ func (s *Service) acknowledge(ctx context.Context, write Write, class journal.Fa
 	if digest == "" {
 		return fmt.Errorf("acknowledged control digest is required")
 	}
-	if err := s.receipts.Append(ctx, fact); err != nil {
+	if _, err := s.receipts.Append(ctx, fact); err != nil {
 		return fmt.Errorf("authority fact remains unacknowledged: %w", err)
 	}
 	return nil

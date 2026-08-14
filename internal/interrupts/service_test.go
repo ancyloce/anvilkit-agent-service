@@ -65,10 +65,14 @@ type signal struct {
 	payload              json.RawMessage
 }
 type testRuntime struct {
-	lock     sync.Mutex
-	signals  []signal
-	children []Child
-	waits    []string
+	lock      sync.Mutex
+	signals   []signal
+	children  []Child
+	waits     []string
+	stopped   []runs.ID
+	resumed   []string
+	stopErr   error
+	resumeErr error
 }
 
 func (r *testRuntime) StartChild(_ context.Context, child Child) error {
@@ -88,6 +92,30 @@ func (r *testRuntime) Signal(_ context.Context, workflow, topic string, payload 
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	r.signals = append(r.signals, signal{workflow, topic, key, append(json.RawMessage(nil), payload...)})
+	return nil
+}
+func (r *testRuntime) StopRun(_ context.Context, _ runs.Scope, id runs.ID, _ uint64) error {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	if r.stopErr != nil {
+		return r.stopErr
+	}
+	r.stopped = append(r.stopped, id)
+	return nil
+}
+func (r *testRuntime) ResumeRun(_ context.Context, _ runs.Scope, snapshot runs.Snapshot, checkpoint, resumeKey string) error {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	if r.resumeErr != nil {
+		return r.resumeErr
+	}
+	key := fmt.Sprintf("%s:%d:%s:%s", snapshot.RunID, snapshot.ExecutionGeneration, checkpoint, resumeKey)
+	for _, existing := range r.resumed {
+		if existing == key {
+			return nil
+		}
+	}
+	r.resumed = append(r.resumed, key)
 	return nil
 }
 
@@ -192,8 +220,8 @@ func TestInputWaitSurvivesServiceReplacementAndAcceptsExactlyOneCurrentResponse(
 		t.Fatalf("accepted=%d conflicts=%v", accepted, conflicts)
 	}
 	current, _ := repository.Current(context.Background(), scope(), "run")
-	if current.Status != runs.Planning || current.Version != 6 || len(runtime.signals) != 1 {
-		t.Fatalf("current=%#v signals=%d", current, len(runtime.signals))
+	if current.Status != runs.Planning || current.Version != 6 || len(runtime.signals) != 1 || len(runtime.resumed) != 1 || runtime.resumed[0] != "run:1:planning:compile:input:"+string(request.ID) {
+		t.Fatalf("current=%#v signals=%d resumed=%v", current, len(runtime.signals), runtime.resumed)
 	}
 }
 
@@ -282,19 +310,73 @@ func TestApprovalEvidenceIsImmutableAndCannotCommitWithoutM5Gateway(t *testing.T
 	}
 }
 
+func TestApprovalWaitSurvivesServiceReplacement(t *testing.T) {
+	repository := NewMemoryRepository()
+	_ = repository.Seed(scope(), snapshot("run", runs.AwaitingReview, 7))
+	clock := &testClock{now: testNow}
+	authority := &testAuthority{}
+	service, _, _ := newTestService(t, repository, clock, authority, &testReconciler{clear: true}, &testReservation{})
+	request, opened, err := service.RequestApproval(context.Background(), write("run", 7, "open-restart"), OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"kind":"page-apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: json.RawMessage(`{"scope":"agent:review"}`), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review:approved"})
+	if err != nil || opened.Snapshot.Status != runs.AwaitingApproval {
+		t.Fatalf("opened=%#v err=%v", opened, err)
+	}
+	replacement, runtime, _ := newTestService(t, repository, clock, authority, &testReconciler{clear: true}, &testReservation{})
+	result, err := replacement.DecideApproval(context.Background(), write("run", opened.Snapshot.Version, "decide-restart"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionReject})
+	if err != nil || result.Snapshot.Status != runs.AwaitingReview || len(runtime.resumed) != 1 || runtime.resumed[0] != "run:1:review:approved:approval:"+string(request.ID) {
+		t.Fatalf("replacement result=%#v resumed=%v err=%v", result, runtime.resumed, err)
+	}
+}
+
 func TestApprovalRejectAndChangeReturnToReview(t *testing.T) {
 	for _, decision := range []DecisionKind{DecisionReject, DecisionChange} {
 		t.Run(string(decision), func(t *testing.T) {
 			repository := NewMemoryRepository()
 			_ = repository.Seed(scope(), snapshot("run", runs.AwaitingReview, 1))
-			service, _, _ := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
+			service, runtime, _ := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
 			request, opened, err := service.RequestApproval(context.Background(), write("run", 1, "open"), OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"effect":"apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: json.RawMessage(`{"reviewer":"required"}`), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review"})
 			if err != nil {
 				t.Fatal(err)
 			}
 			result, err := service.DecideApproval(context.Background(), write("run", opened.Snapshot.Version, "decide"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: decision})
-			if err != nil || result.Snapshot.Status != runs.AwaitingReview {
-				t.Fatalf("decision=%s result=%#v err=%v", decision, result, err)
+			if err != nil || result.Snapshot.Status != runs.AwaitingReview || len(runtime.resumed) != 1 || runtime.resumed[0] != "run:1:review:approval:"+string(request.ID) {
+				t.Fatalf("decision=%s result=%#v resumed=%v err=%v", decision, result, runtime.resumed, err)
+			}
+		})
+	}
+}
+
+func TestApprovalDecisionConflictFamiliesDoNotMutateWait(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*testAuthority, *testClock, *ApprovalDecisionCommand)
+		want   problem.Code
+	}{
+		{"stale", func(_ *testAuthority, _ *testClock, command *ApprovalDecisionCommand) { command.RequestVersion = 2 }, problem.CodeApprovalRequestStale},
+		{"unauthorized", func(authority *testAuthority, _ *testClock, _ *ApprovalDecisionCommand) { authority.denyReview = true }, problem.CodeAuthorizationDenied},
+		{"expired", func(_ *testAuthority, clock *testClock, _ *ApprovalDecisionCommand) {
+			clock.now = testNow.Add(2 * time.Hour)
+		}, problem.CodeApprovalRequestExpired},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			repository := NewMemoryRepository()
+			_ = repository.Seed(scope(), snapshot("run", runs.AwaitingReview, 1))
+			clock, authority := &testClock{now: testNow}, &testAuthority{}
+			service, _, _ := newTestService(t, repository, clock, authority, &testReconciler{clear: true}, &testReservation{})
+			request, opened, err := service.RequestApproval(context.Background(), write("run", 1, "open"), OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"effect":"apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: json.RawMessage(`{"reviewer":"required"}`), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionApprove}
+			test.mutate(authority, clock, &command)
+			_, err = service.DecideApproval(context.Background(), write("run", opened.Snapshot.Version, "decision"), command)
+			var details problem.Details
+			if !errors.As(err, &details) || details.Code != string(test.want) {
+				t.Fatalf("err=%v details=%#v", err, details)
+			}
+			current, _ := repository.Current(context.Background(), scope(), "run")
+			if current.Status != runs.AwaitingApproval || current.Version != opened.Snapshot.Version {
+				t.Fatalf("approval conflict mutated wait: %#v", current)
 			}
 		})
 	}
@@ -306,13 +388,17 @@ func TestCancellationMatrixAndCommitPhaseNeverClaimsCancelled(t *testing.T) {
 		t.Run(string(state), func(t *testing.T) {
 			repository := NewMemoryRepository()
 			_ = repository.Seed(scope(), snapshot("run", state, 3))
-			service, _, leases := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
+			service, runtime, leases := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
 			result, err := service.Cancel(context.Background(), write("run", 3, "cancel"))
 			if err != nil || result.Snapshot.Status != runs.Cancelled {
 				t.Fatalf("result=%#v err=%v", result, err)
 			}
-			if len(leases.revoked) != 1 {
-				t.Fatal("leases not revoked")
+			if len(leases.revoked) != 1 || len(runtime.stopped) != 1 || runtime.stopped[0] != "run" {
+				t.Fatalf("dispatch/lease cancellation missing: stopped=%v revoked=%v", runtime.stopped, leases.revoked)
+			}
+			entry := repository.runs["run"]
+			if entry.cancellation == nil || !entry.cancellation.DispatchStopped || !entry.cancellation.LeasesRevoked || !entry.cancellation.ChildrenPropagated || !entry.cancellation.Reconciled {
+				t.Fatalf("durable cancellation progress missing: %#v", entry.cancellation)
 			}
 		})
 	}
@@ -337,6 +423,26 @@ func TestCancellationMatrixAndCommitPhaseNeverClaimsCancelled(t *testing.T) {
 	}
 }
 
+func TestCancellationResumesAfterDispatchStopFailureWithoutFalseEvidence(t *testing.T) {
+	repository := NewMemoryRepository()
+	_ = repository.Seed(scope(), snapshot("run", runs.Executing, 1))
+	service, runtime, _ := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
+	runtime.stopErr = errors.New("stop unavailable")
+	result, err := service.Cancel(context.Background(), write("run", 1, "cancel"))
+	if err == nil || result.Snapshot.Status != runs.Cancelling {
+		t.Fatalf("failed cancellation request=%#v err=%v", result, err)
+	}
+	entry := repository.runs["run"]
+	if entry.cancellation == nil || entry.cancellation.DispatchStopped || entry.cancellation.Reconciled {
+		t.Fatalf("failed side effect was recorded as complete: %#v", entry.cancellation)
+	}
+	runtime.stopErr = nil
+	result, err = service.Cancel(context.Background(), write("run", 1, "cancel"))
+	if err != nil || result.Snapshot.Status != runs.Cancelled || len(runtime.stopped) != 1 {
+		t.Fatalf("cancellation did not resume safely: %#v stopped=%v err=%v", result, runtime.stopped, err)
+	}
+}
+
 func TestRetryIsIdempotentIncrementsGenerationAndPreservesAuthority(t *testing.T) {
 	repository := NewMemoryRepository()
 	failed := snapshot("run", runs.Failed, 10)
@@ -344,7 +450,7 @@ func TestRetryIsIdempotentIncrementsGenerationAndPreservesAuthority(t *testing.T
 	failed.Problem = &retryProblem
 	_ = repository.Seed(scope(), failed)
 	authority := &testAuthority{retry: true, checkpoint: "prepare:authority"}
-	service, _, _ := newTestService(t, repository, &testClock{now: testNow}, authority, &testReconciler{clear: true}, &testReservation{})
+	service, runtime, _ := newTestService(t, repository, &testClock{now: testNow}, authority, &testReconciler{clear: true}, &testReservation{})
 	first, err := service.Retry(context.Background(), write("run", 10, "retry"))
 	if err != nil {
 		t.Fatal(err)
@@ -358,6 +464,55 @@ func TestRetryIsIdempotentIncrementsGenerationAndPreservesAuthority(t *testing.T
 	}
 	if string(first.Snapshot.ContractBOM) != string(failed.ContractBOM) || string(first.Snapshot.Budget) != string(failed.Budget) {
 		t.Fatal("retry rewrote retained authority/history inventory")
+	}
+	if len(runtime.resumed) != 1 || runtime.resumed[0] != "run:2:prepare:authority:" {
+		t.Fatalf("retry did not resume earliest safe checkpoint exactly once: %v", runtime.resumed)
+	}
+}
+
+func TestRetryReevaluatesEligibilityAfterAuthorityChanges(t *testing.T) {
+	repository := NewMemoryRepository()
+	failed := snapshot("run", runs.Failed, 3)
+	recorded := problem.New(problem.CodeInfrastructureUnavailable, "")
+	failed.Problem = &recorded
+	_ = repository.Seed(scope(), failed)
+	authority := &testAuthority{retry: false, checkpoint: "prepare:rechecked"}
+	service, runtime, _ := newTestService(t, repository, &testClock{now: testNow}, authority, &testReconciler{clear: true}, &testReservation{})
+	_, err := service.Retry(context.Background(), write("run", 3, "retry"))
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != recorded.Code || details.Retryability != recorded.Retryability {
+		t.Fatalf("ineligible retry did not return recorded problem unchanged: %#v err=%v", details, err)
+	}
+	current, _ := repository.Current(context.Background(), scope(), "run")
+	if current.Status != runs.Failed || current.Version != 3 || len(runtime.resumed) != 0 {
+		t.Fatalf("ineligible retry mutated authority: %#v resumed=%v", current, runtime.resumed)
+	}
+	authority.retry = true
+	outcome, err := service.Retry(context.Background(), write("run", 3, "retry"))
+	if err != nil || outcome.Snapshot.ExecutionGeneration != 2 || outcome.ResumeCheckpoint != "prepare:rechecked" || len(runtime.resumed) != 1 {
+		t.Fatalf("new authority was not reevaluated: %#v resumed=%v err=%v", outcome, runtime.resumed, err)
+	}
+}
+
+func TestRetryReplayRecoversAfterWorkflowResumeFailure(t *testing.T) {
+	repository := NewMemoryRepository()
+	failed := snapshot("run", runs.Failed, 6)
+	recorded := problem.New(problem.CodeInfrastructureUnavailable, "")
+	failed.Problem = &recorded
+	_ = repository.Seed(scope(), failed)
+	service, runtime, _ := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{retry: true, checkpoint: "prepare:safe"}, &testReconciler{clear: true}, &testReservation{})
+	runtime.resumeErr = errors.New("runtime unavailable")
+	if _, err := service.Retry(context.Background(), write("run", 6, "retry")); err == nil {
+		t.Fatal("retry did not report workflow resume failure")
+	}
+	current, _ := repository.Current(context.Background(), scope(), "run")
+	if current.Status != runs.Preparing || current.ExecutionGeneration != 2 || current.Version != 7 {
+		t.Fatalf("durable retry transition missing after resume failure: %#v", current)
+	}
+	runtime.resumeErr = nil
+	replayed, err := service.Retry(context.Background(), write("run", 6, "retry"))
+	if err != nil || !replayed.Replayed || len(runtime.resumed) != 1 || replayed.Snapshot.ExecutionGeneration != 2 {
+		t.Fatalf("retry replay did not recover resume: %#v resumed=%v err=%v", replayed, runtime.resumed, err)
 	}
 }
 
@@ -420,10 +575,57 @@ func TestChildrenInheritAuthorityEnforceBoundsAndGateFallbackReservation(t *test
 	}
 }
 
+func TestFallbackReservesOnlyAfterEligibleFailureAndRequiredFailureFailsParent(t *testing.T) {
+	repository := NewMemoryRepository()
+	_ = repository.Seed(scope(), snapshot("parent", runs.Executing, 4))
+	reservation := &testReservation{}
+	runtime, leases := &testRuntime{}, &testLeases{}
+	service, err := NewService(repository, BoundSchemaValidator{}, &testAuthority{}, runtime, leases, &testReconciler{clear: true}, reservation, journal.NewMemoryStore(), &testClock{now: testNow}, &testIDs{}, Limits{ChildDepth: 3, ChildFanout: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor, err := service.CreateChild(context.Background(), write("parent", 4, "required"), CreateChild{Mode: ChildRequired})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.RecordChildOutcome(context.Background(), scope(), predecessor.RunID, ChildOutcome{State: runs.Failed, Artifact: "artifact-lineage:required"}); err != nil {
+		t.Fatal(err)
+	}
+	parent, _ := repository.Current(context.Background(), scope(), "parent")
+	if parent.Status != runs.Failed {
+		t.Fatalf("required child failure did not fail parent: %#v", parent)
+	}
+	// Use an independently executing parent to prove fallback order without
+	// the required-child parent failure blocking child dispatch.
+	_ = repository.Seed(scope(), snapshot("fallback-parent", runs.Executing, 1))
+	failedChild, err := service.CreateChild(context.Background(), write("fallback-parent", 1, "predecessor"), CreateChild{Mode: ChildOptional})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(reservation.calls)
+	failedID := failedChild.RunID
+	if _, err := service.CreateChild(context.Background(), write("fallback-parent", 1, "too-early"), CreateChild{Mode: ChildFallback, PredecessorRunID: &failedID}); err == nil || len(reservation.calls) != before {
+		t.Fatalf("fallback reserved before failure: calls=%v err=%v", reservation.calls, err)
+	}
+	if err := repository.RecordChildOutcome(context.Background(), scope(), failedID, ChildOutcome{State: runs.Failed}); err != nil {
+		t.Fatal(err)
+	}
+	fallback, err := service.CreateChild(context.Background(), write("fallback-parent", 1, "fallback"), CreateChild{Mode: ChildFallback, PredecessorRunID: &failedID})
+	if err != nil || fallback.Mode != ChildFallback || fallback.PredecessorRunID == nil || *fallback.PredecessorRunID != failedID {
+		t.Fatalf("eligible fallback did not dispatch: %#v err=%v", fallback, err)
+	}
+	if len(reservation.calls) != before+1 || len(runtime.children) != 3 {
+		t.Fatalf("fallback reservation/dispatch order missing calls=%v children=%v", reservation.calls, runtime.children)
+	}
+	if err := repository.RecordChildOutcome(context.Background(), scope(), fallback.RunID, ChildOutcome{State: runs.Completed, Artifact: "https://not-lineage.example"}); err == nil {
+		t.Fatal("non-lineage child artifact was accepted")
+	}
+}
+
 func TestCancellationPropagatesToAllChildDescendants(t *testing.T) {
 	repository := NewMemoryRepository()
 	_ = repository.Seed(scope(), snapshot("root", runs.Executing, 1))
-	service, runtime, _ := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
+	service, runtime, leases := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
 	child, err := service.CreateChild(context.Background(), write("root", 1, "child"), CreateChild{Mode: ChildRequired})
 	if err != nil {
 		t.Fatal(err)
@@ -440,25 +642,16 @@ func TestCancellationPropagatesToAllChildDescendants(t *testing.T) {
 	if err != nil || result.Snapshot.Status != runs.Cancelled {
 		t.Fatalf("result=%#v err=%v", result, err)
 	}
-	topics := map[string]bool{}
-	for _, item := range runtime.signals {
-		topics[item.workflow] = true
+	stopped := map[runs.ID]bool{}
+	for _, id := range runtime.stopped {
+		stopped[id] = true
 	}
-	if !topics[workflowID(child.RunID)] || !topics[workflowID(grandchild.RunID)] {
-		t.Fatalf("descendant signals=%v", topics)
+	if !stopped["root"] || !stopped[child.RunID] || !stopped[grandchild.RunID] {
+		t.Fatalf("stopped workflows=%v", stopped)
 	}
-}
-
-type testEvents struct {
-	lock   sync.Mutex
-	values []Progress
-}
-
-func (e *testEvents) Stuck(_ context.Context, p Progress, _ time.Time) error {
-	e.lock.Lock()
-	defer e.lock.Unlock()
-	e.values = append(e.values, p)
-	return nil
+	if len(leases.revoked) != 3 {
+		t.Fatalf("descendant leases not revoked: %v", leases.revoked)
+	}
 }
 
 type testAlerts struct {
@@ -487,8 +680,8 @@ func TestDwellMonitorCoversEveryNonterminalStateWithoutTransition(t *testing.T) 
 	terminal.UpdatedAt = testNow.Add(-time.Hour)
 	_ = repository.Seed(scope(), terminal)
 	clock := &testClock{now: testNow}
-	events, alerts := &testEvents{}, &testAlerts{}
-	monitor, err := NewMonitor(repository, events, alerts, clock, policies)
+	alerts := &testAlerts{}
+	monitor, err := NewMonitor(repository, alerts, clock, policies)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,8 +689,8 @@ func TestDwellMonitorCoversEveryNonterminalStateWithoutTransition(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != len(nonterminalStates()) || len(events.values) != count || alerts.count != count {
-		t.Fatalf("count=%d events=%d alerts=%d", count, len(events.values), alerts.count)
+	if count != len(nonterminalStates()) || alerts.count != count {
+		t.Fatalf("count=%d alerts=%d", count, alerts.count)
 	}
 	again, _ := monitor.Scan(context.Background())
 	if again != 0 {

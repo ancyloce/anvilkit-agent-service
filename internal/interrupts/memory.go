@@ -133,7 +133,7 @@ func (r *MemoryRepository) AcceptInput(_ context.Context, write Write, command I
 		return OperationResult{}, problem.New(problem.CodeVersionConflict, "")
 	}
 	if !now.Before(request.ExpiresAt) {
-		return OperationResult{}, stable(problem.CodeInputRequestExpired, "expired input remains awaiting input until Gate E closes")
+		return OperationResult{}, stable(problem.CodeInputRequestExpired, "expired input remains awaiting input until the timeout policy is finalized")
 	}
 	snapshot, err := transition(entry.snapshot, runs.Command{Kind: runs.AcceptInput, Traceparent: write.Traceparent})
 	if err != nil {
@@ -216,7 +216,7 @@ func (r *MemoryRepository) DecideApproval(_ context.Context, write Write, comman
 		return OperationResult{}, problem.New(problem.CodeVersionConflict, "")
 	}
 	if !now.Before(request.ExpiresAt) {
-		return OperationResult{}, stable(problem.CodeApprovalRequestExpired, "expired approval remains awaiting approval until Gate E closes")
+		return OperationResult{}, stable(problem.CodeApprovalRequestExpired, "expired approval remains awaiting approval until the timeout policy is finalized")
 	}
 	request.Decision = &Decision{RequestVersion: command.RequestVersion, Kind: command.Decision, ReviewerID: write.Scope.ActorID, Reason: command.Reason, AcceptedAt: now}
 	entry.approvals[command.RequestID] = request
@@ -228,7 +228,7 @@ func (r *MemoryRepository) DecideApproval(_ context.Context, write Write, comman
 		}
 		r.advance(entry, snapshot, now)
 	} else {
-		// Approval is immutable evidence only. M5's authorization gateway must
+		// Approval is immutable evidence only. Commit's authorization gateway must
 		// supply CommitProof before the aggregate can enter committing.
 		entry.progress.ProgressAt = now
 	}
@@ -261,7 +261,7 @@ func (r *MemoryRepository) RequestCancellation(_ context.Context, write Write, d
 		}
 		r.advance(entry, snapshot, now)
 	}
-	cancellation := Cancellation{RequestedAt: now, RequestedBy: write.Scope.ActorID, CommitPhase: commitPhase, DispatchStopped: true}
+	cancellation := Cancellation{RequestedAt: now, RequestedBy: write.Scope.ActorID, CommitPhase: commitPhase}
 	entry.cancellation = &cancellation
 	result := OperationResult{Snapshot: cloneSnapshot(snapshot)}
 	r.record(write, "cancel", digest, struct {
@@ -269,6 +269,21 @@ func (r *MemoryRepository) RequestCancellation(_ context.Context, write Write, d
 		Result       OperationResult
 	}{cancellation, result})
 	return cancellation, result, nil
+}
+
+func (r *MemoryRepository) RecordCancellation(_ context.Context, write Write, cancellation Cancellation) error {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	entry, err := r.scoped(write.Scope, write.RunID)
+	if err != nil {
+		return err
+	}
+	if entry.cancellation == nil || !entry.cancellation.RequestedAt.Equal(cancellation.RequestedAt) {
+		return problem.New(problem.CodeVersionConflict, "")
+	}
+	copyValue := cancellation
+	entry.cancellation = &copyValue
+	return nil
 }
 
 func (r *MemoryRepository) FinishCancellation(_ context.Context, write Write, cancellation Cancellation) (OperationResult, error) {
@@ -501,14 +516,14 @@ func (r *MemoryRepository) RecordProgress(_ context.Context, scope runs.Scope, i
 	return nil
 }
 
-func (r *MemoryRepository) MarkStuck(_ context.Context, scope runs.Scope, id runs.ID, state runs.State, at time.Time) (bool, error) {
+func (r *MemoryRepository) MarkStuck(_ context.Context, progress Progress, at time.Time, owner string) (bool, error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
-	entry, err := r.scoped(scope, id)
+	entry, err := r.scoped(progress.Scope, progress.RunID)
 	if err != nil {
 		return false, err
 	}
-	if entry.snapshot.Status != state || entry.progress.StuckAt != nil {
+	if owner == "" || entry.snapshot.Status != progress.State || entry.progress.StuckAt != nil {
 		return false, nil
 	}
 	copyAt := at

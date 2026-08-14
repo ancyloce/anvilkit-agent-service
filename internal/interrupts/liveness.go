@@ -15,14 +15,13 @@ type DwellPolicy struct {
 
 type Monitor struct {
 	repository Repository
-	events     EventSink
 	alerts     AlertSink
 	clock      Clock
 	policies   map[runs.State]DwellPolicy
 }
 
-func NewMonitor(repository Repository, events EventSink, alerts AlertSink, clock Clock, policies map[runs.State]DwellPolicy) (*Monitor, error) {
-	if repository == nil || events == nil || alerts == nil || clock == nil {
+func NewMonitor(repository Repository, alerts AlertSink, clock Clock, policies map[runs.State]DwellPolicy) (*Monitor, error) {
+	if repository == nil || alerts == nil || clock == nil {
 		return nil, fmt.Errorf("liveness monitor dependencies are required")
 	}
 	copyPolicies := make(map[runs.State]DwellPolicy, len(policies))
@@ -33,7 +32,7 @@ func NewMonitor(repository Repository, events EventSink, alerts AlertSink, clock
 		}
 		copyPolicies[state] = policy
 	}
-	return &Monitor{repository: repository, events: events, alerts: alerts, clock: clock, policies: copyPolicies}, nil
+	return &Monitor{repository: repository, alerts: alerts, clock: clock, policies: copyPolicies}, nil
 }
 
 func (m *Monitor) Heartbeat(ctx context.Context, scope runs.Scope, id runs.ID, state runs.State) error {
@@ -52,15 +51,12 @@ func (m *Monitor) Scan(ctx context.Context) (int, error) {
 		if !nonterminal || now.Sub(item.ProgressAt) < policy.Deadline {
 			continue
 		}
-		marked, err := m.repository.MarkStuck(ctx, item.Scope, item.RunID, item.State, now)
+		marked, err := m.repository.MarkStuck(ctx, item, now, policy.Owner)
 		if err != nil {
 			return emitted, err
 		}
 		if !marked {
 			continue
-		}
-		if err := m.events.Stuck(ctx, item, now); err != nil {
-			return emitted, fmt.Errorf("persist stuck-run event: %w", err)
 		}
 		if err := m.alerts.Alert(ctx, "run-dwell-deadline", item.Scope, item.RunID, item.State); err != nil {
 			return emitted, fmt.Errorf("emit stuck-run alert: %w", err)
