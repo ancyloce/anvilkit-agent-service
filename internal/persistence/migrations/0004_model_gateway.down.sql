@@ -11,4 +11,5 @@ DROP TABLE IF EXISTS agent_evaluation.context_evidence;
 DROP TABLE IF EXISTS agent_workflow.provider_continuations;
 DROP TABLE IF EXISTS agent_workflow.run_tool_profiles;
 DROP TABLE IF EXISTS agent_workflow.provider_invocations;
+DROP TABLE IF EXISTS agent_control.provider_policy_snapshots;
 DROP TABLE IF EXISTS agent_control.provider_registry_snapshots;

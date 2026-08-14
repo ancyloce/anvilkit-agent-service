@@ -5,7 +5,19 @@ CREATE TABLE IF NOT EXISTS agent_control.provider_registry_snapshots (
     snapshot_version text NOT NULL,
     snapshot jsonb NOT NULL,
     created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-    PRIMARY KEY (workspace_id, project_id, snapshot_digest)
+    PRIMARY KEY (workspace_id, project_id, snapshot_digest),
+    UNIQUE (workspace_id, project_id, snapshot_version)
+);
+
+CREATE TABLE IF NOT EXISTS agent_control.provider_policy_snapshots (
+    workspace_id text NOT NULL,
+    project_id text NOT NULL,
+    policy_version text NOT NULL,
+    policy_digest text NOT NULL CHECK (policy_digest ~ '^sha256:[0-9a-f]{64}$'),
+    policy_snapshot jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    PRIMARY KEY (workspace_id, project_id, policy_version),
+    UNIQUE (workspace_id, project_id, policy_digest)
 );
 
 CREATE TABLE IF NOT EXISTS agent_workflow.provider_invocations (
@@ -16,6 +28,8 @@ CREATE TABLE IF NOT EXISTS agent_workflow.provider_invocations (
     physical_attempt_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
     registry_snapshot_digest text NOT NULL CHECK (registry_snapshot_digest ~ '^sha256:[0-9a-f]{64}$'),
     policy_version text NOT NULL,
+    policy_digest text NOT NULL CHECK (policy_digest ~ '^sha256:[0-9a-f]{64}$'),
+    policy_snapshot jsonb NOT NULL,
     provider text NOT NULL,
     model_version text NOT NULL,
     region text NOT NULL,
@@ -37,6 +51,7 @@ CREATE TABLE IF NOT EXISTS agent_workflow.provider_continuations (
     api_version text NOT NULL CHECK (api_version = 'anvilkit.io/contracts/v1'),
     kind text NOT NULL CHECK (kind = 'ProviderContinuation'),
     encrypted_binding text NOT NULL,
+    key_reference text NOT NULL,
     provider text NOT NULL,
     expires_at timestamptz NOT NULL,
     restart_policy text NOT NULL CHECK (restart_policy IN ('resume-if-valid','restart-stage','restart-run')),
@@ -88,9 +103,9 @@ CREATE TABLE IF NOT EXISTS agent_evaluation.tool_decisions (
 
 CREATE OR REPLACE FUNCTION agent_workflow.guard_provider_invocation_identity() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF (NEW.workspace_id,NEW.project_id,NEW.run_id,NEW.invocation_id,NEW.registry_snapshot_digest,NEW.policy_version,NEW.provider,NEW.model_version,NEW.region,NEW.disclosed_data_classes,NEW.started_at)
+    IF (NEW.workspace_id,NEW.project_id,NEW.run_id,NEW.invocation_id,NEW.registry_snapshot_digest,NEW.policy_version,NEW.policy_digest,NEW.policy_snapshot,NEW.provider,NEW.model_version,NEW.region,NEW.disclosed_data_classes,NEW.started_at)
        IS DISTINCT FROM
-       (OLD.workspace_id,OLD.project_id,OLD.run_id,OLD.invocation_id,OLD.registry_snapshot_digest,OLD.policy_version,OLD.provider,OLD.model_version,OLD.region,OLD.disclosed_data_classes,OLD.started_at) THEN
+       (OLD.workspace_id,OLD.project_id,OLD.run_id,OLD.invocation_id,OLD.registry_snapshot_digest,OLD.policy_version,OLD.policy_digest,OLD.policy_snapshot,OLD.provider,OLD.model_version,OLD.region,OLD.disclosed_data_classes,OLD.started_at) THEN
         RAISE EXCEPTION 'provider invocation identity is immutable';
     END IF;
     RETURN NEW;
@@ -113,7 +128,9 @@ BEGIN
     IF NEW.input_tokens < OLD.input_tokens OR NEW.output_tokens < OLD.output_tokens OR NEW.cost_micros < OLD.cost_micros THEN
         RAISE EXCEPTION 'provider accounting is monotonic';
     END IF;
-    IF OLD.completed_at IS NOT NULL AND (NEW.completed_at,NEW.output_digest,NEW.problem) IS DISTINCT FROM (OLD.completed_at,OLD.output_digest,OLD.problem) THEN
+    IF OLD.completed_at IS NOT NULL AND (NEW.physical_attempt_ids,NEW.completed_at,NEW.input_tokens,NEW.output_tokens,NEW.cost_micros,NEW.output_digest,NEW.problem)
+       IS DISTINCT FROM
+       (OLD.physical_attempt_ids,OLD.completed_at,OLD.input_tokens,OLD.output_tokens,OLD.cost_micros,OLD.output_digest,OLD.problem) THEN
         RAISE EXCEPTION 'completed provider evidence is immutable';
     END IF;
     RETURN NEW;
@@ -126,7 +143,7 @@ CREATE INDEX IF NOT EXISTS provider_continuations_expiry_idx ON agent_workflow.p
 CREATE INDEX IF NOT EXISTS context_evidence_run_idx ON agent_evaluation.context_evidence (workspace_id, project_id, run_id, created_at);
 CREATE INDEX IF NOT EXISTS tool_decisions_run_idx ON agent_evaluation.tool_decisions (workspace_id, project_id, run_id, recorded_at);
 
-GRANT SELECT, INSERT ON agent_control.provider_registry_snapshots TO agent_control_rw, agent_authority_rw;
+GRANT SELECT, INSERT ON agent_control.provider_registry_snapshots, agent_control.provider_policy_snapshots TO agent_control_rw, agent_authority_rw;
 GRANT SELECT, INSERT, UPDATE ON agent_workflow.provider_invocations, agent_workflow.provider_continuations TO agent_workflow_rw, agent_authority_rw;
 GRANT SELECT, INSERT ON agent_workflow.run_tool_profiles TO agent_workflow_rw, agent_authority_rw;
 GRANT DELETE ON agent_workflow.provider_continuations TO agent_workflow_rw, agent_authority_rw;

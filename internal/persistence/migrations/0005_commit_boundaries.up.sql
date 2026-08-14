@@ -61,6 +61,11 @@ ALTER TABLE agent_artifacts.metadata
     ADD COLUMN IF NOT EXISTS deleted_at timestamptz,
     ADD COLUMN IF NOT EXISTS deletion_reason text;
 
+ALTER TABLE agent_artifacts.metadata
+    ADD CONSTRAINT artifact_digest_format CHECK (digest ~ '^sha256:[0-9a-f]{64}$'),
+    ADD CONSTRAINT artifact_actual_digest_format CHECK (actual_digest IS NULL OR actual_digest ~ '^sha256:[0-9a-f]{64}$'),
+    ADD CONSTRAINT artifact_state_values CHECK (state IN ('pending','scanning','valid','finalized','committed','quarantined','expired','deleted'));
+
 CREATE TABLE IF NOT EXISTS agent_artifacts.access_grants (
     workspace_id text NOT NULL,
     project_id text NOT NULL,
@@ -98,6 +103,8 @@ CREATE TABLE IF NOT EXISTS agent_control.domain_operations (
     action_digest text NOT NULL CHECK (action_digest ~ '^sha256:[0-9a-f]{64}$'),
     artifact_digest text NOT NULL CHECK (artifact_digest ~ '^sha256:[0-9a-f]{64}$'),
     expected_revision text NOT NULL,
+    idempotency_key text NOT NULL,
+    request_digest text NOT NULL CHECK (request_digest ~ '^sha256:[0-9a-f]{64}$'),
     status text NOT NULL CHECK (status IN ('recorded','issued','awaiting-domain-confirmation','applied','conflict','rejected')),
     authorization_consumed boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL,
@@ -109,18 +116,88 @@ CREATE TABLE IF NOT EXISTS agent_control.domain_operations (
 
 CREATE OR REPLACE FUNCTION agent_control.guard_domain_operation_identity() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-    IF (NEW.workspace_id,NEW.project_id,NEW.run_id,NEW.operation_id,NEW.authorization_id,NEW.authorization_jws,NEW.action_digest,NEW.artifact_digest,NEW.expected_revision,NEW.created_at)
+    IF (NEW.workspace_id,NEW.project_id,NEW.run_id,NEW.operation_id,NEW.authorization_id,NEW.authorization_jws,NEW.action_digest,NEW.artifact_digest,NEW.expected_revision,NEW.idempotency_key,NEW.request_digest,NEW.created_at)
        IS DISTINCT FROM
-       (OLD.workspace_id,OLD.project_id,OLD.run_id,OLD.operation_id,OLD.authorization_id,OLD.authorization_jws,OLD.action_digest,OLD.artifact_digest,OLD.expected_revision,OLD.created_at) THEN
+       (OLD.workspace_id,OLD.project_id,OLD.run_id,OLD.operation_id,OLD.authorization_id,OLD.authorization_jws,OLD.action_digest,OLD.artifact_digest,OLD.expected_revision,OLD.idempotency_key,OLD.request_digest,OLD.created_at) THEN
         RAISE EXCEPTION 'domain operation identity is immutable';
     END IF;
     IF OLD.authorization_consumed AND NOT NEW.authorization_consumed THEN
         RAISE EXCEPTION 'authorization consumption is irreversible';
     END IF;
+    IF NEW.updated_at < OLD.updated_at THEN
+        RAISE EXCEPTION 'domain operation time is monotonic';
+    END IF;
+    IF NOT (
+        NEW.status = OLD.status OR
+        (OLD.status = 'recorded' AND NEW.status = 'issued') OR
+        (OLD.status = 'issued' AND NEW.status IN ('awaiting-domain-confirmation','applied','conflict','rejected')) OR
+        (OLD.status = 'awaiting-domain-confirmation' AND NEW.status IN ('applied','conflict','rejected'))
+    ) THEN
+        RAISE EXCEPTION 'domain operation status transition is invalid';
+    END IF;
+    IF NEW.authorization_consumed IS DISTINCT FROM (NEW.status IN ('applied','conflict','rejected')) THEN
+        RAISE EXCEPTION 'terminal domain operation must consume authorization';
+    END IF;
     RETURN NEW;
 END $$;
 DROP TRIGGER IF EXISTS domain_operation_identity ON agent_control.domain_operations;
 CREATE TRIGGER domain_operation_identity BEFORE UPDATE ON agent_control.domain_operations FOR EACH ROW EXECUTE FUNCTION agent_control.guard_domain_operation_identity();
+
+CREATE OR REPLACE FUNCTION agent_control.guard_budget_reservation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF (NEW.workspace_id,NEW.project_id,NEW.root_run_id,NEW.run_id,NEW.reservation_id,NEW.controller_generation,NEW.policy_version,NEW.budget_version,NEW.expires_at,NEW.created_at)
+       IS DISTINCT FROM
+       (OLD.workspace_id,OLD.project_id,OLD.root_run_id,OLD.run_id,OLD.reservation_id,OLD.controller_generation,OLD.policy_version,OLD.budget_version,OLD.expires_at,OLD.created_at) THEN
+        RAISE EXCEPTION 'budget reservation identity is immutable';
+    END IF;
+    IF NEW.updated_at < OLD.updated_at OR NEW.observed_micros < OLD.observed_micros OR NEW.upper_bound_micros > OLD.upper_bound_micros OR (OLD.attempt_final AND NOT NEW.attempt_final) OR (OLD.released AND NOT NEW.released) THEN
+        RAISE EXCEPTION 'budget reservation settlement is monotonic';
+    END IF;
+    IF NEW.upper_bound_micros < OLD.upper_bound_micros AND NOT NEW.attempt_final THEN
+        RAISE EXCEPTION 'budget reservation cannot reconcile before finality';
+    END IF;
+    IF OLD.released AND (NEW.upper_bound_micros,NEW.observed_micros,NEW.attempt_final,NEW.released) IS DISTINCT FROM (OLD.upper_bound_micros,OLD.observed_micros,OLD.attempt_final,OLD.released) THEN
+        RAISE EXCEPTION 'released budget reservation is immutable';
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS budget_reservation_guard ON agent_control.budget_reservations;
+CREATE TRIGGER budget_reservation_guard BEFORE UPDATE ON agent_control.budget_reservations FOR EACH ROW EXECUTE FUNCTION agent_control.guard_budget_reservation();
+
+CREATE OR REPLACE FUNCTION agent_artifacts.guard_metadata_lifecycle() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF (NEW.workspace_id,NEW.project_id,NEW.artifact_id,NEW.run_id,NEW.digest,NEW.actual_digest,NEW.object_reference,NEW.schema_identity,NEW.lineage,NEW.created_at)
+       IS DISTINCT FROM
+       (OLD.workspace_id,OLD.project_id,OLD.artifact_id,OLD.run_id,OLD.digest,OLD.actual_digest,OLD.object_reference,OLD.schema_identity,OLD.lineage,OLD.created_at) THEN
+        RAISE EXCEPTION 'artifact identity and bytes are immutable';
+    END IF;
+    IF NEW.version < OLD.version OR NEW.security_generation < OLD.security_generation OR NEW.updated_at < OLD.updated_at THEN
+        RAISE EXCEPTION 'artifact versions are monotonic';
+    END IF;
+    IF NOT (
+        NEW.state = OLD.state OR
+        (OLD.state = 'pending' AND NEW.state IN ('scanning','quarantined','expired')) OR
+        (OLD.state = 'scanning' AND NEW.state IN ('valid','quarantined','expired')) OR
+        (OLD.state = 'valid' AND NEW.state IN ('finalized','quarantined','expired')) OR
+        (OLD.state = 'finalized' AND NEW.state IN ('committed','quarantined','expired')) OR
+        (OLD.state = 'committed' AND NEW.state IN ('quarantined','expired')) OR
+        (OLD.state IN ('quarantined','expired') AND NEW.state = 'deleted')
+    ) THEN
+        RAISE EXCEPTION 'artifact lifecycle transition is invalid';
+    END IF;
+    IF NEW.state IS DISTINCT FROM OLD.state AND NEW.version <> OLD.version + 1 THEN
+        RAISE EXCEPTION 'artifact lifecycle transition requires one CAS version increment';
+    END IF;
+    IF NEW.state IN ('quarantined','expired','deleted') AND NEW.state IS DISTINCT FROM OLD.state AND NEW.security_generation <= OLD.security_generation THEN
+        RAISE EXCEPTION 'artifact revocation transition requires a security generation increment';
+    END IF;
+    IF OLD.state = 'deleted' AND NEW IS DISTINCT FROM OLD THEN
+        RAISE EXCEPTION 'artifact deletion tombstone is immutable';
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS artifact_metadata_lifecycle ON agent_artifacts.metadata;
+CREATE TRIGGER artifact_metadata_lifecycle BEFORE UPDATE ON agent_artifacts.metadata FOR EACH ROW EXECUTE FUNCTION agent_artifacts.guard_metadata_lifecycle();
 
 CREATE INDEX IF NOT EXISTS budget_reservations_root_idx ON agent_control.budget_reservations(workspace_id, project_id, root_run_id);
 CREATE INDEX IF NOT EXISTS validation_evidence_run_idx ON agent_evaluation.validation_evidence(workspace_id, project_id, run_id, validated_at);
@@ -131,4 +208,4 @@ GRANT SELECT, INSERT, UPDATE ON agent_control.budget_reservations, agent_control
 GRANT SELECT, INSERT ON agent_control.usage_observations, agent_control.apply_authorizations TO agent_control_rw, agent_authority_rw;
 GRANT SELECT, INSERT ON agent_evaluation.validation_evidence TO agent_evaluation_rw;
 GRANT USAGE, SELECT ON SEQUENCE agent_evaluation.validation_evidence_evidence_id_seq TO agent_evaluation_rw;
-GRANT SELECT, INSERT, UPDATE, DELETE ON agent_artifacts.access_grants TO agent_artifacts_rw;
+GRANT SELECT, INSERT, DELETE ON agent_artifacts.access_grants TO agent_artifacts_rw;

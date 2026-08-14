@@ -91,6 +91,20 @@ CREATE TABLE IF NOT EXISTS agent_control.run_progress (
     PRIMARY KEY (workspace_id, project_id, run_id)
 );
 
+CREATE TABLE IF NOT EXISTS agent_control.run_alerts (
+    workspace_id text NOT NULL,
+    project_id text NOT NULL,
+    alert_id text NOT NULL,
+    run_id text NOT NULL,
+    state text NOT NULL,
+    alert_kind text NOT NULL,
+    owner text NOT NULL CHECK (length(owner) BETWEEN 1 AND 256),
+    evidence jsonb NOT NULL,
+    created_at timestamptz NOT NULL,
+    delivered_at timestamptz,
+    PRIMARY KEY (workspace_id, project_id, alert_id)
+);
+
 CREATE OR REPLACE FUNCTION agent_control.guard_input_request_immutability() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF (NEW.workspace_id,NEW.project_id,NEW.run_id,NEW.request_id,NEW.request_version,NEW.run_version,NEW.question,NEW.response_schema,NEW.resume_checkpoint,NEW.expires_at,NEW.created_at)
@@ -134,5 +148,6 @@ CREATE INDEX IF NOT EXISTS input_requests_current_idx ON agent_control.input_req
 CREATE INDEX IF NOT EXISTS approval_requests_current_idx ON agent_control.approval_requests (workspace_id, project_id, run_id, decision_version DESC);
 CREATE INDEX IF NOT EXISTS run_children_parent_idx ON agent_control.run_children (workspace_id, project_id, parent_run_id);
 CREATE INDEX IF NOT EXISTS run_progress_scan_idx ON agent_control.run_progress (state, progress_at) WHERE stuck_at IS NULL;
+CREATE INDEX IF NOT EXISTS run_alerts_delivery_idx ON agent_control.run_alerts (created_at) WHERE delivered_at IS NULL;
 
-GRANT SELECT, INSERT, UPDATE ON agent_control.input_requests, agent_control.approval_requests, agent_control.lifecycle_controls, agent_control.run_children, agent_control.run_progress TO agent_authority_rw;
+GRANT SELECT, INSERT, UPDATE ON agent_control.input_requests, agent_control.approval_requests, agent_control.lifecycle_controls, agent_control.run_children, agent_control.run_progress, agent_control.run_alerts TO agent_authority_rw;

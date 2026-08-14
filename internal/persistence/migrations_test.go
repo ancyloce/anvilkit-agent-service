@@ -15,7 +15,7 @@ func TestFoundationScopesEveryServiceTableAndKeepsMemoryEmpty(t *testing.T) {
 		t.Fatal("memory schema missing")
 	}
 	if strings.Contains(sql, "CREATE TABLE IF NOT EXISTS agent_memory") {
-		t.Fatal("Phase 0 memory schema must have no tables")
+		t.Fatal("foundation memory schema must have no tables")
 	}
 	for _, table := range []string{"agent_runs", "write_idempotency", "agent_events", "outbox", "inbox", "checkpoints", "executor_leases", "metadata", "records"} {
 		start := strings.Index(sql, "CREATE TABLE IF NOT EXISTS ")
@@ -31,64 +31,69 @@ func TestFoundationScopesEveryServiceTableAndKeepsMemoryEmpty(t *testing.T) {
 			t.Fatalf("table %s lacks mandatory scope", table)
 		}
 	}
-	m3, err := migrationFiles.ReadFile("migrations/0003_m3_interrupts.up.sql")
+	control, err := migrationFiles.ReadFile("migrations/0003_interrupts.up.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"input_requests", "approval_requests", "lifecycle_controls", "run_children", "run_progress"} {
-		if !strings.Contains(string(m3), "CREATE TABLE IF NOT EXISTS agent_control."+table) {
-			t.Fatalf("M3 migration missing %s", table)
+	for _, table := range []string{"input_requests", "approval_requests", "lifecycle_controls", "run_children", "run_progress", "run_alerts"} {
+		if !strings.Contains(string(control), "CREATE TABLE IF NOT EXISTS agent_control."+table) {
+			t.Fatalf("interrupt migration missing %s", table)
 		}
 	}
-	m4, err := migrationFiles.ReadFile("migrations/0004_m4_model_gateway.up.sql")
+	model, err := migrationFiles.ReadFile("migrations/0004_model_gateway.up.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"provider_registry_snapshots", "provider_invocations", "provider_continuations", "run_tool_profiles", "context_evidence", "tool_decisions"} {
-		if !strings.Contains(string(m4), table+" (") {
-			t.Fatalf("M4 migration missing %s", table)
+	for _, table := range []string{"provider_registry_snapshots", "provider_policy_snapshots", "provider_invocations", "provider_continuations", "run_tool_profiles", "context_evidence", "tool_decisions"} {
+		if !strings.Contains(string(model), table+" (") {
+			t.Fatalf("model gateway migration missing %s", table)
 		}
 	}
-	if strings.Contains(string(m4), "plaintext") || !strings.Contains(string(m4), "encrypted_binding") {
-		t.Fatal("M4 continuation storage must be encrypted-only")
+	if strings.Contains(string(model), "plaintext") || !strings.Contains(string(model), "encrypted_binding") || !strings.Contains(string(model), "key_reference") || !strings.Contains(string(model), "policy_digest") || !strings.Contains(string(model), "policy_snapshot") {
+		t.Fatal("model continuation storage must be encrypted-only")
 	}
-	m5, err := migrationFiles.ReadFile("migrations/0005_m5_commit_boundaries.up.sql")
+	commit, err := migrationFiles.ReadFile("migrations/0005_commit_boundaries.up.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, table := range []string{"budget_reservations", "usage_observations", "validation_evidence", "access_grants", "apply_authorizations", "domain_operations"} {
-		if !strings.Contains(string(m5), table+" (") {
-			t.Fatalf("M5 migration missing %s", table)
+		if !strings.Contains(string(commit), table+" (") {
+			t.Fatalf("commit boundary migration missing %s", table)
 		}
 	}
-	if !strings.Contains(string(m5), "domain_operations_active_run_idx") || !strings.Contains(string(m5), "authorization consumption is irreversible") {
-		t.Fatal("M5 durable commit fences are missing")
+	for _, fence := range []string{"domain_operations_active_run_idx", "authorization consumption is irreversible", "domain operation status transition is invalid", "budget reservation identity is immutable", "artifact lifecycle transition is invalid", "idempotency_key", "request_digest"} {
+		if !strings.Contains(string(commit), fence) {
+			t.Fatalf("commit boundary durable fence missing %s", fence)
+		}
 	}
-	m6, err := migrationFiles.ReadFile("migrations/0006_m6_scheduler_usage_queue.up.sql")
+	if !strings.Contains(string(commit), "GRANT SELECT, INSERT, DELETE ON agent_artifacts.access_grants") {
+		t.Fatal("durable commit fences are missing")
+	}
+	scheduler, err := migrationFiles.ReadFile("migrations/0006_scheduler_usage_queue.up.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, table := range []string{"agent_tasks", "worker_attempts", "worker_results", "result_diagnostics", "worker_dlq", "queue_deliveries"} {
-		if !strings.Contains(string(m6), table+" (") {
-			t.Fatalf("M6 migration missing %s", table)
+		if !strings.Contains(string(scheduler), table+" (") {
+			t.Fatalf("scheduler and usage migration missing %s", table)
 		}
 	}
 	for _, fence := range []string{"recovery_epoch", "execution_generation", "physical_attempt_id", "lease_epoch", "fence_token", "tasks_active_attempt_idx", "usage_provider_event_dedup_idx", "usage_attempt_meter_sequence_idx", "observation_digest", "dead_lettered"} {
-		if !strings.Contains(string(m6), fence) {
-			t.Fatalf("M6 durable fence missing %s", fence)
+		if !strings.Contains(string(scheduler), fence) {
+			t.Fatalf("scheduler durable fence missing %s", fence)
 		}
 	}
-	m7, err := migrationFiles.ReadFile("migrations/0007_m7_recovery_state.up.sql")
+	recovery, err := migrationFiles.ReadFile("migrations/0007_recovery_state.up.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, table := range []string{"recovery_state", "restore_drills", "restore_stages"} {
-		if !strings.Contains(string(m7), table+" (") {
-			t.Fatalf("M7 migration missing %s", table)
+		if !strings.Contains(string(recovery), table+" (") {
+			t.Fatalf("recovery migration missing %s", table)
 		}
 	}
-	if strings.Contains(string(m7), "recovery_register") || !strings.Contains(string(m7), "external non-rollback register is intentionally absent") {
-		t.Fatal("M7 schema must not store the external recovery register")
+	if strings.Contains(string(recovery), "recovery_register") || !strings.Contains(string(recovery), "external non-rollback register is intentionally absent") {
+		t.Fatal("recovery schema must not store the external recovery register")
 	}
 }
 

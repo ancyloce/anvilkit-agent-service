@@ -1,3 +1,7 @@
+DROP TRIGGER IF EXISTS queue_delivery_guard ON agent_events.queue_deliveries;
+DROP FUNCTION IF EXISTS agent_events.guard_queue_delivery();
+DROP TRIGGER IF EXISTS worker_dlq_stable ON agent_workflow.worker_dlq;
+DROP FUNCTION IF EXISTS agent_workflow.guard_worker_dlq_stable();
 DROP TRIGGER IF EXISTS worker_result_immutable ON agent_workflow.worker_results;
 DROP FUNCTION IF EXISTS agent_workflow.guard_worker_result_immutable();
 DROP INDEX IF EXISTS agent_workflow.tasks_active_attempt_idx;
