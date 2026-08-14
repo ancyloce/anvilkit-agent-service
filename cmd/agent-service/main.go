@@ -29,6 +29,7 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	journalpg "github.com/ancyloce/anvilkit-agent-service/internal/journal/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/lifecycle"
+	lifecyclepg "github.com/ancyloce/anvilkit-agent-service/internal/lifecycle/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/persistence"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runapp"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
@@ -36,7 +37,6 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/telemetry"
 	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
 	workflowdbos "github.com/ancyloce/anvilkit-agent-service/internal/workflow/dbos"
-	workflowmemory "github.com/ancyloce/anvilkit-agent-service/internal/workflow/memory"
 )
 
 type noOpExecutor struct{}
@@ -97,22 +97,21 @@ func main() {
 		_ = persistence.NewRunRepository(pools.Control)
 	}
 	if pools.Authority != nil {
-		_ = eventpg.New(pools.Authority, nil)
+		_ = eventpg.New(pools.Authority, nil, guard, events.Bounds{MaximumBytes: cfg.Limits.EventBytes, MaximumFields: 32, MaximumFieldBytes: 512})
 		if _, err := idempotency.New(pools.Authority, idempotency.Config{Retention: 30 * 24 * time.Hour, MinimumLifetime: 30 * 24 * time.Hour}); err != nil {
 			logger.Error("idempotency initialization failed", "error", err)
 			os.Exit(1)
 		}
 	}
 
-	var workflowRuntime workflow.Runtime
 	if cfg.WorkflowDatabase == "" {
-		workflowRuntime = workflowmemory.New(workflowmemory.NewStore(), noOpExecutor{})
-	} else {
-		workflowRuntime, err = workflowdbos.New(ctx, workflowdbos.Config{DatabaseURL: cfg.WorkflowDatabase, Schema: "agent_dbos", ExecutorID: cfg.ExecutorID, ApplicationVersion: cfg.ServiceVersion, Logger: logger}, noOpExecutor{})
-		if err != nil {
-			logger.Error("workflow runtime initialization failed", "error", err)
-			os.Exit(1)
-		}
+		logger.Error("workflow runtime initialization failed", "error", "workflow database unavailable; the production command never embeds the in-memory proof engine")
+		os.Exit(1)
+	}
+	workflowRuntime, err := workflowdbos.New(ctx, workflowdbos.Config{DatabaseURL: cfg.WorkflowDatabase, Schema: "agent_dbos", ExecutorID: cfg.ExecutorID, ApplicationVersion: cfg.ServiceVersion, Logger: logger}, noOpExecutor{})
+	if err != nil {
+		logger.Error("workflow runtime initialization failed", "error", err)
+		os.Exit(1)
 	}
 	if err := workflowRuntime.Start(ctx); err != nil {
 		logger.Error("workflow runtime start failed", "error", err)
@@ -203,6 +202,17 @@ func main() {
 	}
 	handler := api.New(readiness, apiOptions...)
 	server := api.NewServer(cfg.HTTPAddress, handler)
+	leaseCleaner := lifecycle.LeaseCleaner(lifecycle.LeaseCleanerFunc(func(context.Context) error { return nil }))
+	if pools.Workflow != nil {
+		leaseCleaner, err = lifecyclepg.NewLeaseCleaner(pools.Workflow, cfg.ExecutorID)
+		if err != nil {
+			logger.Error("lease cleanup initialization failed", "error", err)
+			os.Exit(1)
+		}
+	} else if cfg.Environment == config.EnvironmentProduction {
+		logger.Error("lease cleanup initialization failed", "error", "workflow database unavailable")
+		os.Exit(1)
+	}
 	shutdown := lifecycle.NewShutdown(
 		lifecycle.Hook{Name: "ingress", Stage: lifecycle.StopIngress, Run: func(context.Context) error {
 			handler.BeginDrain()
@@ -210,7 +220,7 @@ func main() {
 		}},
 		lifecycle.Hook{Name: "stream-reconnect", Stage: lifecycle.GuideStreamReconnect, Run: server.Shutdown},
 		lifecycle.Hook{Name: "workflow-executor", Stage: lifecycle.CheckpointExecutors, Run: workflowRuntime.Stop},
-		lifecycle.Hook{Name: "lease-cleanup", Stage: lifecycle.CleanupLeases, Run: func(context.Context) error { return nil }},
+		lifecycle.Hook{Name: "lease-cleanup", Stage: lifecycle.CleanupLeases, Run: leaseCleaner.Cleanup},
 	)
 	errCh := make(chan error, 1)
 	go func() { errCh <- server.Run() }()
@@ -293,8 +303,9 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	if err != nil {
 		return nil, err
 	}
-	runStore := runpg.New(pools.Authority, idempotencyStore)
-	runService := runs.NewService(runStore, runapp.NewRuntimeStarter(runtime), runapp.RandomIDs{}, runapp.SystemClock{})
+	eventBounds := events.Bounds{MaximumBytes: cfg.Limits.EventBytes, MaximumFields: 32, MaximumFieldBytes: 512}
+	runStore := runpg.NewConfigured(pools.Authority, idempotencyStore, eventBounds, nil)
+	runService := runs.NewService(runStore, runapp.NewRuntimeStarter(runtime), runapp.RandomIDs{}, runapp.SystemClock{}, receipts)
 	authority := runapp.StaticAuthority{}
 	if cfg.RunAuthorityFile != "" {
 		loaded, err := loadRunAuthority(cfg.RunAuthorityFile, guard)
@@ -303,8 +314,8 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 		}
 		authority.Value = loaded
 	}
-	reader := eventpg.NewReader(pools.Authority)
-	application := runapp.New(validator, runService, reader, events.StreamConfig{Heartbeat: cfg.Limits.SSEHeartbeat, Revalidation: cfg.AuthRevalidation, ReplayLimit: 100, Bounds: events.Bounds{MaximumBytes: cfg.Limits.EventBytes, MaximumFields: 32, MaximumFieldBytes: 512}, Observer: observability}, authority)
+	reader := eventpg.NewReader(pools.Authority, guard, eventBounds)
+	application := runapp.New(validator, runService, reader, events.StreamConfig{Heartbeat: cfg.Limits.SSEHeartbeat, Revalidation: cfg.AuthRevalidation, ReplayLimit: 100, Bounds: eventBounds, Observer: observability}, authority)
 	interruptStore, err := interruptpg.New(pools.Authority, idempotencyStore)
 	if err != nil {
 		return nil, err
@@ -318,7 +329,7 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	for _, state := range []runs.State{runs.Created, runs.Preparing, runs.Planning, runs.AwaitingInput, runs.Executing, runs.Validating, runs.AwaitingReview, runs.AwaitingApproval, runs.Committing, runs.AwaitingDomainConfirmation, runs.Conflict, runs.Cancelling, runs.Failed} {
 		policies[state] = interrupts.DwellPolicy{Deadline: cfg.DwellDeadline, Owner: "agent-service-oncall"}
 	}
-	monitor, err := interrupts.NewMonitor(interruptStore, interruptStore, operatorAlert{}, runapp.SystemClock{}, policies)
+	monitor, err := interrupts.NewMonitor(interruptStore, operatorAlert{}, runapp.SystemClock{}, policies)
 	if err != nil {
 		return nil, err
 	}
@@ -363,6 +374,21 @@ func (r runtimeSignals) OpenWait(ctx context.Context, scope runs.Scope, id, topi
 		duration = time.Nanosecond
 	}
 	return r.runtime.StartWait(ctx, workflow.Request{WorkflowID: workflow.ID(id), Version: 1, Scope: workflow.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID}, Steps: []workflow.Step{{Name: "wait", Kind: workflow.StepWait, Topic: topic, Duration: duration}}})
+}
+func (r runtimeSignals) StopRun(ctx context.Context, _ runs.Scope, id runs.ID, generation uint64) error {
+	return r.runtime.Cancel(ctx, workflow.ID(fmt.Sprintf("%s:v%d", id, generation)))
+}
+func (r runtimeSignals) ResumeRun(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot, checkpoint, resumeKey string) error {
+	state, err := json.Marshal(map[string]any{"runId": snapshot.RunID, "executionGeneration": snapshot.ExecutionGeneration, "resumeCheckpoint": checkpoint, "resumeKey": resumeKey})
+	if err != nil {
+		return err
+	}
+	workflowID := fmt.Sprintf("%s:v%d", snapshot.RunID, snapshot.ExecutionGeneration)
+	if resumeKey != "" {
+		workflowID += ":resume:" + resumeKey
+	}
+	_, err = r.runtime.Execute(ctx, workflow.Request{WorkflowID: workflow.ID(workflowID), Version: int(snapshot.ExecutionGeneration), Scope: workflow.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID}, State: state})
+	return err
 }
 
 type workflowLeaseRevoker struct{ pool *pgxpool.Pool }
