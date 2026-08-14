@@ -7,7 +7,31 @@ import (
 )
 
 func message() Message {
-	return Message{ID: "message", WorkspaceID: "workspace", ProjectID: "project", Topic: "tasks", Payload: []byte(`{"runId":"run","taskId":"task"}`), Attempts: 1}
+	return Message{ID: "message", WorkspaceID: "workspace", ProjectID: "project", RunID: "run", TaskID: "task", Topic: "tasks", Payload: []byte(`{"runId":"run","taskId":"task"}`), Attempts: 1}
+}
+
+func TestQueueRequiresExplicitLineageAndReplayIsIdempotent(t *testing.T) {
+	memory := NewMemory()
+	processor, _ := New(memory, memory, &failEffect{}, 1, nil)
+	missing := message()
+	missing.RunID = ""
+	if err := processor.Handle(context.Background(), missing); err == nil {
+		t.Fatal("message without run lineage accepted")
+	}
+	if err := processor.Handle(context.Background(), message()); err != nil {
+		t.Fatal(err)
+	}
+	replay, _ := New(memory, memory, memory, 1, nil)
+	if err := memory.Replay(context.Background(), 0, replay); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.Replay(context.Background(), 0, replay); err != nil {
+		t.Fatal(err)
+	}
+	effects, _, _ := memory.Stats()
+	if effects != 1 {
+		t.Fatalf("repeated replay effects=%d", effects)
+	}
 }
 func TestWriteThenAckCrashRedeliversExactlyOnceSemantic(t *testing.T) {
 	for _, point := range []FailurePoint{AfterEffect, AfterInboxCommit, BeforeAck} {
