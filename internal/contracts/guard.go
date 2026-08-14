@@ -36,6 +36,9 @@ type Guard struct {
 }
 
 func NewGuard(repositoryRoot string) (*Guard, error) {
+	if err := VerifyPinnedMaterial(repositoryRoot, false); err != nil {
+		return nil, fmt.Errorf("verify pinned contract material: %w", err)
+	}
 	adapter, err := validator.New(repositoryRoot)
 	if err != nil {
 		return nil, fmt.Errorf("load pinned runtime validator: %w", err)
@@ -51,6 +54,16 @@ func (g *Guard) Validate(_ context.Context, boundary Boundary, schemaURI string,
 	g.observed[boundary]++
 	g.lock.Unlock()
 	return g.adapter.Validate(schemaURI, raw)
+}
+
+// Require validates one concrete trust-boundary payload and fails before an
+// adapter can perform an external or durable side effect.
+func (g *Guard) Require(ctx context.Context, boundary Boundary, schemaURI string, raw []byte) error {
+	findings := g.Validate(ctx, boundary, schemaURI, raw)
+	if len(findings) != 0 {
+		return fmt.Errorf("contract validation failed at %s: %v", boundary, findings)
+	}
+	return nil
 }
 
 func (g *Guard) AssertCoverage() error {
