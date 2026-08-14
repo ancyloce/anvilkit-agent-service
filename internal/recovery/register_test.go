@@ -3,6 +3,7 @@ package recovery
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -27,6 +28,25 @@ func TestPlatformMigrationsExcludeAuthoritativeRegister(t *testing.T) {
 		if strings.Contains(lower, "create table") && strings.Contains(lower, "recovery_register") {
 			t.Fatalf("authoritative register stored in Platform migration %s", entry.Name())
 		}
+	}
+}
+
+func TestRegisterRejectsInvalidEvidenceCancellationAndOverflow(t *testing.T) {
+	register, _ := NewMemoryRegister(1)
+	evidence := IncrementEvidence{Actor: "operator", Workload: "restore", Reason: "PITR", Ticket: "INC", Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", At: time.Unix(700, 0)}
+	invalid := evidence
+	invalid.Traceparent = "00-00000000000000000000000000000000-0123456789abcdef-01"
+	if _, err := register.Increment(context.Background(), 1, invalid); err == nil {
+		t.Fatal("invalid trace evidence incremented register")
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := register.Increment(cancelled, 1, evidence); err == nil {
+		t.Fatal("cancelled increment changed register")
+	}
+	maximum, _ := NewMemoryRegister(Epoch(math.MaxUint64))
+	if _, err := maximum.Increment(context.Background(), Epoch(math.MaxUint64), evidence); err == nil {
+		t.Fatal("register epoch overflowed")
 	}
 }
 

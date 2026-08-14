@@ -4,6 +4,7 @@ package recovery
 import (
 	"context"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -23,7 +24,7 @@ type Register interface {
 }
 
 // MemoryRegister is a conformance stand-in only. The production register must
-// be selected at Gate F and must live outside Platform Postgres and its backups.
+// be selected through deployment configuration and must live outside Platform Postgres and its backups.
 type MemoryRegister struct {
 	lock        sync.Mutex
 	epoch       Epoch
@@ -38,7 +39,10 @@ func NewMemoryRegister(initial Epoch) (*MemoryRegister, error) {
 	return &MemoryRegister{epoch: initial}, nil
 }
 
-func (r *MemoryRegister) Current(context.Context) (Epoch, error) {
+func (r *MemoryRegister) Current(ctx context.Context) (Epoch, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	if r.unavailable {
@@ -47,8 +51,11 @@ func (r *MemoryRegister) Current(context.Context) (Epoch, error) {
 	return r.epoch, nil
 }
 
-func (r *MemoryRegister) Increment(_ context.Context, expected Epoch, evidence IncrementEvidence) (Epoch, error) {
-	if evidence.Actor == "" || evidence.Workload == "" || evidence.Reason == "" || evidence.Ticket == "" || evidence.Traceparent == "" || evidence.At.IsZero() {
+func (r *MemoryRegister) Increment(ctx context.Context, expected Epoch, evidence IncrementEvidence) (Epoch, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if !validIncrementEvidence(evidence) {
 		return 0, problem.New(problem.CodeRequestInvalid, "")
 	}
 	r.lock.Lock()
@@ -59,9 +66,45 @@ func (r *MemoryRegister) Increment(_ context.Context, expected Epoch, evidence I
 	if expected != r.epoch {
 		return r.epoch, problem.New(problem.CodeVersionConflict, "")
 	}
+	if r.epoch == Epoch(math.MaxUint64) {
+		return r.epoch, problem.New(problem.CodeLimitExceeded, "")
+	}
 	r.epoch++
+	evidence.At = evidence.At.UTC()
 	r.increments = append(r.increments, evidence)
 	return r.epoch, nil
+}
+
+func validIncrementEvidence(evidence IncrementEvidence) bool {
+	for _, value := range []string{evidence.Actor, evidence.Workload, evidence.Ticket} {
+		if len(value) < 1 || len(value) > 128 {
+			return false
+		}
+	}
+	if len(evidence.Reason) < 1 || len(evidence.Reason) > 1024 || evidence.At.IsZero() || !validTraceparent(evidence.Traceparent) {
+		return false
+	}
+	for _, character := range evidence.Reason {
+		if character < 0x20 || character > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+func validTraceparent(value string) bool {
+	if len(value) != 55 || value[:3] != "00-" || value[35] != '-' || value[52] != '-' || value[3:35] == "00000000000000000000000000000000" || value[36:52] == "0000000000000000" {
+		return false
+	}
+	for index, character := range value {
+		if index == 2 || index == 35 || index == 52 {
+			continue
+		}
+		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *MemoryRegister) SetUnavailable(value bool) {

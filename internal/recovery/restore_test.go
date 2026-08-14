@@ -15,6 +15,27 @@ type restoreHarness struct {
 	now        time.Time
 }
 
+type restoreEvidenceHarness struct {
+	records []StageRecord
+	reports []RestoreReport
+}
+
+func (*restoreEvidenceHarness) BeginRestore(context.Context, RestoreRequest, time.Time) error {
+	return nil
+}
+func (h *restoreEvidenceHarness) RecordRestoreStage(_ context.Context, record StageRecord) error {
+	h.records = append(h.records, record)
+	return nil
+}
+func (h *restoreEvidenceHarness) CompleteRestore(_ context.Context, report RestoreReport) error {
+	h.reports = append(h.reports, report)
+	return nil
+}
+func (h *restoreEvidenceHarness) FailRestore(_ context.Context, report RestoreReport) error {
+	h.reports = append(h.reports, report)
+	return nil
+}
+
 func (h *restoreHarness) record(value string) error {
 	h.operations = append(h.operations, value)
 	if h.fail == value {
@@ -60,10 +81,11 @@ func restoreRequest(now time.Time) RestoreRequest {
 func TestMandatoryThirteenStepOrderAndProbes(t *testing.T) {
 	now := time.Unix(700, 0).UTC()
 	harness := &restoreHarness{now: now}
+	evidence := &restoreEvidenceHarness{}
 	register, _ := NewMemoryRegister(10)
-	orchestrator, _ := NewOrchestrator(register, harness, harness, harness, harness, harness, harness, harness, harness)
+	orchestrator, _ := NewOrchestrator(register, harness, harness, harness, harness, harness, harness, harness, evidence, harness)
 	report, err := orchestrator.Execute(context.Background(), restoreRequest(now))
-	if err != nil || !report.Completed || report.ProductionProof || report.Epoch != 11 || len(report.Stages) != 13 || len(harness.audits) != 26 {
+	if err != nil || !report.Completed || report.ProductionProof || report.Epoch != 11 || len(report.Stages) != 13 || len(harness.audits) != 26 || len(evidence.records) != 26 || len(evidence.reports) != 1 {
 		t.Fatalf("report=%#v audits=%d err=%v", report, len(harness.audits), err)
 	}
 	want := []string{"disable", "restore", "rotate-scheduler", "dual-fence", string(AcknowledgedFacts), string(CurrentAuthority), string(PagixEffects), string(UsageReservations), string(ArtifactsGrants), string(Deliveries), "reauthorize", "resume", "dispatch", "ingress", "verify-audit"}
@@ -83,8 +105,9 @@ func TestMandatoryThirteenStepOrderAndProbes(t *testing.T) {
 func TestRestoreStopsBeforeResumeOnAnyReconciliationFailure(t *testing.T) {
 	now := time.Unix(700, 0).UTC()
 	harness := &restoreHarness{now: now, fail: string(UsageReservations)}
+	evidence := &restoreEvidenceHarness{}
 	register, _ := NewMemoryRegister(2)
-	orchestrator, _ := NewOrchestrator(register, harness, harness, harness, harness, harness, harness, harness, harness)
+	orchestrator, _ := NewOrchestrator(register, harness, harness, harness, harness, harness, harness, harness, evidence, harness)
 	report, err := orchestrator.Execute(context.Background(), restoreRequest(now))
 	if err == nil || report.Completed {
 		t.Fatal("failed reconciliation declared restore complete")
@@ -94,13 +117,71 @@ func TestRestoreStopsBeforeResumeOnAnyReconciliationFailure(t *testing.T) {
 			t.Fatalf("unsafe operation after failure: %s", operation)
 		}
 	}
+	if len(report.Stages) == 0 || report.Stages[len(report.Stages)-1].Outcome != "failed" || harness.audits[len(harness.audits)-1].Outcome != "failed" {
+		t.Fatalf("failure outcome missing report=%#v audits=%#v", report.Stages, harness.audits)
+	}
+}
+
+func TestFailureAfterIngressReisolatesAndDuplicateDrillCannotRotateAgain(t *testing.T) {
+	now := time.Unix(700, 0).UTC()
+	harness := &restoreHarness{now: now, fail: "probe:" + string(DelayedPreRestoreResult)}
+	evidence := &restoreEvidenceHarness{}
+	register, _ := NewMemoryRegister(2)
+	orchestrator, _ := NewOrchestrator(register, harness, harness, harness, harness, harness, harness, harness, evidence, harness)
+	request := restoreRequest(now)
+	if _, err := orchestrator.Execute(context.Background(), request); err == nil {
+		t.Fatal("failed recovery probe declared completion")
+	}
+	if harness.operations[len(harness.operations)-1] != "disable" {
+		t.Fatalf("post-ingress failure was not isolated: %#v", harness.operations)
+	}
+	if _, err := orchestrator.Execute(context.Background(), request); err == nil || register.IncrementCount() != 1 {
+		t.Fatalf("duplicate drill rotated epoch again count=%d err=%v", register.IncrementCount(), err)
+	}
+}
+
+type sequenceClock struct {
+	values []time.Time
+	index  int
+}
+
+func (c *sequenceClock) Now() time.Time {
+	if c.index >= len(c.values) {
+		return c.values[len(c.values)-1]
+	}
+	value := c.values[c.index]
+	c.index++
+	return value
+}
+
+func TestClockRollbackOrRTOExpiryStopsAndIsolatesRestore(t *testing.T) {
+	now := time.Unix(700, 0).UTC()
+	for name, values := range map[string][]time.Time{
+		"rollback": {now, now.Add(time.Second), now.Add(-time.Second)},
+		"rto":      {now, now.Add(31 * time.Minute)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			harness := &restoreHarness{now: now}
+			evidence := &restoreEvidenceHarness{}
+			register, _ := NewMemoryRegister(2)
+			clock := &sequenceClock{values: values}
+			orchestrator, _ := NewOrchestrator(register, harness, harness, harness, harness, harness, harness, harness, evidence, clock)
+			if report, err := orchestrator.Execute(context.Background(), restoreRequest(now)); err == nil || report.Completed {
+				t.Fatalf("unsafe time report=%#v err=%v", report, err)
+			}
+			if len(harness.operations) == 0 || harness.operations[len(harness.operations)-1] != "disable" {
+				t.Fatalf("time failure did not isolate: %#v", harness.operations)
+			}
+		})
+	}
 }
 
 func TestRestoreRejectsRPOOutsideBoundBeforeMutation(t *testing.T) {
 	now := time.Unix(700, 0).UTC()
 	harness := &restoreHarness{now: now}
+	evidence := &restoreEvidenceHarness{}
 	register, _ := NewMemoryRegister(2)
-	orchestrator, _ := NewOrchestrator(register, harness, harness, harness, harness, harness, harness, harness, harness)
+	orchestrator, _ := NewOrchestrator(register, harness, harness, harness, harness, harness, harness, harness, evidence, harness)
 	request := restoreRequest(now)
 	request.RestorePoint = now.Add(-6 * time.Minute)
 	if _, err := orchestrator.Execute(context.Background(), request); err == nil || len(harness.operations) != 0 {
