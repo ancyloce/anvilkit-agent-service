@@ -62,6 +62,10 @@ func main() {
 		logger.Error("telemetry initialization failed", "error", err)
 		os.Exit(1)
 	}
+	if err := contractguard.VerifyPinnedMaterial(cfg.ContractRoot, cfg.Environment == config.EnvironmentProduction); err != nil {
+		logger.Error("contract material verification failed", "error", err)
+		os.Exit(1)
+	}
 	guard, err := contractguard.NewGuard(cfg.ContractRoot)
 	if err != nil {
 		logger.Error("contract material initialization failed", "error", err)
@@ -168,7 +172,9 @@ func main() {
 		}
 		return nil
 	})
-	contractCheck := lifecycle.FileCheck(cfg.ContractRoot + "/contracts/pin.json")
+	contractCheck := lifecycle.CheckFunc(func(context.Context) error {
+		return contractguard.VerifyPinnedMaterial(cfg.ContractRoot, cfg.Environment == config.EnvironmentProduction)
+	})
 	policyCheck := lifecycle.FileCheck(cfg.PolicySnapshot)
 	if cfg.Environment != config.EnvironmentProduction && cfg.PolicySnapshot == "" {
 		policyCheck = lifecycle.FileCheck(cfg.ContractRoot + "/contracts/pin.json")
