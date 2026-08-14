@@ -35,14 +35,33 @@ func service(t *testing.T, inject FailureInjector) (*Service, *clock, *MemoryEff
 	t.Helper()
 	c := &clock{now}
 	effects := &MemoryEffects{}
-	s, err := New(&ids{}, c, time.Minute, effects, effects, effects, inject)
+	prerequisites := PrerequisiteFunc(func(_ context.Context, value Create) error {
+		if !value.ReservationCurrent || !value.PolicyAllowed {
+			return errors.New("dispatch denied")
+		}
+		return nil
+	})
+	s, err := New(&ids{}, c, prerequisites, time.Minute, effects, effects, effects, inject)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return s, c, effects
 }
+
+func TestTaskCreationUsesAuthoritativePrerequisite(t *testing.T) {
+	c := &clock{now}
+	effects := &MemoryEffects{}
+	denied := PrerequisiteFunc(func(context.Context, Create) error { return errors.New("reservation stale") })
+	s, err := New(&ids{}, c, denied, time.Minute, effects, effects, effects, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(context.Background(), create()); err == nil {
+		t.Fatal("caller-authored prerequisite flags bypassed authority")
+	}
+}
 func result(task Task, lease Lease) Result {
-	return Result{TaskID: task.TaskID, RecoveryEpoch: lease.RecoveryEpoch, ExecutionGeneration: lease.ExecutionGeneration, PhysicalAttemptID: lease.PhysicalAttemptID, LeaseEpoch: lease.LeaseEpoch, FenceToken: lease.FenceToken, Capability: task.Capability, BuildIdentity: "fake-worker-build", ArtifactID: "artifact", ArtifactDigest: "sha256:" + strings.Repeat("b", 64), PendingObjectKey: fmt.Sprintf("pending/%s/r%d/g%d/%s/output", task.TaskID, task.RecoveryEpoch, task.ExecutionGeneration, lease.PhysicalAttemptID), CompletedAt: now.Add(10 * time.Second)}
+	return Result{TaskID: task.TaskID, RecoveryEpoch: lease.RecoveryEpoch, ExecutionGeneration: lease.ExecutionGeneration, PhysicalAttemptID: lease.PhysicalAttemptID, LeaseEpoch: lease.LeaseEpoch, FenceToken: lease.FenceToken, Capability: task.Capability, BuildIdentity: "fake-worker-build", ArtifactID: "artifact", ArtifactDigest: "sha256:" + strings.Repeat("b", 64), PendingObjectKey: fmt.Sprintf("pending/%s/r%d/g%d/%s/output", task.TaskID, task.RecoveryEpoch, task.ExecutionGeneration, lease.PhysicalAttemptID), CompletedAt: now}
 }
 func TestTaskRequiresReservationAndPolicy(t *testing.T) {
 	for _, mutate := range []func(*Create){func(v *Create) { v.ReservationCurrent = false }, func(v *Create) { v.PolicyAllowed = false }, func(v *Create) { v.ReservationID = "" }} {
@@ -203,5 +222,64 @@ func TestAuthoritativeTimeFailureCannotIssueOrExtendLease(t *testing.T) {
 	c.value = time.Time{}
 	if _, err := s.Heartbeat(context.Background(), task.Scope, lease, lease.ExpiresAt); err == nil {
 		t.Fatal("lease extended without authoritative time")
+	}
+}
+
+func TestHeartbeatRejectsTamperedCompleteLease(t *testing.T) {
+	s, c, _ := service(t, nil)
+	task, _ := s.Create(context.Background(), create())
+	lease, _ := s.Lease(context.Background(), task.Scope, task.TaskID, "worker")
+	c.value = c.value.Add(time.Second)
+	for _, mutate := range []func(*Lease){
+		func(value *Lease) { value.AttemptNumber++ },
+		func(value *Lease) { value.IssuedAt = value.IssuedAt.Add(time.Second) },
+		func(value *Lease) { value.ExpiresAt = value.ExpiresAt.Add(time.Second) },
+	} {
+		changed := lease
+		mutate(&changed)
+		if _, err := s.Heartbeat(context.Background(), task.Scope, changed, lease.ExpiresAt); err == nil {
+			t.Fatalf("tampered lease extended: %#v", changed)
+		}
+	}
+}
+
+func TestExpiredAttemptRemainsDiagnosableAndDLQIsScoped(t *testing.T) {
+	s, c, _ := service(t, nil)
+	task, _ := s.Create(context.Background(), create())
+	first, _ := s.Lease(context.Background(), task.Scope, task.TaskID, "worker")
+	c.value = first.ExpiresAt
+	if reclaimed, err := s.ReclaimExpired(context.Background(), task.Scope, task.TaskID); err != nil || !reclaimed {
+		t.Fatalf("reclaim=%v err=%v", reclaimed, err)
+	}
+	wrongTask := result(task, first)
+	wrongTask.TaskID = "different-task"
+	if _, err := s.AcceptResult(context.Background(), task.Scope, wrongTask); err == nil || len(s.Diagnostics()) != 1 {
+		t.Fatalf("expired attempt diagnostic err=%v diagnostics=%#v", err, s.Diagnostics())
+	}
+	entry, err := s.DeadLetter(context.Background(), task.Scope, task.TaskID, "WORKER_FAILED", "execute", "failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := Scope{WorkspaceID: "other", ProjectID: task.Scope.ProjectID}
+	if _, err := s.ReplayDLQ(context.Background(), other, entry.ID); err == nil {
+		t.Fatal("cross-workspace DLQ replay succeeded")
+	}
+}
+
+func TestResultTimeAndObjectKeyAreBounded(t *testing.T) {
+	for name, mutate := range map[string]func(*Result){
+		"before-issued": func(value *Result) { value.CompletedAt = now.Add(-time.Second) },
+		"traversal":     func(value *Result) { value.PendingObjectKey += "/../visible" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, _, _ := service(t, nil)
+			task, _ := s.Create(context.Background(), create())
+			lease, _ := s.Lease(context.Background(), task.Scope, task.TaskID, "worker")
+			value := result(task, lease)
+			mutate(&value)
+			if accepted, err := s.AcceptResult(context.Background(), task.Scope, value); err == nil || accepted.Accepted {
+				t.Fatalf("invalid result accepted=%v err=%v", accepted.Accepted, err)
+			}
+		})
 	}
 }

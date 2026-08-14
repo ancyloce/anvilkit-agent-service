@@ -32,18 +32,25 @@ func TestDashboardAndAlertArtifactsAreCompleteDraftsWithoutPayloads(t *testing.T
 	var parsed struct {
 		Approval string `json:"approval"`
 		Panels   []struct {
-			ID string `json:"id"`
+			ID, Objective, Query, Denominator, Exclusions, Paging string
 		} `json:"panels"`
 	}
 	if err := json.Unmarshal(dashboard, &parsed); err != nil || parsed.Approval != "pending-gate-h" || len(parsed.Panels) != 11 {
 		t.Fatalf("dashboard=%#v err=%v", parsed, err)
+	}
+	definitions := DraftDefinitions()
+	for index, panel := range parsed.Panels {
+		definition := definitions[index]
+		if panel.ID != definition.ID || panel.Objective != definition.Objective || panel.Query != definition.Query || panel.Denominator != definition.Denominator || panel.Exclusions != definition.Exclusions || panel.Paging != definition.Paging {
+			t.Fatalf("dashboard panel drift index=%d panel=%#v definition=%#v", index, panel, definition)
+		}
 	}
 	rules, err := os.ReadFile("../../../../infra/alerts/agent-service-rules.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	ruleText := strings.ToLower(string(rules))
-	for _, alert := range []string{"duplicateeffect", "approvalbypass", "forbiddentool", "crosstenant", "stuckrun", "reservationexposure", "dlqbacklog", "reconciliationage"} {
+	for _, alert := range []string{"duplicateeffect", "approvalbypass", "forbiddentool", "crosstenant", "staleresult", "unauthorizeddisclosure", "stuckrun", "reservationexposure", "dlqbacklog", "reconciliationage"} {
 		if !strings.Contains(strings.ReplaceAll(ruleText, "-", ""), alert) {
 			t.Fatalf("alert %s missing", alert)
 		}

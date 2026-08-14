@@ -1,5 +1,5 @@
 {
-  "version": "m7-adversarial-v1",
+  "version": "adversarial-corpus-v1",
   "cases": [
     {"ID":"ADV-001","Category":"cross-tenant","Input":"workspace-b","previouslySuccessful":true},
     {"ID":"ADV-002","Category":"forbidden-tool","Input":"direct database write","previouslySuccessful":true},

@@ -45,4 +45,10 @@ func TestShutdownOrder(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v want %v", got, want)
 	}
+	if err := shutdown.Run(context.Background()); err != nil {
+		t.Fatalf("completed shutdown was not idempotent: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("completed shutdown reran hooks: %v", got)
+	}
 }

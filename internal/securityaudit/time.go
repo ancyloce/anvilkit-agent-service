@@ -53,6 +53,9 @@ func (c *AuthoritativeClock) Now(ctx context.Context) (time.Time, error) {
 	}
 	authoritative = authoritative.UTC()
 	local := c.local.Now().UTC()
+	if authoritative.IsZero() || local.IsZero() {
+		return time.Time{}, problem.New(problem.CodeAuthorityStale, "")
+	}
 	skew := authoritative.Sub(local)
 	if skew < 0 {
 		skew = -skew
@@ -75,7 +78,7 @@ func (c *AuthoritativeClock) ValidateWindow(ctx context.Context, notBefore, expi
 	if err != nil {
 		return err
 	}
-	if expires.IsZero() || !expires.After(notBefore) || now.Before(notBefore.Add(-c.maxSkew)) || !now.Before(expires.Add(c.maxSkew)) {
+	if notBefore.IsZero() || expires.IsZero() || !expires.After(notBefore) || now.Before(notBefore.Add(-c.maxSkew)) || !now.Before(expires) {
 		return problem.New(problem.CodeAuthorityStale, "")
 	}
 	return nil

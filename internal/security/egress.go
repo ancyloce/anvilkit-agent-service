@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/url"
@@ -26,8 +27,9 @@ type EgressPolicy struct {
 }
 
 type Destination struct {
-	URL *url.URL
-	IPs []net.IP
+	URL  *url.URL
+	IPs  []net.IP
+	host string
 }
 
 type EgressGuard struct {
@@ -36,9 +38,18 @@ type EgressGuard struct {
 }
 
 func NewEgressGuard(policy EgressPolicy, resolver Resolver) (*EgressGuard, error) {
-	if len(policy.AllowedHosts) == 0 || policy.MaximumBytes < 1 || policy.MaximumDuration <= 0 || resolver == nil {
+	if len(policy.AllowedHosts) == 0 || policy.MaximumBytes < 1 || policy.MaximumBytes > 1<<30 || policy.MaximumDuration <= 0 || policy.MaximumDuration > 30*time.Second || resolver == nil {
 		return nil, fmt.Errorf("bounded egress policy and resolver are required")
 	}
+	allowed := make(map[string]struct{}, len(policy.AllowedHosts))
+	for configured := range policy.AllowedHosts {
+		host := strings.ToLower(strings.TrimSuffix(configured, "."))
+		if host == "" || strings.ContainsAny(host, "/:@[]") {
+			return nil, fmt.Errorf("invalid allowed egress host")
+		}
+		allowed[host] = struct{}{}
+	}
+	policy.AllowedHosts = allowed
 	return &EgressGuard{policy: policy, resolver: resolver}, nil
 }
 
@@ -51,11 +62,13 @@ func (g *EgressGuard) Resolve(ctx context.Context, raw string) (Destination, err
 	if _, allowed := g.policy.AllowedHosts[host]; !allowed || (parsed.Port() != "" && parsed.Port() != "443") {
 		return Destination{}, problem.New(problem.CodeAuthorizationDenied, "")
 	}
-	addresses, err := g.resolver.LookupIPAddr(ctx, host)
+	lookupContext, cancel := context.WithTimeout(ctx, g.policy.MaximumDuration)
+	defer cancel()
+	addresses, err := g.resolver.LookupIPAddr(lookupContext, host)
 	if err != nil || len(addresses) == 0 {
 		return Destination{}, problem.New(problem.CodeInfrastructureUnavailable, "")
 	}
-	destination := Destination{URL: parsed}
+	destination := Destination{URL: parsed, host: host}
 	for _, address := range addresses {
 		if !publicIP(address.IP) {
 			return Destination{}, problem.New(problem.CodeAuthorizationDenied, "")
@@ -73,7 +86,7 @@ func (g *EgressGuard) ValidateRedirect(ctx context.Context, from Destination, ta
 	if err != nil {
 		return Destination{}, err
 	}
-	if strings.ToLower(next.URL.Hostname()) != strings.ToLower(from.URL.Hostname()) {
+	if from.URL == nil || from.host == "" || next.host != from.host {
 		return Destination{}, problem.New(problem.CodeAuthorizationDenied, "")
 	}
 	return next, nil
@@ -102,7 +115,7 @@ func (g *EgressGuard) ReadResponse(ctx context.Context, body io.Reader) ([]byte,
 }
 
 func publicIP(ip net.IP) bool {
-	if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
 		return false
 	}
 	if v4 := ip.To4(); v4 != nil {
@@ -117,6 +130,17 @@ func publicIP(ip net.IP) bool {
 		}
 		for _, network := range blocked {
 			if network.Contains(v4) {
+				return false
+			}
+		}
+	}
+	if ip.To4() == nil {
+		blocked := []*net.IPNet{
+			mustCIDR("2001::/23"), mustCIDR("2001:db8::/32"),
+			mustCIDR("2002::/16"), mustCIDR("fc00::/7"), mustCIDR("fe80::/10"),
+		}
+		for _, network := range blocked {
+			if network.Contains(ip) {
 				return false
 			}
 		}
@@ -148,7 +172,8 @@ func NewMemoryGuard(maximumBytes int, now func() time.Time) (*MemoryGuard, error
 }
 
 func (g *MemoryGuard) Admit(candidate MemoryCandidate) error {
-	if candidate.WorkspaceID == "" || candidate.ProjectID == "" || candidate.SourceID == "" || candidate.Classification == "" || len(candidate.Content) == 0 || len(candidate.Content) > g.maximumBytes || candidate.ExpiresAt.IsZero() || !g.now().Before(candidate.ExpiresAt) {
+	now := g.now().UTC()
+	if !safeID(candidate.WorkspaceID) || !safeID(candidate.ProjectID) || !safeID(candidate.SourceID) || candidate.Classification != "untrusted" || len(candidate.Content) == 0 || len(candidate.Content) > g.maximumBytes || now.IsZero() || candidate.ExpiresAt.IsZero() || !now.Before(candidate.ExpiresAt) || candidate.ExpiresAt.After(now.Add(24*time.Hour)) {
 		return problem.New(problem.CodeAuthorizationDenied, "")
 	}
 	if hostile(candidate.Content) {
@@ -158,16 +183,45 @@ func (g *MemoryGuard) Admit(candidate MemoryCandidate) error {
 }
 
 func hostile(content []byte) bool {
+	return hostileDepth(content, 0)
+}
+
+func hostileDepth(content []byte, depth int) bool {
+	if depth > 8 {
+		return true
+	}
 	lower := strings.ToLower(string(content))
-	patterns := []string{"ignore previous", "system prompt", "developer message", "execute tool", "authorization:", "aws_secret", "169.254.169.254", "<script", "javascript:", "data:text/html", "\u202e", "\u2066"}
+	patterns := []string{"ignore previous", "system prompt", "developer message", "execute tool", "authorization:", "aws_secret", "169.254.169.254", "<script", "<iframe", "onerror=", "onload=", "srcdoc=", "javascript:", "data:text/html", "\u202e", "\u2066"}
 	for _, pattern := range patterns {
 		if strings.Contains(lower, pattern) {
 			return true
 		}
 	}
 	compact := strings.TrimSpace(string(content))
-	if decoded, err := base64.StdEncoding.DecodeString(compact); err == nil && string(decoded) != string(content) {
-		return hostile(decoded)
+	decoders := []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding}
+	for _, decoder := range decoders {
+		if decoded, err := decoder.DecodeString(compact); err == nil && string(decoded) != string(content) && hostileDepth(decoded, depth+1) {
+			return true
+		}
+	}
+	if decoded, err := url.QueryUnescape(compact); err == nil && decoded != compact && hostileDepth([]byte(decoded), depth+1) {
+		return true
+	}
+	if decoded := html.UnescapeString(compact); decoded != compact && hostileDepth([]byte(decoded), depth+1) {
+		return true
 	}
 	return false
+}
+
+func safeID(value string) bool {
+	if len(value) < 1 || len(value) > 128 {
+		return false
+	}
+	for index, character := range value {
+		if (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || (index > 0 && (character == '.' || character == '_' || character == ':' || character == '-')) {
+			continue
+		}
+		return false
+	}
+	return true
 }

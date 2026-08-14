@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -22,18 +24,41 @@ type Finding struct {
 	ID, Category, Outcome string
 	Recorded              bool
 }
+type FindingRecorder interface {
+	RecordFinding(context.Context, Finding) error
+}
 
 func LoadCorpus(path string) (Corpus, error) {
-	body, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
 		return Corpus{}, err
 	}
-	var corpus Corpus
-	if err := json.Unmarshal(body, &corpus); err != nil {
+	defer file.Close()
+	body, err := io.ReadAll(io.LimitReader(file, 1<<20+1))
+	if err != nil {
 		return Corpus{}, err
 	}
-	if corpus.Version == "" || len(corpus.Cases) == 0 {
+	if len(body) > 1<<20 {
+		return Corpus{}, fmt.Errorf("security corpus exceeds one MiB")
+	}
+	var corpus Corpus
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&corpus); err != nil {
+		return Corpus{}, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return Corpus{}, fmt.Errorf("security corpus contains trailing content")
+	}
+	if !strings.HasPrefix(corpus.Version, "adversarial-corpus-v") || len(corpus.Cases) == 0 || len(corpus.Cases) > 1000 {
 		return Corpus{}, fmt.Errorf("security corpus is empty or unversioned")
+	}
+	seen := map[string]bool{}
+	for _, attack := range corpus.Cases {
+		if len(attack.ID) < 1 || len(attack.ID) > 128 || len(attack.Category) < 1 || len(attack.Category) > 128 || len(attack.Input) < 1 || len(attack.Input) > 8192 || seen[attack.ID] {
+			return Corpus{}, fmt.Errorf("invalid or duplicate attack case %q", attack.ID)
+		}
+		seen[attack.ID] = true
 	}
 	return corpus, nil
 }
@@ -48,9 +73,16 @@ func (r staticResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAd
 	return values, nil
 }
 
-// RunCorpus is deliberately closed: every P0 adversarial category must map to
+// RunCorpus is deliberately closed: every supported adversarial category must map to
 // a deterministic guard, and unknown categories fail the corpus run.
 func RunCorpus(ctx context.Context, corpus Corpus) ([]Finding, error) {
+	return RunCorpusWithRecorder(ctx, corpus, &MemoryFindingRecorder{})
+}
+
+func RunCorpusWithRecorder(ctx context.Context, corpus Corpus, recorder FindingRecorder) ([]Finding, error) {
+	if recorder == nil {
+		return nil, fmt.Errorf("security finding recorder required")
+	}
 	now := time.Unix(700, 0).UTC()
 	memory, _ := NewMemoryGuard(1024, func() time.Time { return now })
 	resolver := staticResolver{addresses: map[string][]net.IPAddr{
@@ -102,7 +134,33 @@ func RunCorpus(ctx context.Context, corpus Corpus) ([]Finding, error) {
 		if !blocked {
 			outcome = "accepted"
 		}
-		findings = append(findings, Finding{ID: attack.ID, Category: attack.Category, Outcome: outcome, Recorded: true})
+		finding := Finding{ID: attack.ID, Category: attack.Category, Outcome: outcome}
+		if err := recorder.RecordFinding(ctx, finding); err != nil {
+			return findings, fmt.Errorf("record adversarial finding %s: %w", attack.ID, err)
+		}
+		finding.Recorded = true
+		findings = append(findings, finding)
 	}
 	return findings, nil
+}
+
+type MemoryFindingRecorder struct {
+	lock   sync.Mutex
+	values map[string]Finding
+}
+
+func (r *MemoryFindingRecorder) RecordFinding(_ context.Context, finding Finding) error {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	if r.values == nil {
+		r.values = map[string]Finding{}
+	}
+	if prior, exists := r.values[finding.ID]; exists {
+		if prior != finding {
+			return fmt.Errorf("adversarial finding identity conflict")
+		}
+		return nil
+	}
+	r.values[finding.ID] = finding
+	return nil
 }

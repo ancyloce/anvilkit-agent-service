@@ -34,7 +34,7 @@ func TestDBOSAdapterDurableStepsWaitAndCancellation(t *testing.T) {
 	}
 	suffix := hex.EncodeToString(random)
 	executor := &proofExecutor{}
-	runtime, err := New(context.Background(), Config{DatabaseURL: databaseURL, Schema: "agent_dbos_" + suffix, ExecutorID: "executor-" + suffix, ApplicationVersion: "m1-proof", Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))}, executor)
+	runtime, err := New(context.Background(), Config{DatabaseURL: databaseURL, Schema: "agent_dbos_" + suffix, ExecutorID: "executor-" + suffix, ApplicationVersion: "workflow-proof", Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))}, executor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestDBOSAdapterTwoExecutorsConvergeOnOneCheckpoint(t *testing.T) {
 	suffix := hex.EncodeToString(random)
 	executor := &proofExecutor{}
 	newRuntime := func(executorID string) *Runtime {
-		runtime, err := New(context.Background(), Config{DatabaseURL: databaseURL, Schema: "agent_dbos_replica_" + suffix, ExecutorID: executorID, ApplicationVersion: "m1-replica-proof", Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))}, executor)
+		runtime, err := New(context.Background(), Config{DatabaseURL: databaseURL, Schema: "agent_dbos_replica_" + suffix, ExecutorID: executorID, ApplicationVersion: "workflow-replica-proof", Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))}, executor)
 		if err != nil {
 			t.Fatal(err)
 		}

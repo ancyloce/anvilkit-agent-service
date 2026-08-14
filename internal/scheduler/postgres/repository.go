@@ -99,11 +99,11 @@ func (r *Repository) AcceptResult(ctx context.Context, scope scheduler.Scope, re
 	var recovery, generation, lease uint64
 	var mirroredRecovery uint64
 	var resultIntakeEnabled bool
-	var expires time.Time
+	var issued, expires, databaseNow time.Time
 	err = tx.QueryRow(ctx, `
 		SELECT t.run_id,t.state,t.capability,t.recovery_epoch,t.execution_generation,
-		       a.lease_epoch,a.physical_attempt_id,a.fence_token,a.expires_at,
-		       rs.mirrored_epoch,rs.result_intake_enabled
+		       a.lease_epoch,a.physical_attempt_id,a.fence_token,a.issued_at,a.expires_at,
+		       rs.mirrored_epoch,rs.result_intake_enabled,transaction_timestamp()
 		FROM agent_workflow.agent_tasks t
 		JOIN agent_workflow.worker_attempts a
 		  ON a.workspace_id=t.workspace_id AND a.project_id=t.project_id
@@ -113,7 +113,7 @@ func (r *Repository) AcceptResult(ctx context.Context, scope scheduler.Scope, re
 		WHERE t.workspace_id=$1 AND t.project_id=$2 AND t.task_id=$3
 		FOR UPDATE OF t,a`,
 		scope.WorkspaceID, scope.ProjectID, result.TaskID,
-	).Scan(&runID, &state, &capability, &recovery, &generation, &lease, &attempt, &fence, &expires, &mirroredRecovery, &resultIntakeEnabled)
+	).Scan(&runID, &state, &capability, &recovery, &generation, &lease, &attempt, &fence, &issued, &expires, &mirroredRecovery, &resultIntakeEnabled, &databaseNow)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Resolve a wrong task ID through its physical attempt so the loser is
 		// still retained without exposing the actual task to the caller.
@@ -168,7 +168,7 @@ func (r *Repository) AcceptResult(ctx context.Context, scope scheduler.Scope, re
 		reason = "fence-token"
 	case capability != result.Capability:
 		reason = "capability"
-	case !result.CompletedAt.Before(expires):
+	case result.CompletedAt.IsZero() || result.CompletedAt.Before(issued) || result.CompletedAt.After(databaseNow) || !databaseNow.Before(expires) || !result.CompletedAt.Before(expires):
 		reason = "expired"
 	}
 	if reason != "" {
@@ -176,7 +176,7 @@ func (r *Repository) AcceptResult(ctx context.Context, scope scheduler.Scope, re
 	}
 
 	prefix := fmt.Sprintf("pending/%s/r%d/g%d/%s/", result.TaskID, result.RecoveryEpoch, result.ExecutionGeneration, result.PhysicalAttemptID)
-	if result.ArtifactID == "" || result.BuildIdentity == "" || !strings.HasPrefix(result.PendingObjectKey, prefix) {
+	if result.ArtifactID == "" || len(result.ArtifactID) > 128 || result.BuildIdentity == "" || len(result.BuildIdentity) > 128 || !validDigest(result.ArtifactDigest) || len(result.PendingObjectKey) > 1024 || strings.Contains(result.PendingObjectKey, "..") || strings.ContainsAny(result.PendingObjectKey, "\x00\r\n") || !strings.HasPrefix(result.PendingObjectKey, prefix) {
 		return false, problem.New(problem.CodeArtifactInvalid, "")
 	}
 	_, err = tx.Exec(ctx, `
@@ -215,8 +215,9 @@ func (r *Repository) AcceptResult(ctx context.Context, scope scheduler.Scope, re
 	tag, err = tx.Exec(ctx, `
 		UPDATE agent_control.agent_runs
 		SET state='validating',version=version+1,updated_at=transaction_timestamp()
-		WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`,
-		scope.WorkspaceID, scope.ProjectID, runID)
+		WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3
+		  AND state='executing' AND execution_generation=$4`,
+		scope.WorkspaceID, scope.ProjectID, runID, result.ExecutionGeneration)
 	if err != nil || tag.RowsAffected() != 1 {
 		return false, affectedError("advance run", tag.RowsAffected(), err)
 	}
@@ -256,6 +257,18 @@ func (r *Repository) AcceptResult(ctx context.Context, scope scheduler.Scope, re
 		return false, affectedError("accept physical attempt", tag.RowsAffected(), err)
 	}
 	return true, tx.Commit(ctx)
+}
+
+func validDigest(value string) bool {
+	if len(value) != 71 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	for _, character := range value[7:] {
+		if !strings.ContainsRune("0123456789abcdef", character) {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *Repository) recordDiagnostic(ctx context.Context, tx pgx.Tx, scope scheduler.Scope, result scheduler.Result, reason string) (bool, error) {

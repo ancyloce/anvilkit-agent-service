@@ -71,6 +71,7 @@ type Diagnostic struct {
 }
 type DLQEntry struct {
 	ID                         string
+	Scope                      Scope
 	TaskID                     TaskID
 	RunID, Code, Stage, Detail string
 	CreatedAt                  time.Time
@@ -86,6 +87,15 @@ type IDs interface {
 	DLQID() (string, error)
 }
 type Clock interface{ Now() time.Time }
+type Prerequisites interface {
+	AuthorizeTask(context.Context, Create) error
+}
+type PrerequisiteFunc func(context.Context, Create) error
+
+func (f PrerequisiteFunc) AuthorizeTask(ctx context.Context, value Create) error {
+	return f(ctx, value)
+}
+
 type Promotion interface {
 	Promote(context.Context, Result) error
 }
@@ -106,31 +116,50 @@ const (
 
 type FailureInjector func(FailurePoint) error
 type Service struct {
-	lock        sync.Mutex
-	ids         IDs
-	clock       Clock
-	ttl         time.Duration
-	promotion   Promotion
-	advancement Advancement
-	release     Release
-	inject      FailureInjector
-	tasks       map[string]Task
-	attempts    map[AttemptID]struct{}
-	diagnostics []Diagnostic
-	dlq         []DLQEntry
+	lock          sync.Mutex
+	ids           IDs
+	clock         Clock
+	prerequisites Prerequisites
+	ttl           time.Duration
+	promotion     Promotion
+	advancement   Advancement
+	release       Release
+	inject        FailureInjector
+	tasks         map[string]Task
+	attempts      map[AttemptID]attemptReference
+	diagnostics   []Diagnostic
+	dlq           []DLQEntry
 }
 
-func New(ids IDs, clock Clock, ttl time.Duration, promotion Promotion, advancement Advancement, release Release, inject FailureInjector) (*Service, error) {
-	if ids == nil || clock == nil || ttl <= 0 || promotion == nil || advancement == nil || release == nil {
+type attemptReference struct {
+	Scope  Scope
+	TaskID TaskID
+	RunID  string
+}
+
+func New(ids IDs, clock Clock, prerequisites Prerequisites, ttl time.Duration, promotion Promotion, advancement Advancement, release Release, inject FailureInjector) (*Service, error) {
+	if ids == nil || clock == nil || prerequisites == nil || ttl <= 0 || ttl > time.Hour || promotion == nil || advancement == nil || release == nil {
 		return nil, fmt.Errorf("scheduler dependencies and lease TTL are required")
 	}
-	return &Service{ids: ids, clock: clock, ttl: ttl, promotion: promotion, advancement: advancement, release: release, inject: inject, tasks: map[string]Task{}, attempts: map[AttemptID]struct{}{}}, nil
+	if _, ok := promotion.(stateful); !ok {
+		return nil, fmt.Errorf("scheduler promotion must support atomic rollback")
+	}
+	if _, ok := advancement.(stateful); !ok {
+		return nil, fmt.Errorf("scheduler advancement must support atomic rollback")
+	}
+	if _, ok := release.(stateful); !ok {
+		return nil, fmt.Errorf("scheduler release must support atomic rollback")
+	}
+	return &Service{ids: ids, clock: clock, prerequisites: prerequisites, ttl: ttl, promotion: promotion, advancement: advancement, release: release, inject: inject, tasks: map[string]Task{}, attempts: map[AttemptID]attemptReference{}}, nil
 }
 func key(scope Scope, id TaskID) string {
 	return scope.WorkspaceID + "\x00" + scope.ProjectID + "\x00" + string(id)
 }
-func (s *Service) Create(_ context.Context, input Create) (Task, error) {
-	if input.Scope.WorkspaceID == "" || input.Scope.ProjectID == "" || input.TaskID == "" || input.RunID == "" || input.RootRunID == "" || input.ExecutionGeneration == 0 || input.Capability == "" || input.CapabilityVersion != input.Capability+"/v1" || input.ReservationID == "" || !input.ReservationCurrent || !input.PolicyAllowed || !digest(input.InputDigest) || input.InputObjectKey == "" || input.CreatedAt.IsZero() {
+func (s *Service) Create(ctx context.Context, input Create) (Task, error) {
+	if !opaque(input.Scope.WorkspaceID) || !opaque(input.Scope.ProjectID) || !opaque(string(input.TaskID)) || !opaque(input.RunID) || !opaque(input.RootRunID) || input.ExecutionGeneration == 0 || !opaque(input.Capability) || input.CapabilityVersion != input.Capability+"/v1" || !opaque(input.ReservationID) || !digest(input.InputDigest) || !safeObjectKey(input.InputObjectKey) || input.CreatedAt.IsZero() {
+		return Task{}, problem.New(problem.CodeTaskDispatchDenied, "")
+	}
+	if err := s.prerequisites.AuthorizeTask(ctx, input); err != nil {
 		return Task{}, problem.New(problem.CodeTaskDispatchDenied, "")
 	}
 	s.lock.Lock()
@@ -164,14 +193,14 @@ func (s *Service) Lease(_ context.Context, scope Scope, id TaskID, owner string)
 	if task.State != Queued && task.State != Leased {
 		return Lease{}, problem.New(problem.CodeInvalidTransition, "")
 	}
-	if owner == "" {
+	if !opaque(owner) {
 		return Lease{}, problem.New(problem.CodeRequestInvalid, "")
 	}
 	attempt, err := s.ids.PhysicalAttemptID()
 	if err != nil {
 		return Lease{}, fmt.Errorf("allocate physical attempt: %w", err)
 	}
-	if attempt == "" {
+	if !opaque(string(attempt)) {
 		return Lease{}, fmt.Errorf("allocate physical attempt: empty identifier")
 	}
 	if _, exists := s.attempts[attempt]; exists {
@@ -181,8 +210,8 @@ func (s *Service) Lease(_ context.Context, scope Scope, id TaskID, owner string)
 	if err != nil {
 		return Lease{}, fmt.Errorf("allocate fence token: %w", err)
 	}
-	if len(token) < 16 {
-		return Lease{}, fmt.Errorf("allocate fence token: token is too short")
+	if len(token) < 16 || len(token) > 512 || strings.ContainsAny(token, "\x00\r\n") {
+		return Lease{}, fmt.Errorf("allocate fence token: token is invalid")
 	}
 	task.LeaseEpoch++
 	task.PhysicalAttempts++
@@ -191,7 +220,7 @@ func (s *Service) Lease(_ context.Context, scope Scope, id TaskID, owner string)
 	task.Version++
 	task.Lease = &lease
 	s.tasks[identity] = task
-	s.attempts[attempt] = struct{}{}
+	s.attempts[attempt] = attemptReference{Scope: scope, TaskID: id, RunID: task.RunID}
 	return lease, nil
 }
 func (s *Service) Heartbeat(_ context.Context, scope Scope, lease Lease, expectedExpiry time.Time) (Lease, error) {
@@ -215,7 +244,11 @@ func (s *Service) ReclaimExpired(_ context.Context, scope Scope, id TaskID) (boo
 	if !ok {
 		return false, problem.New(problem.CodeResourceNotFound, "")
 	}
-	if task.State != Leased || task.Lease == nil || s.clock.Now().Before(task.Lease.ExpiresAt) {
+	now := s.clock.Now().UTC()
+	if now.IsZero() {
+		return false, problem.New(problem.CodeInfrastructureUnavailable, "")
+	}
+	if task.State != Leased || task.Lease == nil || now.Before(task.Lease.ExpiresAt) {
 		return false, nil
 	}
 	task.State = Queued
@@ -227,27 +260,30 @@ func (s *Service) ReclaimExpired(_ context.Context, scope Scope, id TaskID) (boo
 func (s *Service) AcceptResult(ctx context.Context, scope Scope, result Result) (Acceptance, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	now := s.clock.Now().UTC()
+	if now.IsZero() {
+		return Acceptance{}, problem.New(problem.CodeInfrastructureUnavailable, "")
+	}
 	identity := key(scope, result.TaskID)
 	task, ok := s.tasks[identity]
 	if !ok {
-		for _, candidate := range s.tasks {
-			if candidate.Scope == scope && candidate.Lease != nil && candidate.Lease.PhysicalAttemptID == result.PhysicalAttemptID {
-				s.diagnostics = append(s.diagnostics, Diagnostic{result.TaskID, candidate.RunID, result.PhysicalAttemptID, string(problem.CodeWorkerFenceStale), "task", s.clock.Now()})
-				return Acceptance{Task: cloneTask(candidate)}, problem.New(problem.CodeWorkerFenceStale, "")
-			}
+		if reference, exists := s.attempts[result.PhysicalAttemptID]; exists && reference.Scope == scope {
+			candidate := s.tasks[key(scope, reference.TaskID)]
+			s.diagnostics = append(s.diagnostics, Diagnostic{result.TaskID, reference.RunID, result.PhysicalAttemptID, string(problem.CodeWorkerFenceStale), "task", now})
+			return Acceptance{Task: cloneTask(candidate)}, problem.New(problem.CodeWorkerFenceStale, "")
 		}
 		return Acceptance{}, problem.New(problem.CodeResourceNotFound, "")
 	}
 	if task.Result != nil && sameResult(*task.Result, result) {
 		return Acceptance{Duplicate: true, Task: cloneTask(task)}, nil
 	}
-	reason := fenceReason(task, result, s.clock.Now())
+	reason := fenceReason(task, result, now)
 	if reason != "" {
-		s.diagnostics = append(s.diagnostics, Diagnostic{result.TaskID, task.RunID, result.PhysicalAttemptID, string(problem.CodeWorkerFenceStale), reason, s.clock.Now()})
+		s.diagnostics = append(s.diagnostics, Diagnostic{result.TaskID, task.RunID, result.PhysicalAttemptID, string(problem.CodeWorkerFenceStale), reason, now})
 		return Acceptance{Task: cloneTask(task)}, problem.New(problem.CodeWorkerFenceStale, "")
 	}
 	if err := validateOutput(task, result); err != nil {
-		s.diagnostics = append(s.diagnostics, Diagnostic{result.TaskID, task.RunID, result.PhysicalAttemptID, string(problem.CodeArtifactInvalid), err.Error(), s.clock.Now()})
+		s.diagnostics = append(s.diagnostics, Diagnostic{result.TaskID, task.RunID, result.PhysicalAttemptID, string(problem.CodeArtifactInvalid), err.Error(), now})
 		return Acceptance{Task: cloneTask(task)}, err
 	}
 	if err := s.fail(AfterFenceCheck); err != nil {
@@ -295,7 +331,7 @@ func (s *Service) AcceptResult(ctx context.Context, scope Scope, result Result) 
 	return Acceptance{Accepted: true, Task: cloneTask(task)}, nil
 }
 func (s *Service) DeadLetter(_ context.Context, scope Scope, id TaskID, code, stage, detail string) (DLQEntry, error) {
-	if code == "" || stage == "" {
+	if !opaque(code) || !opaque(stage) || len(detail) > 2048 {
 		return DLQEntry{}, problem.New(problem.CodeRequestInvalid, "")
 	}
 	s.lock.Lock()
@@ -305,14 +341,21 @@ func (s *Service) DeadLetter(_ context.Context, scope Scope, id TaskID, code, st
 	if !ok {
 		return DLQEntry{}, problem.New(problem.CodeResourceNotFound, "")
 	}
+	if task.State == Completed || task.State == Cancelled || task.State == DeadLettered {
+		return DLQEntry{}, problem.New(problem.CodeInvalidTransition, "")
+	}
+	now := s.clock.Now().UTC()
+	if now.IsZero() {
+		return DLQEntry{}, problem.New(problem.CodeInfrastructureUnavailable, "")
+	}
 	dlqID, err := s.ids.DLQID()
 	if err != nil {
 		return DLQEntry{}, fmt.Errorf("allocate DLQ identifier: %w", err)
 	}
-	if dlqID == "" {
-		return DLQEntry{}, fmt.Errorf("allocate DLQ identifier: empty identifier")
+	if !opaque(dlqID) {
+		return DLQEntry{}, fmt.Errorf("allocate DLQ identifier: invalid identifier")
 	}
-	entry := DLQEntry{ID: dlqID, TaskID: id, RunID: task.RunID, Code: code, Stage: stage, Detail: detail, CreatedAt: s.clock.Now()}
+	entry := DLQEntry{ID: dlqID, Scope: scope, TaskID: id, RunID: task.RunID, Code: code, Stage: stage, Detail: detail, CreatedAt: now}
 	task.State = DeadLettered
 	task.Version++
 	s.tasks[identity] = task
@@ -327,7 +370,13 @@ func (s *Service) ReplayDLQ(_ context.Context, scope Scope, entryID string) (Tas
 		if entry.ID != entryID {
 			continue
 		}
-		task := s.tasks[key(scope, entry.TaskID)]
+		if entry.Scope != scope {
+			return Task{}, problem.New(problem.CodeResourceNotFound, "")
+		}
+		task, ok := s.tasks[key(scope, entry.TaskID)]
+		if !ok {
+			return Task{}, problem.New(problem.CodeResourceNotFound, "")
+		}
 		if entry.Replayed {
 			return cloneTask(task), nil
 		}
@@ -366,13 +415,10 @@ func (s *Service) fail(point FailurePoint) error {
 	return s.inject(point)
 }
 func sameLease(a, b Lease) bool {
-	return a.TaskID == b.TaskID && a.RecoveryEpoch == b.RecoveryEpoch && a.ExecutionGeneration == b.ExecutionGeneration && a.PhysicalAttemptID == b.PhysicalAttemptID && a.LeaseEpoch == b.LeaseEpoch && a.Owner == b.Owner && a.FenceToken == b.FenceToken
+	return a == b
 }
 func sameResult(a, b Result) bool { return a == b }
 func fenceReason(task Task, result Result, now time.Time) string {
-	if now.IsZero() {
-		return "authoritative-time-unavailable"
-	}
 	if task.State != Leased || task.Lease == nil {
 		return "task-not-leased"
 	}
@@ -398,13 +444,13 @@ func fenceReason(task Task, result Result, now time.Time) string {
 	if result.Capability != task.Capability {
 		return "capability"
 	}
-	if !now.Before(lease.ExpiresAt) || !result.CompletedAt.Before(lease.ExpiresAt) {
+	if result.CompletedAt.IsZero() || result.CompletedAt.Before(lease.IssuedAt) || result.CompletedAt.After(now) || !now.Before(lease.ExpiresAt) || !result.CompletedAt.Before(lease.ExpiresAt) {
 		return "expired"
 	}
 	return ""
 }
 func validateOutput(task Task, result Result) error {
-	if result.ArtifactID == "" || !digest(result.ArtifactDigest) || result.BuildIdentity == "" || result.PendingObjectKey == "" {
+	if !opaque(result.ArtifactID) || !digest(result.ArtifactDigest) || !opaque(result.BuildIdentity) || !safeObjectKey(result.PendingObjectKey) {
 		return problem.New(problem.CodeArtifactInvalid, "")
 	}
 	prefix := fmt.Sprintf("pending/%s/r%d/g%d/%s/", task.TaskID, task.RecoveryEpoch, task.ExecutionGeneration, result.PhysicalAttemptID)
@@ -412,6 +458,21 @@ func validateOutput(task Task, result Result) error {
 		return problem.New(problem.CodeArtifactInvalid, "")
 	}
 	return nil
+}
+func opaque(value string) bool {
+	if len(value) < 1 || len(value) > 128 {
+		return false
+	}
+	for index, character := range value {
+		if (character >= 'A' && character <= 'Z') || (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || (index > 0 && strings.ContainsRune("._:-", character)) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+func safeObjectKey(value string) bool {
+	return len(value) > 0 && len(value) <= 1024 && !strings.Contains(value, "..") && !strings.ContainsAny(value, "\x00\r\n")
 }
 func digest(value string) bool {
 	if len(value) != 71 || !strings.HasPrefix(value, "sha256:") {

@@ -5,19 +5,21 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/budget"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 )
 
 type fakePort struct {
-	writes   []Metadata
-	effect   DomainOutcome
-	commands int
+	writes         []Metadata
+	effect         DomainOutcome
+	effectOverride *DomainOutcome
+	commands       int
 }
 
 func (p *fakePort) AuthorizedSnapshot(_ context.Context, request SnapshotRequest) (Snapshot, error) {
-	return Snapshot{Target: request.Target, BaseRevision: "revision-1"}, nil
+	return Snapshot{Target: request.Target, BaseRevision: "revision-1", ArtifactID: "artifact-01", Digest: "sha256:" + strings.Repeat("a", 64), ContractBOMDigest: "sha256:" + strings.Repeat("b", 64), CatalogDigest: "sha256:" + strings.Repeat("c", 64), CapturedAt: time.Unix(1, 0)}, nil
 }
 func (p *fakePort) CheckEntitlement(context.Context, EntitlementRequest) error { return nil }
 func (p *fakePort) Reserve(_ context.Context, m Metadata, e budget.Estimate, g budget.Generation) (budget.Reservation, error) {
@@ -35,7 +37,11 @@ func (p *fakePort) Settle(_ context.Context, m Metadata, s budget.Settlement) (b
 func (p *fakePort) Persist(_ context.Context, command DomainCommand) (DomainOutcome, error) {
 	p.commands++
 	p.writes = append(p.writes, command.Metadata)
-	p.effect = DomainOutcome{OperationID: command.OperationID, AuthorizationID: command.AuthorizationID, Kind: OutcomeApplied, Revision: "revision-2", EventID: "event-1", Recorded: true}
+	if p.effectOverride != nil {
+		p.effect = *p.effectOverride
+	} else {
+		p.effect = DomainOutcome{OperationID: command.OperationID, AuthorizationID: command.AuthorizationID, Kind: OutcomeApplied, Revision: "revision-2", EventID: "event-1", Recorded: true}
+	}
 	return DomainOutcome{}, errors.New("ambiguous timeout")
 }
 func (p *fakePort) Effect(_ context.Context, workspace, operation string) (DomainOutcome, bool, error) {
@@ -88,7 +94,7 @@ func TestAmbiguousPersistReconcilesEffectWithoutDuplicateCommand(t *testing.T) {
 
 func TestAuthoritativeInboxDeduplicatesAndRejectsChangedReplay(t *testing.T) {
 	client, _ := New(&fakePort{}, NewMemoryInbox())
-	event := DomainEvent{MessageID: "message-01", OperationID: "operation-01", AuthorizationID: "authorization-01", Traceparent: metadata().Traceparent, Outcome: DomainOutcome{OperationID: "operation-01", AuthorizationID: "authorization-01", Kind: OutcomeConflict, Recorded: true}}
+	event := DomainEvent{MessageID: "message-01", OperationID: "operation-01", AuthorizationID: "authorization-01", Traceparent: metadata().Traceparent, Outcome: DomainOutcome{OperationID: "operation-01", AuthorizationID: "authorization-01", Kind: OutcomeConflict, Revision: "revision-02", EventID: "message-01", Recorded: true}}
 	_, accepted, err := client.Consume(context.Background(), event)
 	if err != nil || !accepted {
 		t.Fatalf("first event rejected: %v", err)
@@ -103,6 +109,35 @@ func TestAuthoritativeInboxDeduplicatesAndRejectsChangedReplay(t *testing.T) {
 	var details problem.Details
 	if !errors.As(err, &details) || details.Code != string(problem.CodeIdempotencyConflict) {
 		t.Fatalf("changed replay not rejected: %v", err)
+	}
+}
+
+func TestMalformedTraceCrossScopeAndForgedResponsesFailClosed(t *testing.T) {
+	port := &fakePort{}
+	client, _ := New(port, NewMemoryInbox())
+	for _, trace := range []string{
+		"ff-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+		"00-00000000000000000000000000000000-0123456789abcdef-01",
+		"00-0123456789abcdef0123456789abcdef-0000000000000000-01",
+	} {
+		value := metadata()
+		value.Traceparent = trace
+		if err := value.Validate(); err == nil {
+			t.Fatalf("invalid W3C traceparent accepted: %s", trace)
+		}
+	}
+	if _, err := client.Reserve(context.Background(), metadata(), budget.Estimate{WorkspaceID: "other"}, 1); err == nil {
+		t.Fatal("cross-scope reservation accepted")
+	}
+	forged := DomainOutcome{OperationID: "substituted", AuthorizationID: "authorization-01", Kind: OutcomeApplied, Revision: "revision-2", EventID: "event-1", Recorded: true}
+	port.effectOverride = &forged
+	command := DomainCommand{Metadata: metadata(), OperationID: "operation-01", AuthorizationJWS: "signed.jws.value", AuthorizationID: "authorization-01", ActionDigest: "sha256:" + strings.Repeat("b", 64), ArtifactDigest: "sha256:" + strings.Repeat("c", 64), ExpectedRevision: "revision-1"}
+	if _, err := client.Persist(context.Background(), command); err == nil {
+		t.Fatal("substituted provider outcome accepted")
+	}
+	badEvent := DomainEvent{MessageID: "message-01", OperationID: "operation-01", AuthorizationID: "authorization-other", Traceparent: metadata().Traceparent, Outcome: DomainOutcome{OperationID: "operation-01", AuthorizationID: "authorization-01", Kind: OutcomeApplied, Revision: "revision-2", EventID: "message-01", Recorded: true}}
+	if _, _, err := client.Consume(context.Background(), badEvent); err == nil {
+		t.Fatal("authorization-substituted event accepted")
 	}
 }
 

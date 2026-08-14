@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,14 +18,14 @@ type Health interface{ Check(context.Context) error }
 type Metadata struct{ WorkloadIdentity, Traceparent, WorkspaceID, ProjectID, ActorID, Operation, IdempotencyKey, RequestDigest string }
 
 func (m Metadata) Validate() error {
-	if m.WorkloadIdentity == "" || !traceparent(m.Traceparent) || m.WorkspaceID == "" || m.ProjectID == "" || m.ActorID == "" || m.Operation == "" || m.IdempotencyKey == "" || !digest(m.RequestDigest) {
+	if !bounded(m.WorkloadIdentity, 512) || !traceparent(m.Traceparent) || !bounded(m.WorkspaceID, 128) || !bounded(m.ProjectID, 128) || !bounded(m.ActorID, 128) || !bounded(m.Operation, 64) || !bounded(m.IdempotencyKey, 256) || !digest(m.RequestDigest) {
 		return fmt.Errorf("Pagix write metadata is incomplete")
 	}
 	return nil
 }
 
 func traceparent(value string) bool {
-	if len(value) != 55 || value[2] != '-' || value[35] != '-' || value[52] != '-' {
+	if len(value) != 55 || value[:2] != "00" || value[2] != '-' || value[35] != '-' || value[52] != '-' {
 		return false
 	}
 	for index, character := range value {
@@ -35,7 +36,7 @@ func traceparent(value string) bool {
 			return false
 		}
 	}
-	return true
+	return value[3:35] != strings.Repeat("0", 32) && value[36:52] != strings.Repeat("0", 16)
 }
 
 type Target struct{ TargetType, TargetID, WorkspaceID string }
@@ -102,10 +103,17 @@ func New(port Port, inbox Inbox) (*Client, error) {
 	return &Client{port: port, inbox: inbox}, nil
 }
 func (c *Client) Snapshot(ctx context.Context, request SnapshotRequest) (Snapshot, error) {
-	if request.Metadata.Validate() != nil || request.Target.WorkspaceID != request.Metadata.WorkspaceID {
+	if request.Metadata.Validate() != nil || !validTarget(request.Target) || request.Target.WorkspaceID != request.Metadata.WorkspaceID {
 		return Snapshot{}, problem.New(problem.CodeAuthorizationDenied, "")
 	}
-	return c.port.AuthorizedSnapshot(ctx, request)
+	value, err := c.port.AuthorizedSnapshot(ctx, request)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if value.Target != request.Target || !bounded(value.BaseRevision, 128) || !bounded(value.ArtifactID, 128) || !digest(value.Digest) || !digest(value.ContractBOMDigest) || !digest(value.CatalogDigest) || value.CapturedAt.IsZero() {
+		return Snapshot{}, problem.New(problem.CodeContractInvalid, "")
+	}
+	return value, nil
 }
 func (c *Client) Entitlement(ctx context.Context, request EntitlementRequest) error {
 	if request.Metadata.Validate() != nil || request.Capability == "" {
@@ -114,7 +122,7 @@ func (c *Client) Entitlement(ctx context.Context, request EntitlementRequest) er
 	return c.port.CheckEntitlement(ctx, request)
 }
 func (c *Client) Reserve(ctx context.Context, metadata Metadata, estimate budget.Estimate, generation budget.Generation) (budget.Reservation, error) {
-	if metadata.Validate() != nil {
+	if metadata.Validate() != nil || estimate.WorkspaceID != metadata.WorkspaceID {
 		return budget.Reservation{}, problem.New(problem.CodeRequestInvalid, "")
 	}
 	return c.port.Reserve(ctx, metadata, estimate, generation)
@@ -132,15 +140,15 @@ func (c *Client) Settle(ctx context.Context, metadata Metadata, settlement budge
 	return c.port.Settle(ctx, metadata, settlement)
 }
 func (c *Client) Persist(ctx context.Context, command DomainCommand) (DomainOutcome, error) {
-	if command.Metadata.Validate() != nil || command.OperationID == "" || command.AuthorizationJWS == "" || command.AuthorizationID == "" || !digest(command.ActionDigest) || !digest(command.ArtifactDigest) || command.ExpectedRevision == "" {
+	if command.Metadata.Validate() != nil || command.Metadata.Operation != "page-persistence" || !bounded(command.OperationID, 128) || !bounded(command.AuthorizationJWS, 16*1024) || !bounded(command.AuthorizationID, 128) || !digest(command.ActionDigest) || !digest(command.ArtifactDigest) || !bounded(command.ExpectedRevision, 128) {
 		return DomainOutcome{}, problem.New(problem.CodeRequestInvalid, "")
 	}
 	outcome, err := c.port.Persist(ctx, command)
-	if err == nil && outcome.Recorded {
+	if err == nil && validOutcome(outcome, command.OperationID, command.AuthorizationID, true) {
 		return outcome, nil
 	}
 	recorded, ok, lookupErr := c.port.Effect(ctx, command.Metadata.WorkspaceID, command.OperationID)
-	if lookupErr == nil && ok {
+	if lookupErr == nil && ok && validOutcome(recorded, command.OperationID, command.AuthorizationID, true) {
 		return recorded, nil
 	}
 	return DomainOutcome{OperationID: command.OperationID, AuthorizationID: command.AuthorizationID, Kind: OutcomeUncertain}, problem.New(problem.CodeDomainOutcomeUncertain, "")
@@ -149,10 +157,17 @@ func (c *Client) Reconcile(ctx context.Context, workspaceID, operationID string)
 	if workspaceID == "" || operationID == "" {
 		return DomainOutcome{}, false, problem.New(problem.CodeRequestInvalid, "")
 	}
-	return c.port.Effect(ctx, workspaceID, operationID)
+	value, ok, err := c.port.Effect(ctx, workspaceID, operationID)
+	if err != nil || !ok {
+		return value, ok, err
+	}
+	if !validOutcome(value, operationID, value.AuthorizationID, true) {
+		return DomainOutcome{}, false, problem.New(problem.CodeContractInvalid, "")
+	}
+	return value, true, nil
 }
 func (c *Client) Consume(ctx context.Context, event DomainEvent) (DomainOutcome, bool, error) {
-	if event.MessageID == "" || event.OperationID == "" || event.Outcome.OperationID != event.OperationID {
+	if !bounded(event.MessageID, 128) || !bounded(event.OperationID, 128) || !bounded(event.AuthorizationID, 128) || !traceparent(event.Traceparent) || !validOutcome(event.Outcome, event.OperationID, event.AuthorizationID, true) || event.Outcome.EventID != "" && event.Outcome.EventID != event.MessageID {
 		return DomainOutcome{}, false, problem.New(problem.CodeEventInvalid, "")
 	}
 	accepted, err := c.inbox.Accept(ctx, event)
@@ -160,6 +175,36 @@ func (c *Client) Consume(ctx context.Context, event DomainEvent) (DomainOutcome,
 		return event.Outcome, false, err
 	}
 	return event.Outcome, true, nil
+}
+
+func validTarget(value Target) bool {
+	return bounded(value.TargetType, 64) && bounded(value.TargetID, 128) && bounded(value.WorkspaceID, 128)
+}
+
+func validOutcome(value DomainOutcome, operationID, authorizationID string, recorded bool) bool {
+	if value.OperationID != operationID || value.AuthorizationID != authorizationID || value.Recorded != recorded || !bounded(value.EventID, 128) {
+		return false
+	}
+	switch value.Kind {
+	case OutcomeApplied, OutcomeConflict:
+		return bounded(value.Revision, 128) && value.Problem == nil
+	case OutcomeRejected:
+		return value.Problem != nil && value.Problem.Code != ""
+	default:
+		return false
+	}
+}
+
+func bounded(value string, maximum int) bool {
+	if len(value) < 1 || len(value) > maximum {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 func digest(value string) bool {
 	if len(value) != 71 || value[:7] != "sha256:" {

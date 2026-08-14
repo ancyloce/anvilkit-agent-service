@@ -59,7 +59,7 @@ type Profile struct {
 }
 
 func NewProfile(id ProfileID, version string, policy PolicyReference, definitions []Definition) (Profile, error) {
-	if id == "" || version == "" || len(definitions) < 3 || len(definitions) > 7 {
+	if !opaque(string(id)) || !opaque(version) || !validPolicy(policy) || len(definitions) < 3 || len(definitions) > 7 {
 		return Profile{}, fmt.Errorf("tool profile must contain 3-7 tools")
 	}
 	copyDefs := append([]Definition(nil), definitions...)
@@ -162,6 +162,9 @@ func (g *Guard) Evaluate(ctx context.Context, intent Intent, current CurrentAuth
 	if intent.RunID == "" || intent.WorkspaceID == "" || intent.ProjectID == "" || intent.ActorID == "" {
 		return deny("AUTHORITY_STALE", "original intent identity is incomplete")
 	}
+	if !validAuthority(intent.AllowedTools, intent.AllowedEffects, intent.MaximumRisk, intent.DataClasses) || !validAuthority(current.AllowedTools, current.AllowedEffects, current.MaximumRisk, current.DataClasses) {
+		return deny("AUTHORITY_STALE", "original or current authority is malformed or unbounded")
+	}
 	if !current.WorkspaceActive || !current.ActorActive || !current.PermissionActive || !current.PolicyActive {
 		return deny("AUTHORITY_STALE", "current authority is inactive")
 	}
@@ -257,6 +260,23 @@ func uniqueAllowed(values, allowed []string) bool {
 			return false
 		}
 		seen[value] = true
+	}
+	return true
+}
+
+func validAuthority(toolIDs, effects []string, maximumRisk string, dataClasses []string) bool {
+	if len(toolIDs) < 1 || len(toolIDs) > 7 || len(effects) < 1 || len(effects) > 4 || risk(maximumRisk) == 99 || len(dataClasses) < 1 || len(dataClasses) > 4 {
+		return false
+	}
+	if !uniqueAllowed(effects, []string{"none", "read", "artifact-write", "domain-effect"}) || !uniqueAllowed(dataClasses, []string{"public", "internal", "confidential", "restricted"}) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, toolID := range toolIDs {
+		if !opaque(toolID) || seen[toolID] {
+			return false
+		}
+		seen[toolID] = true
 	}
 	return true
 }

@@ -80,10 +80,14 @@ type Telemetry struct {
 	redactor        *Redactor
 	workCounter     metric.Int64Counter
 	duration        metric.Int64Histogram
-	eventVisibility metric.Int64Histogram
+	eventVisibility metric.Float64Histogram
 }
 
 func New(serviceName string, exporter sdktrace.SpanExporter, redactor *Redactor) (*Telemetry, error) {
+	return newTelemetry(serviceName, exporter, redactor, nil)
+}
+
+func newTelemetry(serviceName string, exporter sdktrace.SpanExporter, redactor *Redactor, reader sdkmetric.Reader) (*Telemetry, error) {
 	if redactor == nil {
 		redactor = NewRedactor(nil)
 	}
@@ -92,7 +96,11 @@ func New(serviceName string, exporter sdktrace.SpanExporter, redactor *Redactor)
 		options = append(options, sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)))
 	}
 	provider := sdktrace.NewTracerProvider(options...)
-	metricProvider := sdkmetric.NewMeterProvider()
+	var metricOptions []sdkmetric.Option
+	if reader != nil {
+		metricOptions = append(metricOptions, sdkmetric.WithReader(reader))
+	}
+	metricProvider := sdkmetric.NewMeterProvider(metricOptions...)
 	meter := metricProvider.Meter("anvilkit-agent-service")
 	workCounter, err := meter.Int64Counter("anvilkit.agent.work.total")
 	if err != nil {
@@ -102,7 +110,7 @@ func New(serviceName string, exporter sdktrace.SpanExporter, redactor *Redactor)
 	if err != nil {
 		return nil, fmt.Errorf("create governed duration histogram: %w", err)
 	}
-	eventVisibility, err := meter.Int64Histogram("anvilkit.agent.event.authorized_visibility.milliseconds")
+	eventVisibility, err := meter.Float64Histogram("agent_event_visibility_seconds", metric.WithUnit("s"))
 	if err != nil {
 		return nil, fmt.Errorf("create event visibility histogram: %w", err)
 	}
@@ -138,7 +146,7 @@ func (t *Telemetry) ObserveEventVisibility(ctx context.Context, workspaceID, pro
 	if duration < 0 {
 		duration = 0
 	}
-	t.eventVisibility.Record(ctx, duration.Milliseconds(), metric.WithAttributes(attribute.String("workspace.id", workspaceID), attribute.String("project.id", projectID), attribute.String("run.id", runID)))
+	t.eventVisibility.Record(ctx, duration.Seconds(), metric.WithAttributes(attribute.Bool("authorized", true), attribute.String("workspace.id", workspaceID), attribute.String("project.id", projectID), attribute.String("run.id", runID)))
 }
 func (t *Telemetry) Shutdown(ctx context.Context) error {
 	if err := t.provider.Shutdown(ctx); err != nil {

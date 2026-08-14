@@ -1,4 +1,4 @@
-// Package sloevidence pins binding objectives while Gate H owns query approval.
+// Package sloevidence pins binding objectives while observability review owns query approval.
 package sloevidence
 
 import (
@@ -18,12 +18,12 @@ func DraftDefinitions() []Definition {
 		{"create-latency", "P95 <300ms", `histogram_quantile(0.95,sum by(le)(rate(agent_create_duration_seconds_bucket{outcome="accepted"}[15m])))`, "accepted durable create outcomes", "model execution", "page at >=0.300s", false},
 		{"event-visibility", "P95 <2s", `histogram_quantile(0.95,sum by(le)(rate(agent_event_visibility_seconds_bucket{authorized="true"}[15m])))`, "durable events visible to authorized clients", "unauthorized subscribers", "page at >=2s", false},
 		{"durable-recovery", ">=99.9% within 30m", `sum(increase(agent_recovery_total{eligible="true",within_rto="true"}[28d])) / sum(increase(agent_recovery_total{eligible="true"}[28d]))`, "eligible interrupted workflows", "terminal workflows", "page below 99.9% or any restore >30m", false},
-		{"raw-plan-validity", ">=99.5%", `sum(increase(agent_plan_total{stage="raw",valid="true"}[7d])) / sum(increase(agent_plan_total{stage="raw"}[7d]))`, "pinned P0 raw outputs", "policy refusals and invalid client input", "block release below 99.5%", false},
+		{"raw-plan-validity", ">=99.5%", `sum(increase(agent_plan_total{stage="raw",valid="true"}[7d])) / sum(increase(agent_plan_total{stage="raw"}[7d]))`, "pinned baseline raw outputs", "policy refusals and invalid client input", "block release below 99.5%", false},
 		{"trace-continuity", ">=99%", `sum(increase(agent_boundary_total{trace_linked="true"}[24h])) / sum(increase(agent_boundary_total[24h]))`, "all governed cross-service boundaries", "none", "page below 99%", false},
 		{"diagnosable-errors-dlq", "100%", `sum(increase(agent_failures_total{diagnosable="true"}[24h])) / sum(increase(agent_failures_total[24h]))`, "all errors and DLQ records", "none", "absolute alert below 100%", false},
 		{"stuck-run-detection", "100% within 5m", `sum(increase(agent_stuck_total{alert_within_5m="true"}[24h])) / sum(increase(agent_stuck_total[24h]))`, "all runs past dwell deadline", "none", "absolute alert below 100%", false},
 		{"accepted-output-validity", "100%", `sum(increase(agent_boundary_output_total{accepted="true",valid="true"}[24h])) / sum(increase(agent_boundary_output_total{accepted="true"}[24h]))`, "all accepted trust-boundary outputs", "none", "absolute alert below 100%", false},
-		{"fake-tool-selection", ">=95% pinned corpus", `sum(agent_evaluation_total{dataset="p0",tool_correct="true"}) / sum(agent_evaluation_total{dataset="p0"})`, "versioned pinned P0 cases", "none", "block release below 95%", false},
+		{"fake-tool-selection", ">=95% pinned corpus", `sum(agent_evaluation_total{dataset="baseline",tool_correct="true"}) / sum(agent_evaluation_total{dataset="baseline"})`, "versioned pinned baseline cases", "none", "block release below 95%", false},
 		{"workspace-fairness", "no eligible workspace starvation", `max by(workspace_id)(agent_workspace_share_ratio) unless min by(workspace_id)(agent_workspace_eligible_waiting)==0`, "eligible queued workspaces during overload", "ineligible or policy-denied work", "page on any starvation", false},
 	}
 }
@@ -38,7 +38,7 @@ func ValidateDraft(definitions []Definition) error {
 			return fmt.Errorf("incomplete or duplicate SLO definition %q", definition.ID)
 		}
 		if definition.GateHApproved {
-			return fmt.Errorf("draft query %q cannot claim Gate H approval", definition.ID)
+			return fmt.Errorf("draft query %q cannot claim observability approval", definition.ID)
 		}
 		seen[definition.ID] = true
 	}

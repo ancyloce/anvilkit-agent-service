@@ -36,6 +36,10 @@ func TestProfileBoundAndPinnedImmutably(t *testing.T) {
 	if _, err := NewProfile("small", "v1", PolicyReference{}, []Definition{definition("one", "none", "low", "internal")}); err == nil {
 		t.Fatal("undersized profile accepted")
 	}
+	validDefinitions := []Definition{definition("one", "none", "low", "internal"), definition("two", "none", "low", "internal"), definition("three", "none", "low", "internal")}
+	if _, err := NewProfile("manager", "v1", PolicyReference{}, validDefinitions); err == nil {
+		t.Fatal("profile with invalid top-level policy accepted")
+	}
 	value := profile(t)
 	guard, _ := NewGuard(value, &recording{}, clock{}, JSONArgumentValidator{})
 	pinned := guard.Profile()
@@ -69,6 +73,17 @@ func TestProfileBoundAndPinnedImmutably(t *testing.T) {
 		if findings := validator.Validate(schema, raw); len(findings) != 0 {
 			t.Fatalf("ToolDefinitionV1 findings for %s: %#v", tool.ToolID, findings)
 		}
+	}
+}
+
+func TestGuardRejectsMalformedOrUnboundedAuthorityEvidence(t *testing.T) {
+	record := &recording{}
+	guard, _ := NewGuard(profile(t), record, clock{}, JSONArgumentValidator{})
+	intent := Intent{RunID: "run", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor", AllowedTools: []string{"fake.execute", "fake.execute"}, AllowedEffects: []string{"none"}, MaximumRisk: "low", DataClasses: []string{"internal"}}
+	current := CurrentAuthority{WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, AllowedTools: []string{"fake.execute"}, AllowedEffects: []string{"none"}, MaximumRisk: "low", DataClasses: []string{"internal"}}
+	decision, err := guard.Evaluate(context.Background(), intent, current, Proposal{ToolID: "fake.execute", Arguments: json.RawMessage(`{}`)})
+	if err == nil || decision.Allowed || decision.Code != "AUTHORITY_STALE" || len(record.values) != 1 {
+		t.Fatalf("malformed authority decision=%#v recorded=%d err=%v", decision, len(record.values), err)
 	}
 }
 func TestGuardBlocksEveryPolicyDimensionAndEmbeddedInstructions(t *testing.T) {
@@ -160,5 +175,35 @@ func TestFreshnessRevocationMatrixAcrossEveryBoundary(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+type sequenceSource struct {
+	states []AuthorityState
+	calls  int
+}
+
+func (s *sequenceSource) Current(context.Context, string, string) (AuthorityState, error) {
+	index := s.calls
+	s.calls++
+	if index >= len(s.states) {
+		index = len(s.states) - 1
+	}
+	return s.states[index], nil
+}
+
+func TestFreshnessGuardNeverReusesPriorAuthoritySnapshot(t *testing.T) {
+	active := AuthorityState{true, true, true, true, true, true}
+	revoked := active
+	revoked.PermissionActive = false
+	source := &sequenceSource{states: []AuthorityState{active, revoked}}
+	guard, _ := NewFreshnessGuard(source)
+	if err := guard.Check(context.Background(), ContextDisclosure, "workspace", "actor"); err != nil {
+		t.Fatal(err)
+	}
+	err := guard.Check(context.Background(), ProviderInvocation, "workspace", "actor")
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeAuthorityStale) || source.calls != 2 {
+		t.Fatalf("prior authority snapshot reused calls=%d err=%v", source.calls, err)
 	}
 }

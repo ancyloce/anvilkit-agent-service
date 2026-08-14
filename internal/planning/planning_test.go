@@ -98,7 +98,7 @@ func TestPinnedFakeProviderCorpusThresholdsAndAbsoluteGates(t *testing.T) {
 	}
 	datasetDigest := sha256.Sum256(raw)
 	if got := "sha256:" + hex.EncodeToString(datasetDigest[:]); got != "sha256:3df6f57357055a8d30b1e434a0026d315f938c5258d87de5341ab3efae2ca526" {
-		t.Fatalf("pinned PLAN-0003 M6 corpus drifted: %s", got)
+		t.Fatalf("pinned PLAN-0003 Scheduler corpus drifted: %s", got)
 	}
 	var data dataset
 	if err := json.Unmarshal(raw, &data); err != nil {

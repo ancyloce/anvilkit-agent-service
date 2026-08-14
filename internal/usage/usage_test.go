@@ -112,3 +112,19 @@ func TestDurableObservationRetriesAuthoritativeForward(t *testing.T) {
 		t.Fatalf("store=%d sink=%d", store.Count(), len(sink.Values))
 	}
 }
+
+func TestRepairAndTraceValidationCannotBeBypassed(t *testing.T) {
+	store := NewMemoryStore()
+	pipeline, _ := New(store, &MemorySink{})
+	repair := value("invalid-repair", 1, 1, 1, "attempt")
+	repair.ProviderEventID = "billing"
+	repair.Quantity = "-1"
+	if _, err := pipeline.RepairFinal(context.Background(), repair); err == nil || store.Count() != 0 {
+		t.Fatalf("invalid repair persisted: %v", err)
+	}
+	invalidTrace := value("invalid-trace", 1, 1, 1, "attempt")
+	invalidTrace.Traceparent = "00-00000000000000000000000000000000-0123456789abcdef-01"
+	if _, err := pipeline.Accept(context.Background(), invalidTrace); err == nil {
+		t.Fatal("zero trace identity accepted")
+	}
+}

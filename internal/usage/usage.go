@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -45,7 +46,7 @@ func New(store Store, sink Sink) (*Pipeline, error) {
 	return &Pipeline{store, sink}, nil
 }
 func (p *Pipeline) Accept(ctx context.Context, value Observation) (bool, error) {
-	if err := validate(value); err != nil {
+	if err := Validate(value); err != nil {
 		return false, err
 	}
 	record := Record{Observation: value, DedupKey: dedup(value)}
@@ -68,6 +69,9 @@ func (p *Pipeline) RepairFinal(ctx context.Context, value Observation) (bool, er
 	if value.ProviderEventID == "" {
 		return false, problem.New(problem.CodeRequestInvalid, "")
 	}
+	if err := Validate(value); err != nil {
+		return false, err
+	}
 	record := Record{Observation: value, DedupKey: dedup(value), Repaired: true}
 	accepted, err := p.store.Append(ctx, record)
 	if err != nil {
@@ -79,6 +83,9 @@ func (p *Pipeline) RepairFinal(ctx context.Context, value Observation) (bool, er
 	return accepted, nil
 }
 func (p *Pipeline) FinalKnown(ctx context.Context, value Observation) (bool, error) {
+	if err := Validate(value); err != nil {
+		return false, err
+	}
 	records, err := p.store.ForAttempt(ctx, value.WorkspaceID, value.ProjectID, value.TaskID, value.RecoveryEpoch, value.ExecutionGeneration, value.PhysicalAttemptID)
 	if err != nil {
 		return false, err
@@ -97,14 +104,51 @@ func dedup(v Observation) string {
 	}
 	return scope + fmt.Sprintf("attempt\x00%s\x00%d\x00%d\x00%s\x00%s\x00%d", v.TaskID, v.RecoveryEpoch, v.ExecutionGeneration, v.PhysicalAttemptID, v.Meter, v.MeterSequence)
 }
-func validate(v Observation) error {
-	if v.WorkspaceID == "" || v.ProjectID == "" || v.ObservationID == "" || v.RootRunID == "" || v.RunID == "" || v.TaskID == "" || v.ExecutionGeneration == 0 || v.PhysicalAttemptID == "" || v.ReservationID == "" || v.Meter == "" || v.Quantity == "" || v.Unit == "" || v.Currency == "" || v.CostMicros < 0 || v.ObservedAt.IsZero() || v.Provider == "" || v.BuildIdentity == "" || !trace(v.Traceparent) {
+func Validate(v Observation) error {
+	ids := []string{v.WorkspaceID, v.ProjectID, v.ObservationID, v.RootRunID, v.RunID, v.TaskID, v.PhysicalAttemptID, v.ReservationID, v.Provider, v.BuildIdentity}
+	for _, id := range ids {
+		if !matches(opaqueIDPattern, id) {
+			return problem.New(problem.CodeRequestInvalid, "")
+		}
+	}
+	if v.ProviderEventID != "" && !matches(opaqueIDPattern, v.ProviderEventID) {
+		return problem.New(problem.CodeRequestInvalid, "")
+	}
+	if v.ExecutionGeneration == 0 || v.MeterSequence > 9007199254740991 || len(v.Quantity) > 96 || !matches(decimalPattern, v.Quantity) || !validMeter(v.Meter) || !validUnit(v.Unit) || !matches(currencyPattern, v.Currency) || v.CostMicros < 0 || v.ObservedAt.IsZero() || !trace(v.Traceparent) {
 		return problem.New(problem.CodeRequestInvalid, "")
 	}
 	return nil
 }
+
+const (
+	opaqueIDPattern = `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`
+	decimalPattern  = `^(0|[1-9][0-9]*)(\.[0-9]+)?$`
+	currencyPattern = `^[A-Z]{3}$`
+)
+
+func matches(pattern, value string) bool {
+	matched, err := regexp.MatchString(pattern, value)
+	return err == nil && matched
+}
+func validMeter(value string) bool {
+	switch value {
+	case "input-tokens", "output-tokens", "worker-duration", "gpu-duration", "provider-cost":
+		return true
+	default:
+		return false
+	}
+}
+func validUnit(value string) bool {
+	switch value {
+	case "token", "millisecond", "byte", "count", "usd-micro":
+		return true
+	default:
+		return false
+	}
+}
+
 func trace(value string) bool {
-	if len(value) != 55 || value[2] != '-' || value[35] != '-' || value[52] != '-' {
+	if len(value) != 55 || value[:2] != "00" || value[2] != '-' || value[35] != '-' || value[52] != '-' || value[3:35] == strings.Repeat("0", 32) || value[36:52] == strings.Repeat("0", 16) {
 		return false
 	}
 	for i, c := range value {
@@ -157,7 +201,15 @@ func (s *MemoryStore) ForAttempt(_ context.Context, workspace, project, task str
 			values = append(values, v)
 		}
 	}
-	sort.Slice(values, func(i, j int) bool { return values[i].MeterSequence < values[j].MeterSequence })
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].MeterSequence != values[j].MeterSequence {
+			return values[i].MeterSequence < values[j].MeterSequence
+		}
+		if !values[i].ObservedAt.Equal(values[j].ObservedAt) {
+			return values[i].ObservedAt.Before(values[j].ObservedAt)
+		}
+		return values[i].ObservationID < values[j].ObservationID
+	})
 	return values, nil
 }
 func (s *MemoryStore) Count() int { s.lock.Lock(); defer s.lock.Unlock(); return len(s.records) }

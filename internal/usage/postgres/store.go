@@ -24,6 +24,12 @@ func New(database *pgxpool.Pool) (*Store, error) {
 }
 
 func (s *Store) Append(ctx context.Context, value usage.Record) (bool, error) {
+	if err := usage.Validate(value.Observation); err != nil {
+		return false, err
+	}
+	if value.DedupKey == "" {
+		return false, problem.New(problem.CodeRequestInvalid, "")
+	}
 	fingerprint, err := observationDigest(value)
 	if err != nil {
 		return false, err
@@ -50,9 +56,10 @@ func (s *Store) Append(ctx context.Context, value usage.Record) (bool, error) {
 		return true, nil
 	}
 
-	var priorFingerprint string
+	var matches int
+	var allMatch bool
 	err = s.database.QueryRow(ctx, `
-		SELECT observation_digest
+		SELECT count(*),COALESCE(bool_and(observation_digest=$12),false)
 		FROM agent_control.usage_observations
 		WHERE workspace_id=$1 AND project_id=$2
 		  AND (observation_id=$3
@@ -60,14 +67,14 @@ func (s *Store) Append(ctx context.Context, value usage.Record) (bool, error) {
 		       OR (provider_event_id IS NULL AND task_id=$6 AND recovery_epoch=$7
 		           AND execution_generation=$8 AND physical_attempt_id=$9
 		           AND meter=$10 AND meter_sequence=$11))
-		LIMIT 1`,
+		`,
 		value.WorkspaceID, value.ProjectID, value.ObservationID, value.Provider,
 		value.ProviderEventID, value.TaskID, value.RecoveryEpoch, value.ExecutionGeneration,
-		value.PhysicalAttemptID, value.Meter, value.MeterSequence).Scan(&priorFingerprint)
+		value.PhysicalAttemptID, value.Meter, value.MeterSequence, fingerprint).Scan(&matches, &allMatch)
 	if err != nil {
 		return false, err
 	}
-	if priorFingerprint != fingerprint {
+	if matches != 1 || !allMatch {
 		return false, problem.New(problem.CodeIdempotencyConflict, "")
 	}
 	return false, nil
@@ -81,7 +88,7 @@ func (s *Store) ForAttempt(ctx context.Context, workspace, project, task string,
 		FROM agent_control.usage_observations
 		WHERE workspace_id=$1 AND project_id=$2 AND task_id=$3
 		  AND recovery_epoch=$4 AND execution_generation=$5 AND physical_attempt_id=$6
-		ORDER BY meter_sequence`,
+		ORDER BY meter_sequence,observed_at,observation_id`,
 		workspace, project, task, recovery, generation, attempt)
 	if err != nil {
 		return nil, err

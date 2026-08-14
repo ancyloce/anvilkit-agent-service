@@ -67,21 +67,42 @@ type Hook struct {
 	Stage Stage
 	Run   func(context.Context) error
 }
+
+type LeaseCleaner interface {
+	Cleanup(context.Context) error
+}
+
+type LeaseCleanerFunc func(context.Context) error
+
+func (f LeaseCleanerFunc) Cleanup(ctx context.Context) error { return f(ctx) }
+
 type Shutdown struct {
-	lock    sync.Mutex
-	running bool
-	hooks   []Hook
+	lock     sync.Mutex
+	running  bool
+	complete bool
+	hooks    []Hook
 }
 
 func NewShutdown(hooks ...Hook) *Shutdown { return &Shutdown{hooks: append([]Hook(nil), hooks...)} }
 func (s *Shutdown) Run(ctx context.Context) error {
 	s.lock.Lock()
+	if s.complete {
+		s.lock.Unlock()
+		return nil
+	}
 	if s.running {
 		s.lock.Unlock()
 		return fmt.Errorf("shutdown already running")
 	}
 	s.running = true
 	s.lock.Unlock()
+	succeeded := false
+	defer func() {
+		s.lock.Lock()
+		s.running = false
+		s.complete = succeeded
+		s.lock.Unlock()
+	}()
 	for stage := StopIngress; stage <= CleanupLeases; stage++ {
 		for _, hook := range s.hooks {
 			if hook.Stage != stage {
@@ -92,5 +113,6 @@ func (s *Shutdown) Run(ctx context.Context) error {
 			}
 		}
 	}
+	succeeded = true
 	return nil
 }
