@@ -2,6 +2,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
@@ -41,7 +43,7 @@ func WithAgentCore(core *runapp.App, verifier TokenVerifier) Option {
 	return func(handler *Handler) { handler.core, handler.verifier = core, verifier }
 }
 
-// WithCandidateMutations exists only for test/dev evaluation while Gate D is
+// WithCandidateMutations exists only for test/dev evaluation while the interaction contract is
 // open. Production composition must not enable it before contract freeze.
 func WithCandidateMutations() Option { return func(handler *Handler) { handler.mutationGate = true } }
 func New(readiness Readiness, options ...Option) *Handler {
@@ -188,7 +190,14 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 }
 
 func decodeBoundedCommand(response http.ResponseWriter, request *http.Request, target any) error {
-	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 64*1024))
+	raw, err := io.ReadAll(http.MaxBytesReader(response, request.Body, 64*1024))
+	if err != nil {
+		return problem.New(problem.CodeRequestInvalid, "")
+	}
+	if _, err := contractvalidator.Admit(raw); err != nil {
+		return problem.New(problem.CodeRequestInvalid, "")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return problem.New(problem.CodeRequestInvalid, "")

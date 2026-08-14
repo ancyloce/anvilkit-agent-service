@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,5 +52,15 @@ func TestServerGoroutineStopsWithOrderedDrain(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("server goroutine leaked after shutdown")
+	}
+}
+
+func TestBoundedCommandDecoderRejectsDuplicateFields(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"requestVersion":1,"requestVersion":2}`))
+	var command struct {
+		RequestVersion uint64 `json:"requestVersion"`
+	}
+	if err := decodeBoundedCommand(httptest.NewRecorder(), request, &command); err == nil {
+		t.Fatal("ambiguous command was accepted")
 	}
 }

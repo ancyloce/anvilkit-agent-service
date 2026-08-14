@@ -11,6 +11,7 @@ import (
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
+	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runapp"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
@@ -38,7 +39,10 @@ type appStore struct{ snapshot runs.Snapshot }
 func (s appStore) Create(context.Context, runs.CreateRecord) (runs.CreateOutcome, error) {
 	return runs.CreateOutcome{}, nil
 }
-func (s appStore) Get(context.Context, runs.Scope, runs.ID) (runs.Snapshot, error) {
+func (s appStore) Get(_ context.Context, _ runs.Scope, id runs.ID) (runs.Snapshot, error) {
+	if id == "missing" {
+		return runs.Snapshot{}, problem.New(problem.CodeResourceNotFound, "")
+	}
 	return s.snapshot, nil
 }
 func (s appStore) List(context.Context, runs.Scope, runs.ListOptions) (runs.Page, error) {
@@ -75,7 +79,7 @@ func (appAuthority) Current(context.Context, runs.Scope) (runs.Authority, error)
 func TestCandidateReadRoutesRequireVerifiedBearerAndEmitStrongETag(t *testing.T) {
 	now := time.Now()
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent"}, appTrust{}, appClock{now})
-	service := runs.NewService(appStore{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 2}}, appStarter{}, appIDs{}, appClock{now})
+	service := runs.NewService(appStore{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 2}}, appStarter{}, appIDs{}, appClock{now}, journal.NewMemoryStore())
 	core := runapp.New(validator, service, appEvents{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.Bounds{MaximumBytes: 100}}, appAuthority{})
 	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Hour)}
 	handler := New(nil, WithAgentCore(core, verifier{claims: claims}))
@@ -106,4 +110,67 @@ func TestMutationTransportRemainsFailClosedWhileGateDOpen(t *testing.T) {
 	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "INFRASTRUCTURE_UNAVAILABLE") {
 		t.Fatalf("unwired mutation status=%d", response.Code)
 	}
+}
+
+func TestNonSuccessResponsesHaveStableClosedProblemShapeAndDoNotDiscloseScope(t *testing.T) {
+	now := time.Now()
+	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent"}, appTrust{}, appClock{now})
+	service := runs.NewService(appStore{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 2}}, appStarter{}, appIDs{}, appClock{now}, journal.NewMemoryStore())
+	core := runapp.New(validator, service, appEvents{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.DefaultBounds()}, appAuthority{})
+	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Hour)}
+	handler := New(nil, WithAgentCore(core, verifier{claims: claims}))
+
+	request := httptest.NewRequest(http.MethodGet, "/v1/workspaces/workspace/agent-runs/missing", nil)
+	request.Header.Set("Authorization", "Bearer verified")
+	missing := httptest.NewRecorder()
+	handler.ServeHTTP(missing, request)
+	missingProblem := assertClosedProblem(t, missing, problem.CodeResourceNotFound)
+
+	request = httptest.NewRequest(http.MethodGet, "/v1/workspaces/other/agent-runs/run", nil)
+	request.Header.Set("Authorization", "Bearer verified")
+	forbidden := httptest.NewRecorder()
+	handler.ServeHTTP(forbidden, request)
+	forbiddenProblem := assertClosedProblem(t, forbidden, problem.CodeResourceNotFound)
+	delete(missingProblem, "traceId")
+	delete(forbiddenProblem, "traceId")
+	missingRaw, _ := json.Marshal(missingProblem)
+	forbiddenRaw, _ := json.Marshal(forbiddenProblem)
+	if string(missingRaw) != string(forbiddenRaw) || strings.Contains(forbidden.Body.String(), "other") || strings.Contains(forbidden.Body.String(), "workspace") {
+		t.Fatalf("cross-scope response disclosed authority: missing=%s forbidden=%s", missing.Body.String(), forbidden.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/v1/workspaces/workspace/agent-runs", nil)
+	unauthenticated := httptest.NewRecorder()
+	handler.ServeHTTP(unauthenticated, request)
+	assertClosedProblem(t, unauthenticated, problem.CodeAuthenticationInvalid)
+
+	request = httptest.NewRequest(http.MethodGet, "/v1/workspaces/workspace/agent-runs?unknown=true", nil)
+	request.Header.Set("Authorization", "Bearer verified")
+	invalid := httptest.NewRecorder()
+	handler.ServeHTTP(invalid, request)
+	assertClosedProblem(t, invalid, problem.CodeRequestInvalid)
+}
+
+func assertClosedProblem(t *testing.T, response *httptest.ResponseRecorder, code problem.Code) map[string]any {
+	t.Helper()
+	if response.Header().Get("Content-Type") != "application/problem+json" {
+		t.Fatalf("problem content type=%q body=%s", response.Header().Get("Content-Type"), response.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	wantFields := []string{"apiVersion", "kind", "code", "retryability", "message", "fieldErrors", "traceId"}
+	if len(payload) != len(wantFields) {
+		t.Fatalf("problem fields=%v", payload)
+	}
+	for _, field := range wantFields {
+		if _, ok := payload[field]; !ok {
+			t.Fatalf("problem omits %s: %v", field, payload)
+		}
+	}
+	if payload["code"] != string(code) || len(payload["traceId"].(string)) != 32 {
+		t.Fatalf("problem=%v want code=%s", payload, code)
+	}
+	return payload
 }
