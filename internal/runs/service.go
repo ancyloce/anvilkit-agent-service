@@ -9,21 +9,23 @@ import (
 	"strings"
 	"time"
 
+	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
+	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 )
 
 type Scope struct{ TenantID, WorkspaceID, ProjectID, ActorID string }
 
 func (s Scope) Validate() error {
-	if s.TenantID == "" || s.WorkspaceID == "" || s.ProjectID == "" || s.ActorID == "" {
-		return fmt.Errorf("run scope requires tenant, workspace, project, and actor")
+	if !validOpaqueID(s.TenantID) || !validOpaqueID(s.WorkspaceID) || !validOpaqueID(s.ProjectID) || !validOpaqueID(s.ActorID) {
+		return fmt.Errorf("run scope requires bounded tenant, workspace, project, and actor identities")
 	}
 	return nil
 }
 
 // CreateRequest is an internal candidate command. Server-owned authority fields
-// are structurally absent and this type is not frozen as the Gate D wire shape.
+// are structurally absent and this type is not frozen as the interaction wire shape.
 type CreateRequest struct {
 	Domain    string        `json:"domain"`
 	Operation string        `json:"operation"`
@@ -155,19 +157,23 @@ type Store interface {
 type IDGenerator interface{ NewID() (ID, error) }
 type Clock interface{ Now() time.Time }
 type Service struct {
-	store   Store
-	starter Starter
-	ids     IDGenerator
-	clock   Clock
+	store    Store
+	starter  Starter
+	ids      IDGenerator
+	clock    Clock
+	receipts journal.Store
 }
 
-func NewService(store Store, starter Starter, ids IDGenerator, clock Clock) *Service {
-	return &Service{store: store, starter: starter, ids: ids, clock: clock}
+func NewService(store Store, starter Starter, ids IDGenerator, clock Clock, receipts journal.Store) *Service {
+	return &Service{store: store, starter: starter, ids: ids, clock: clock, receipts: receipts}
 }
 
 func DecodeCreateRequest(raw []byte) (CreateRequest, error) {
 	if len(raw) == 0 || len(raw) > 1<<20 {
 		return CreateRequest{}, requestProblem("body must contain at most 1048576 bytes")
+	}
+	if _, err := contractvalidator.Admit(raw); err != nil {
+		return CreateRequest{}, requestProblem("body violates strict JSON admission")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -178,7 +184,7 @@ func DecodeCreateRequest(raw []byte) (CreateRequest, error) {
 	if err := consumeEOF(decoder); err != nil {
 		return CreateRequest{}, requestProblem("body must contain exactly one JSON value")
 	}
-	if !oneOf(request.Domain, "platform-agent", "pagix-page", "contract-runtime") || !oneOf(request.Operation, "page-change", "artifact-validation", "image-operation", "component-package") || request.Target.Type == "" || request.Target.ID == "" {
+	if !oneOf(request.Domain, "platform-agent", "pagix-page", "contract-runtime") || !oneOf(request.Operation, "page-change", "artifact-validation", "image-operation", "component-package") || !validTargetType(request.Target.Type) || !validOpaqueID(request.Target.ID) {
 		return CreateRequest{}, requestProblem("domain, operation, and target must use bounded values")
 	}
 	return request, nil
@@ -214,11 +220,40 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CreateOutcome,
 	if err != nil {
 		return CreateOutcome{}, fmt.Errorf("allocate run identity: %w", err)
 	}
+	if !validRunID(runID) {
+		return CreateOutcome{}, fmt.Errorf("allocate run identity: generated identity violates the bounded run/event contract")
+	}
 	now := s.clock.Now().UTC()
 	snapshot := Snapshot{APIVersion: "anvilkit.io/contracts/v1", Kind: "AgentRun", RunID: runID, RootRunID: runID, TenantID: input.Scope.TenantID, WorkspaceID: input.Scope.WorkspaceID, ActorID: input.Scope.ActorID, Domain: request.Domain, Operation: request.Operation, Target: Target{Type: request.Target.Type, ID: request.Target.ID, WorkspaceID: input.Scope.WorkspaceID}, ContractBOM: append(json.RawMessage(nil), input.Authority.ContractBOM...), Policy: append(json.RawMessage(nil), input.Authority.Policy...), Budget: append(json.RawMessage(nil), input.Authority.Budget...), Idempotency: IdempotencyProjection{Scope: input.Scope.WorkspaceID + ":create-run", Key: input.Key, CanonicalRequestDigest: digest}, Status: Created, Version: 1, ExecutionGeneration: 1, LatestEventID: string(runID) + ":1", CreatedAt: now, UpdatedAt: now}
 	outcome, err := s.store.Create(ctx, CreateRecord{Scope: input.Scope, Key: input.Key, Digest: digest, Traceparent: input.Traceparent, Snapshot: snapshot})
 	if err != nil {
 		return CreateOutcome{}, err
+	}
+	if s.receipts == nil {
+		return CreateOutcome{}, fmt.Errorf("create run: independent receipt journal unavailable")
+	}
+	factRaw, err := json.Marshal(struct {
+		Scope            Scope           `json:"scope"`
+		IdempotencyKey   string          `json:"idempotencyKey"`
+		CanonicalDigest  string          `json:"canonicalDigest"`
+		CanonicalRequest json.RawMessage `json:"canonicalRequest"`
+		RunID            ID              `json:"runId"`
+		InitialVersion   uint64          `json:"initialVersion"`
+		InitialEventID   string          `json:"initialEventId"`
+	}{input.Scope, input.Key, digest, json.RawMessage(input.Raw), outcome.Snapshot.RunID, outcome.Snapshot.Version, outcome.Snapshot.LatestEventID})
+	if err != nil {
+		return CreateOutcome{}, fmt.Errorf("marshal acknowledged create fact: %w", err)
+	}
+	canonicalFact, err := canonical.Bytes(factRaw)
+	if err != nil {
+		return CreateOutcome{}, fmt.Errorf("canonicalize acknowledged create fact: %w", err)
+	}
+	fact, err := journal.NewFact(input.Scope.WorkspaceID+":create-run:"+input.Key, input.Scope.WorkspaceID, input.Scope.ProjectID, journal.FactCreate, canonicalFact, outcome.Bytes)
+	if err != nil {
+		return CreateOutcome{}, err
+	}
+	if _, err := s.receipts.Append(ctx, fact); err != nil {
+		return CreateOutcome{}, fmt.Errorf("create authority fact remains unacknowledged: %w", err)
 	}
 	if err := s.starter.Ensure(ctx, Start{WorkflowID: string(outcome.Snapshot.RunID) + ":v1", Scope: input.Scope, RunID: outcome.Snapshot.RunID, Version: 1}); err != nil {
 		return CreateOutcome{}, fmt.Errorf("ensure durable create workflow: %w", err)
@@ -302,7 +337,42 @@ func validTraceparent(value string) bool {
 			return false
 		}
 	}
+	return value[:2] != "ff" && value[3:35] != strings.Repeat("0", 32) && value[36:52] != strings.Repeat("0", 16)
+}
+
+func validOpaqueID(value string) bool {
+	if len(value) < 1 || len(value) > 128 || !asciiAlphaNumeric(value[0]) {
+		return false
+	}
+	for index := 1; index < len(value); index++ {
+		if !asciiAlphaNumeric(value[index]) && !strings.ContainsRune("._:-", rune(value[index])) {
+			return false
+		}
+	}
 	return true
+}
+
+func validRunID(value ID) bool {
+	// Reserve one separator plus the maximum uint64 sequence width so derived
+	// event identities remain within the frozen 128-byte OpaqueId bound.
+	return len(value) <= 107 && validOpaqueID(string(value))
+}
+
+func validTargetType(value string) bool {
+	if len(value) < 1 || len(value) > 64 || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	for index := 1; index < len(value); index++ {
+		character := value[index]
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '.' && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func asciiAlphaNumeric(character byte) bool {
+	return character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9'
 }
 
 func ParseETag(value string, id ID) (uint64, error) {

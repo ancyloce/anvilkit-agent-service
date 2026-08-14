@@ -11,18 +11,37 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/idempotency"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
 )
 
+type FailurePoint string
+
+const (
+	AfterRunWrite        FailurePoint = "after-run-write"
+	AfterEventWrite      FailurePoint = "after-event-write"
+	AfterOutboxWrite     FailurePoint = "after-outbox-write"
+	AfterCheckpointWrite FailurePoint = "after-checkpoint-write"
+)
+
+type FailureInjector func(FailurePoint) error
+
 type Store struct {
 	database    *pgxpool.Pool
 	idempotency *idempotency.Store
+	eventBounds events.Bounds
+	inject      FailureInjector
 }
 
 func New(database *pgxpool.Pool, idempotencyStore *idempotency.Store) *Store {
-	return &Store{database: database, idempotency: idempotencyStore}
+	return NewConfigured(database, idempotencyStore, events.DefaultBounds(), nil)
+
+}
+
+func NewConfigured(database *pgxpool.Pool, idempotencyStore *idempotency.Store, eventBounds events.Bounds, inject FailureInjector) *Store {
+	return &Store{database: database, idempotency: idempotencyStore, eventBounds: eventBounds, inject: inject}
 }
 
 func (s *Store) Create(ctx context.Context, record runs.CreateRecord) (runs.CreateOutcome, error) {
@@ -35,15 +54,33 @@ func (s *Store) Create(ctx context.Context, record runs.CreateRecord) (runs.Crea
 		if err != nil {
 			return idempotency.Response{}, fmt.Errorf("persist durable run before workflow: %w", err)
 		}
-		eventBytes, _ := json.Marshal(map[string]any{"apiVersion": "anvilkit.io/contracts/v1", "kind": "AgentEvent", "eventId": record.Snapshot.LatestEventID, "runId": record.Snapshot.RunID, "sequence": 1, "eventType": "run.created", "occurredAt": contractTimestamp(record.Snapshot.CreatedAt), "traceContext": map[string]string{"traceparent": record.Traceparent}, "contractBomReference": record.Snapshot.ContractBOM, "payload": map[string]string{"state": string(runs.Created)}})
+		if err := s.fail(AfterRunWrite); err != nil {
+			return idempotency.Response{}, err
+		}
+		eventBytes, err := json.Marshal(map[string]any{"apiVersion": "anvilkit.io/contracts/v1", "kind": "AgentEvent", "eventId": record.Snapshot.LatestEventID, "runId": record.Snapshot.RunID, "sequence": 1, "eventType": "run.created", "occurredAt": contractTimestamp(record.Snapshot.CreatedAt), "traceContext": map[string]string{"traceparent": record.Traceparent}, "contractBomReference": record.Snapshot.ContractBOM, "payload": map[string]string{"state": string(runs.Created)}})
+		if err != nil {
+			return idempotency.Response{}, fmt.Errorf("marshal created event: %w", err)
+		}
+		if err := events.ValidateEnvelope(eventBytes, s.eventBounds, record.Snapshot.LatestEventID, string(record.Snapshot.RunID), 1); err != nil {
+			return idempotency.Response{}, fmt.Errorf("validate created event: %w", err)
+		}
 		if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,1,$4,$5,$6)`, record.Scope.WorkspaceID, record.Scope.ProjectID, record.Snapshot.RunID, record.Snapshot.LatestEventID, eventBytes, record.Snapshot.CreatedAt); err != nil {
 			return idempotency.Response{}, fmt.Errorf("persist created event: %w", err)
+		}
+		if err := s.fail(AfterEventWrite); err != nil {
+			return idempotency.Response{}, err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,1,'agent.events.v1',$5,$6)`, record.Scope.WorkspaceID, record.Scope.ProjectID, record.Snapshot.LatestEventID, record.Snapshot.RunID, eventBytes, record.Snapshot.CreatedAt); err != nil {
 			return idempotency.Response{}, fmt.Errorf("persist created outbox: %w", err)
 		}
+		if err := s.fail(AfterOutboxWrite); err != nil {
+			return idempotency.Response{}, err
+		}
 		if _, err := tx.Exec(ctx, `INSERT INTO agent_workflow.checkpoints(workspace_id,project_id,workflow_id,workflow_version,step_name,state_bytes) VALUES($1,$2,$3,1,'created',$4)`, record.Scope.WorkspaceID, record.Scope.ProjectID, string(record.Snapshot.RunID)+":v1", bytes); err != nil {
 			return idempotency.Response{}, fmt.Errorf("persist created checkpoint: %w", err)
+		}
+		if err := s.fail(AfterCheckpointWrite); err != nil {
+			return idempotency.Response{}, err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO agent_control.run_progress(workspace_id,project_id,run_id,state,entered_at,progress_at) VALUES($1,$2,$3,$4,$5,$5)`, record.Scope.WorkspaceID, record.Scope.ProjectID, record.Snapshot.RunID, runs.Created, record.Snapshot.CreatedAt); err != nil {
 			return idempotency.Response{}, fmt.Errorf("persist created progress: %w", err)
@@ -157,7 +194,13 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 		return runs.Snapshot{}, err
 	}
 	traceparent := command.Traceparent
-	eventBytes, _ := json.Marshal(map[string]any{"apiVersion": "anvilkit.io/contracts/v1", "kind": "AgentEvent", "eventId": snapshot.LatestEventID, "runId": id, "sequence": updated.Version, "eventType": "run.state-changed", "occurredAt": contractTimestamp(snapshot.UpdatedAt), "traceContext": map[string]string{"traceparent": traceparent}, "contractBomReference": snapshot.ContractBOM, "payload": map[string]string{"previousState": string(transition.Previous), "state": string(transition.Current)}})
+	eventBytes, err := json.Marshal(map[string]any{"apiVersion": "anvilkit.io/contracts/v1", "kind": "AgentEvent", "eventId": snapshot.LatestEventID, "runId": id, "sequence": updated.Version, "eventType": "run.state-changed", "occurredAt": contractTimestamp(snapshot.UpdatedAt), "traceContext": map[string]string{"traceparent": traceparent}, "contractBomReference": snapshot.ContractBOM, "payload": map[string]string{"previousState": string(transition.Previous), "state": string(transition.Current)}})
+	if err != nil {
+		return runs.Snapshot{}, fmt.Errorf("marshal run transition event: %w", err)
+	}
+	if err := events.ValidateEnvelope(eventBytes, s.eventBounds, snapshot.LatestEventID, string(id), updated.Version); err != nil {
+		return runs.Snapshot{}, fmt.Errorf("validate run transition event: %w", err)
+	}
 	var sequence uint64
 	err = tx.QueryRow(ctx, `UPDATE agent_control.agent_runs SET state=$4,version=$5,execution_generation=$6,next_event_sequence=next_event_sequence+1,snapshot=$7,updated_at=$8 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND version=$9 RETURNING next_event_sequence-1`, scope.WorkspaceID, scope.ProjectID, id, updated.State, updated.Version, updated.ExecutionGeneration, updatedBytes, snapshot.UpdatedAt, expectedVersion).Scan(&sequence)
 	if err != nil {
@@ -166,10 +209,19 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 		}
 		return runs.Snapshot{}, err
 	}
+	if err := s.fail(AfterRunWrite); err != nil {
+		return runs.Snapshot{}, err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, scope.WorkspaceID, scope.ProjectID, id, sequence, snapshot.LatestEventID, eventBytes, snapshot.UpdatedAt); err != nil {
 		return runs.Snapshot{}, err
 	}
+	if err := s.fail(AfterEventWrite); err != nil {
+		return runs.Snapshot{}, err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,$5,'agent.events.v1',$6,$7)`, scope.WorkspaceID, scope.ProjectID, snapshot.LatestEventID, id, sequence, eventBytes, snapshot.UpdatedAt); err != nil {
+		return runs.Snapshot{}, err
+	}
+	if err := s.fail(AfterOutboxWrite); err != nil {
 		return runs.Snapshot{}, err
 	}
 	problemBytes, _ := json.Marshal(updated.Problem)
@@ -179,6 +231,9 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 	if _, err := tx.Exec(ctx, `INSERT INTO agent_workflow.checkpoints(workspace_id,project_id,workflow_id,workflow_version,step_name,state_bytes,problem_bytes) VALUES($1,$2,$3,1,$4,$5,$6)`, scope.WorkspaceID, scope.ProjectID, string(id)+":v1", fmt.Sprintf("%s-v%d", updated.State, updated.Version), updatedBytes, problemBytes); err != nil {
 		return runs.Snapshot{}, err
 	}
+	if err := s.fail(AfterCheckpointWrite); err != nil {
+		return runs.Snapshot{}, err
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO agent_control.run_progress(workspace_id,project_id,run_id,state,entered_at,progress_at,stuck_at) VALUES($1,$2,$3,$4,$5,$5,NULL) ON CONFLICT(workspace_id,project_id,run_id) DO UPDATE SET state=EXCLUDED.state,entered_at=EXCLUDED.entered_at,progress_at=EXCLUDED.progress_at,stuck_at=NULL`, scope.WorkspaceID, scope.ProjectID, id, updated.State, snapshot.UpdatedAt); err != nil {
 		return runs.Snapshot{}, err
 	}
@@ -186,6 +241,16 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 		return runs.Snapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func (s *Store) fail(point FailurePoint) error {
+	if s.inject == nil {
+		return nil
+	}
+	if err := s.inject(point); err != nil {
+		return fmt.Errorf("injected run-store failure at %s: %w", point, err)
+	}
+	return nil
 }
 
 func translateConflict(err error) error {

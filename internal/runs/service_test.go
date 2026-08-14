@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
+	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 )
 
 func TestCreateCommandStructurallyOmitsServerAuthority(t *testing.T) {
@@ -31,12 +33,22 @@ func TestCreateCommandStructurallyOmitsServerAuthority(t *testing.T) {
 			t.Fatalf("mass-assigned field %s accepted", field)
 		}
 	}
+	for _, raw := range [][]byte{
+		[]byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"Page","targetId":"page-1"}}`),
+		[]byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"not allowed"}}`),
+		[]byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"` + strings.Repeat("a", 129) + `"}}`),
+		[]byte(`{"domain":"platform-agent","domain":"pagix-page","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`),
+	} {
+		if _, err := DecodeCreateRequest(raw); err == nil {
+			t.Fatalf("unbounded target accepted: %s", raw)
+		}
+	}
 }
 
 func TestCreateIsDurableBeforeWorkflowAndReplayIsStable(t *testing.T) {
 	store := &fakeStore{}
 	starter := &checkingStarter{store: store}
-	service := NewService(store, starter, fixedID("run-1"), fixedClock{time.Unix(100, 0)})
+	service := NewService(store, starter, fixedID("run-1"), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore())
 	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
 	digest, _ := canonical.Digest(raw)
 	input := CreateInput{Scope: Scope{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Raw: raw, Authority: testAuthority()}
@@ -62,6 +74,42 @@ func TestCreateIsDurableBeforeWorkflowAndReplayIsStable(t *testing.T) {
 	}
 }
 
+func TestConversationalAndHeadlessCreateHaveInteractionParity(t *testing.T) {
+	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
+	digest, _ := canonical.Digest(raw)
+	create := func(runID, key string) CreateOutcome {
+		store := &fakeStore{}
+		service := NewService(store, &checkingStarter{store: store}, fixedID(runID), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore())
+		outcome, err := service.Create(context.Background(), CreateInput{Scope: Scope{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: key, ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return outcome
+	}
+	conversational := create("run-conversational", "conversation-command")
+	headless := create("run-headless", "headless-command")
+	if conversational.Snapshot.Domain != headless.Snapshot.Domain || conversational.Snapshot.Operation != headless.Snapshot.Operation || conversational.Snapshot.Target != headless.Snapshot.Target || conversational.Snapshot.Status != headless.Snapshot.Status || conversational.Snapshot.ExecutionGeneration != headless.Snapshot.ExecutionGeneration || string(conversational.Snapshot.ContractBOM) != string(headless.Snapshot.ContractBOM) || string(conversational.Snapshot.Policy) != string(headless.Snapshot.Policy) || string(conversational.Snapshot.Budget) != string(headless.Snapshot.Budget) {
+		t.Fatalf("interaction style changed governance: conversational=%#v headless=%#v", conversational.Snapshot, headless.Snapshot)
+	}
+}
+
+func TestCreateCannotAcknowledgeWhenReceiptJournalIsUnavailable(t *testing.T) {
+	store := &fakeStore{}
+	starter := &checkingStarter{store: store}
+	receipts := journal.NewMemoryStore()
+	receipts.SetAvailable(false)
+	service := NewService(store, starter, fixedID("run-journal"), fixedClock{time.Unix(100, 0)}, receipts)
+	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
+	digest, _ := canonical.Digest(raw)
+	input := CreateInput{Scope: Scope{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "journal-key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()}
+	if _, err := service.Create(context.Background(), input); err == nil {
+		t.Fatal("create acknowledged without independent journal")
+	}
+	if starter.beforeDurable || store.created == nil {
+		t.Fatal("journal failure did not occur after durable database outcome")
+	}
+}
+
 func TestETagIsStrongAndRoundTrips(t *testing.T) {
 	snapshot := Snapshot{RunID: "run", Version: 42}
 	if snapshot.ETag() != `"run:v42"` {
@@ -73,6 +121,26 @@ func TestETagIsStrongAndRoundTrips(t *testing.T) {
 	}
 	if _, err := ParseETag(`W/"run:v42"`, snapshot.RunID); err == nil {
 		t.Fatal("weak ETag accepted")
+	}
+}
+
+func TestTraceparentAndAuthorityIdentitiesUseClosedBounds(t *testing.T) {
+	if validTraceparent("00-"+strings.Repeat("0", 32)+"-0123456789abcdef-01") || validTraceparent("00-0123456789abcdef0123456789abcdef-"+strings.Repeat("0", 16)+"-01") || validTraceparent("ff-0123456789abcdef0123456789abcdef-0123456789abcdef-01") {
+		t.Fatal("invalid W3C trace identity accepted")
+	}
+	if err := (Scope{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: strings.Repeat("p", 129), ActorID: "actor"}).Validate(); err == nil {
+		t.Fatal("unbounded authoritative scope accepted")
+	}
+}
+
+func TestCreateRejectsGeneratedIdentityThatCannotProduceBoundedEventIDs(t *testing.T) {
+	store := &fakeStore{}
+	service := NewService(store, &checkingStarter{store: store}, fixedID(strings.Repeat("r", 108)), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore())
+	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
+	digest, _ := canonical.Digest(raw)
+	_, err := service.Create(context.Background(), CreateInput{Scope: Scope{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()})
+	if err == nil || store.created != nil {
+		t.Fatalf("unbounded generated identity reached persistence: err=%v", err)
 	}
 }
 
