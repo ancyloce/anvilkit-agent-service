@@ -64,7 +64,7 @@ func TestExclusionsScopeAndMemoryFailClosed(t *testing.T) {
 	if _, err := compiler.Compile(context.Background(), input); err == nil {
 		t.Fatal("memory accepted")
 	}
-	for _, content := range []string{"Authorization: Bearer token", "https://x/?X-Amz-Signature=secret", "https://storage.example/object?X-Goog-Signature=secret", "https://blob.example/object?sv=1&se=2&sp=r&sig=secret", `{"password":"secret"}`, "-----BEGIN PRIVATE KEY-----"} {
+	for _, content := range []string{"Authorization: Bearer token", "Authorization : Basic dXNlcjpwYXNz", "password = secret", `{"api-key" : "secret"}`, "https://x/?X-Amz-Signature=secret", "https://storage.example/object?X-Goog-Signature=secret", "https://blob.example/object?sv=1&se=2&sp=r&sig=secret", `{"password":"secret"}`, "-----BEGIN PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----"} {
 		input = request()
 		input.Sources[0].Content = content
 		if _, err := compiler.Compile(context.Background(), input); err == nil {

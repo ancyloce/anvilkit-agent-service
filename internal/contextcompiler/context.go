@@ -131,7 +131,7 @@ func (c *Compiler) Compile(ctx context.Context, request Request) (Result, error)
 		return Result{}, err
 	}
 	if request.Memory != nil {
-		return Result{}, fmt.Errorf("durable memory is forbidden in Phase 0")
+		return Result{}, fmt.Errorf("durable memory is forbidden in foundation")
 	}
 	if request.TenantID == "" || request.WorkspaceID == "" || request.ProjectID == "" || request.RunID == "" || len(request.Sources) == 0 || len(request.Sources) > 128 || request.TotalTokens < 1 || request.TotalTokens > 1_000_000 || request.CompiledAt.IsZero() || !validPolicy(request.Policy) || !validPolicy(request.RedactionPolicy) {
 		return Result{}, fmt.Errorf("context compilation authority is incomplete")
@@ -216,8 +216,16 @@ func (c *Compiler) CompileAndRecord(ctx context.Context, request Request, record
 
 func (c *Compiler) minimize(content, replacement string) (string, int, error) {
 	lower := strings.ToLower(content)
-	for _, marker := range []string{"authorization: bearer ", "private_key", "private-key", "password=", `"password":`, "api_key", "api-key", "aws_secret_access_key", "-----begin private key-----"} {
+	for _, marker := range []string{"private_key", "private-key", "aws_secret_access_key", "-----begin private key-----", "-----begin rsa private key-----", "-----begin ec private key-----"} {
 		if strings.Contains(lower, marker) {
+			return "", 0, fmt.Errorf("credential or signed URL detected")
+		}
+	}
+	for _, pattern := range []*regexp.Regexp{
+		regexp.MustCompile(`(?i)authorization\s*:\s*(bearer|basic)\s+\S+`),
+		regexp.MustCompile(`(?i)["']?(password|passwd|api[_-]?key|secret[_-]?access[_-]?key)["']?\s*[:=]\s*[^\s,;}]+`),
+	} {
+		if pattern.MatchString(content) {
 			return "", 0, fmt.Errorf("credential or signed URL detected")
 		}
 	}
@@ -249,6 +257,7 @@ func (c *Compiler) minimize(content, replacement string) (string, int, error) {
 	}
 	return content, removed, nil
 }
+
 func trustRank(value Trust) int {
 	switch value {
 	case System:
