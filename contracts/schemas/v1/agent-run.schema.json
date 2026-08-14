@@ -1,0 +1,153 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/schemas/v1/agent-run.schema.json",
+  "title": "AgentRunV1 contract",
+  "description": "Bounded AgentRunV1 wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 18,
+  "maxProperties": 20,
+  "required": [
+    "apiVersion",
+    "kind",
+    "runId",
+    "rootRunId",
+    "tenantId",
+    "workspaceId",
+    "actorId",
+    "domain",
+    "operation",
+    "target",
+    "contractBomReference",
+    "policy",
+    "budget",
+    "idempotency",
+    "status",
+    "executionGeneration",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "anvilkit.io/contracts/v1"
+    },
+    "kind": {
+      "const": "AgentRun"
+    },
+    "runId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/RunId"
+    },
+    "rootRunId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/RunId"
+    },
+    "parentRunId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/RunId"
+    },
+    "tenantId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/TenantId"
+    },
+    "workspaceId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/WorkspaceId"
+    },
+    "actorId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/ActorId"
+    },
+    "domain": {
+      "enum": [
+        "platform-agent",
+        "pagix-page",
+        "contract-runtime"
+      ]
+    },
+    "operation": {
+      "enum": [
+        "page-change",
+        "artifact-validation",
+        "image-operation",
+        "component-package"
+      ]
+    },
+    "target": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/TargetReference"
+    },
+    "contractBomReference": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/ContractBomReferenceV1"
+    },
+    "policy": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/PolicyReference"
+    },
+    "budget": {
+      "$ref": "anvilkit://schema/agent-budget.v1@1.0.0?digest=sha256:ae8e0049aa37366c6f59a5e40d354cc361388e8f1403783ea6442c7bdd0b3715"
+    },
+    "idempotency": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Idempotency"
+    },
+    "status": {
+      "enum": [
+        "created",
+        "preparing",
+        "planning",
+        "awaiting_input",
+        "executing",
+        "validating",
+        "awaiting_review",
+        "awaiting_approval",
+        "committing",
+        "awaiting_domain_confirmation",
+        "conflict",
+        "cancelling",
+        "failed",
+        "completed",
+        "cancelled",
+        "refused",
+        "discarded"
+      ]
+    },
+    "executionGeneration": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "createdAt": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Timestamp"
+    },
+    "updatedAt": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Timestamp"
+    },
+    "problem": {
+      "$ref": "anvilkit://schema/problem-details.v1@1.0.0?digest=sha256:6cfe1db66717fb64fd1ec18920ec64b16c191c2ba6a4009350ba4a19163b7647"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "parentRunId": "omitted for a root run",
+    "problem": "omitted unless the run is failed or otherwise records a durable problem"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "AgentRunV1",
+    "semanticVersion": "1.0.0",
+    "componentName": "anvilkit.contract.schema.agent-run.v1",
+    "owner": "Agent Service owner",
+    "stability": "p0-freeze-candidate",
+    "identityFields": [
+      "/runId",
+      "/rootRunId",
+      "/parentRunId",
+      "/tenantId",
+      "/actorId",
+      "/domain",
+      "/operation",
+      "/target",
+      "/contractBomReference",
+      "/policy",
+      "/budget",
+      "/idempotency",
+      "/status"
+    ],
+    "maximumSerializedBytes": 32768,
+    "compatibilityPolicy": "frozen-major",
+    "descriptions": [
+      "contracts/openapi/v1/agent-service.openapi.json",
+      "contracts/asyncapi/v1/agent-events.asyncapi.json"
+    ]
+  }
+}

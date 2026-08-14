@@ -1,0 +1,48 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/schemas/v1/contract-trust-root.schema.json",
+  "title": "ContractTrustRootV1 contract",
+  "description": "Pinned public trust snapshot for contract release and apply-authorization verification.",
+  "type": "object",
+  "minProperties": 7,
+  "maxProperties": 7,
+  "required": ["apiVersion", "kind", "snapshotId", "issuedAt", "nextUpdate", "maximumClockSkewSeconds", "keys"],
+  "properties": {
+    "apiVersion": {"const": "anvilkit.io/contracts/v1"},
+    "kind": {"const": "ContractTrustRoot"},
+    "snapshotId": {"type": "string", "minLength": 16, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9:-]*$"},
+    "issuedAt": {"type": "string", "minLength": 24, "maxLength": 24, "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"},
+    "nextUpdate": {"type": "string", "minLength": 24, "maxLength": 24, "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"},
+    "maximumClockSkewSeconds": {"type": "integer", "minimum": 0, "maximum": 300},
+    "keys": {
+      "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "minProperties": 8,
+        "maxProperties": 8,
+        "required": ["keyId", "issuer", "audiences", "algorithms", "publicKeyJwk", "status", "notBefore", "notAfter"],
+        "properties": {
+          "keyId": {"type": "string", "minLength": 16, "maxLength": 256, "pattern": "^urn:anvilkit:key:[a-z0-9][a-z0-9:-]*$"},
+          "issuer": {"type": "string", "minLength": 16, "maxLength": 256, "pattern": "^urn:anvilkit:issuer:[a-z0-9][a-z0-9:-]*$"},
+          "audiences": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "minLength": 16, "maxLength": 256, "pattern": "^urn:anvilkit:audience:[a-z0-9][a-z0-9:-]*$"}},
+          "algorithms": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"enum": ["dsse-ed25519-v1", "jws-eddsa-v1"]}},
+          "publicKeyJwk": {
+            "type": "object", "minProperties": 3, "maxProperties": 3, "required": ["kty", "crv", "x"],
+            "properties": {"kty": {"const": "OKP"}, "crv": {"const": "Ed25519"}, "x": {"type": "string", "minLength": 43, "maxLength": 43, "pattern": "^[A-Za-z0-9_-]+$"}},
+            "additionalProperties": false
+          },
+          "status": {"enum": ["active", "overlap", "retired", "revoked"]},
+          "notBefore": {"type": "string", "minLength": 24, "maxLength": 24, "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"},
+          "notAfter": {"type": "string", "minLength": 24, "maxLength": 24, "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ContractTrustRootV1", "semanticVersion": "1.0.0", "componentName": "anvilkit.contract.schema.contract-trust-root.v1",
+    "owner": "Security", "stability": "p0-freeze-candidate", "identityFields": ["/snapshotId", "/issuedAt", "/nextUpdate", "/keys"],
+    "maximumSerializedBytes": 65536, "compatibilityPolicy": "frozen-major", "descriptions": []
+  }
+}

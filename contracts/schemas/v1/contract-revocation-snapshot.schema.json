@@ -1,0 +1,35 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/schemas/v1/contract-revocation-snapshot.schema.json",
+  "title": "ContractRevocationSnapshotV1 contract",
+  "description": "Signed fail-closed key revocation snapshot with explicit freshness.",
+  "type": "object",
+  "minProperties": 6,
+  "maxProperties": 6,
+  "required": ["apiVersion", "kind", "snapshotId", "issuedAt", "nextUpdate", "revokedKeys"],
+  "properties": {
+    "apiVersion": {"const": "anvilkit.io/contracts/v1"},
+    "kind": {"const": "ContractRevocationSnapshot"},
+    "snapshotId": {"type": "string", "minLength": 16, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9:-]*$"},
+    "issuedAt": {"type": "string", "minLength": 24, "maxLength": 24, "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"},
+    "nextUpdate": {"type": "string", "minLength": 24, "maxLength": 24, "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"},
+    "revokedKeys": {
+      "type": "array", "minItems": 0, "maxItems": 10000, "uniqueItems": true,
+      "items": {
+        "type": "object", "minProperties": 3, "maxProperties": 3, "required": ["keyId", "effectiveAt", "reason"],
+        "properties": {
+          "keyId": {"type": "string", "minLength": 16, "maxLength": 256, "pattern": "^urn:anvilkit:key:[a-z0-9][a-z0-9:-]*$"},
+          "effectiveAt": {"type": "string", "minLength": 24, "maxLength": 24, "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 256}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ContractRevocationSnapshotV1", "semanticVersion": "1.0.0", "componentName": "anvilkit.contract.schema.contract-revocation-snapshot.v1",
+    "owner": "Security", "stability": "p0-freeze-candidate", "identityFields": ["/snapshotId", "/issuedAt", "/nextUpdate", "/revokedKeys"],
+    "maximumSerializedBytes": 1048576, "compatibilityPolicy": "frozen-major", "descriptions": []
+  }
+}

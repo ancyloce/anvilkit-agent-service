@@ -1,0 +1,127 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/schemas/v1/apply-authorization.schema.json",
+  "title": "ApplyAuthorizationV1 contract",
+  "description": "Bounded ApplyAuthorizationV1 wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 19,
+  "maxProperties": 19,
+  "required": [
+    "apiVersion",
+    "kind",
+    "authorizationId",
+    "keyId",
+    "issuer",
+    "audience",
+    "issuedAt",
+    "notBefore",
+    "expiresAt",
+    "runId",
+    "actionDigest",
+    "artifactDigest",
+    "target",
+    "baseRevision",
+    "actorId",
+    "workspaceId",
+    "approvalVersion",
+    "contractBomDigest",
+    "policyDigest"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "anvilkit.io/contracts/v1"
+    },
+    "kind": {
+      "const": "ApplyAuthorization"
+    },
+    "authorizationId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/AuthorizationId"
+    },
+    "keyId": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 256,
+      "pattern": "^urn:anvilkit:key:[a-z0-9][a-z0-9:-]*$"
+    },
+    "issuer": {
+      "const": "urn:anvilkit:issuer:agent-service"
+    },
+    "audience": {
+      "const": "urn:anvilkit:audience:pagix"
+    },
+    "issuedAt": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Timestamp"
+    },
+    "notBefore": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Timestamp"
+    },
+    "expiresAt": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Timestamp"
+    },
+    "runId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/RunId"
+    },
+    "actionDigest": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Digest"
+    },
+    "artifactDigest": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Digest"
+    },
+    "target": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/TargetReference"
+    },
+    "baseRevision": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/OpaqueId"
+    },
+    "actorId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/ActorId"
+    },
+    "workspaceId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/WorkspaceId"
+    },
+    "approvalVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "contractBomDigest": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Digest"
+    },
+    "policyDigest": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Digest"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ApplyAuthorizationV1",
+    "semanticVersion": "1.0.0",
+    "componentName": "anvilkit.contract.schema.apply-authorization.v1",
+    "owner": "Agent Service Authorization and Pagix Redemption owners",
+    "stability": "p0-freeze-candidate",
+    "identityFields": [
+      "/authorizationId",
+      "/keyId",
+      "/issuer",
+      "/audience",
+      "/issuedAt",
+      "/notBefore",
+      "/expiresAt",
+      "/runId",
+      "/actionDigest",
+      "/artifactDigest",
+      "/target",
+      "/baseRevision",
+      "/actorId",
+      "/workspaceId",
+      "/approvalVersion",
+      "/contractBomDigest",
+      "/policyDigest"
+    ],
+    "maximumSerializedBytes": 32768,
+    "compatibilityPolicy": "frozen-major",
+    "descriptions": [
+      "contracts/openapi/v1/agent-service.openapi.json",
+      "contracts/openapi/v1/pagix-agent-integration.openapi.json"
+    ]
+  }
+}

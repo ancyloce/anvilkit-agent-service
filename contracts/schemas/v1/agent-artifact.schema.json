@@ -1,0 +1,218 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/schemas/v1/agent-artifact.schema.json",
+  "title": "AgentArtifactV1 contract",
+  "description": "Bounded AgentArtifactV1 wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 12,
+  "maxProperties": 12,
+  "required": [
+    "apiVersion",
+    "contractType",
+    "artifactId",
+    "kind",
+    "schema",
+    "digest",
+    "reference",
+    "lineage",
+    "producer",
+    "validation",
+    "lifecycle",
+    "createdAt"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "anvilkit.io/contracts/v1"
+    },
+    "contractType": {
+      "const": "AgentArtifact"
+    },
+    "artifactId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/ArtifactId"
+    },
+    "kind": {
+      "enum": [
+        "compiled-context",
+        "target-snapshot",
+        "agent-plan",
+        "worker-result",
+        "validation-report"
+      ]
+    },
+    "schema": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/SchemaReference"
+    },
+    "digest": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Digest"
+    },
+    "reference": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "required": [
+        "bucket",
+        "objectKey",
+        "sizeBytes",
+        "mediaType"
+      ],
+      "properties": {
+        "bucket": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9.-]*$"
+        },
+        "objectKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1073741824
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "lineage": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/ArtifactReference"
+      }
+    },
+    "producer": {
+      "type": "object",
+      "minProperties": 5,
+      "maxProperties": 5,
+      "required": [
+        "taskId",
+        "recoveryEpoch",
+        "executionGeneration",
+        "physicalAttemptId",
+        "leaseEpoch"
+      ],
+      "properties": {
+        "taskId": {
+          "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/TaskId"
+        },
+        "recoveryEpoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "executionGeneration": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "physicalAttemptId": {
+          "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/PhysicalAttemptId"
+        },
+        "leaseEpoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "validation": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "validatedAt",
+        "checks"
+      ],
+      "properties": {
+        "validatedAt": {
+          "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Timestamp"
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "minProperties": 3,
+            "maxProperties": 3,
+            "required": [
+              "name",
+              "result",
+              "evidenceDigest"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9._-]*$"
+              },
+              "result": {
+                "enum": [
+                  "passed",
+                  "failed"
+                ]
+              },
+              "evidenceDigest": {
+                "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Digest"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "lifecycle": {
+      "enum": [
+        "pending",
+        "scanning",
+        "valid",
+        "finalized",
+        "committed",
+        "quarantined",
+        "expired",
+        "deleted"
+      ]
+    },
+    "createdAt": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Timestamp"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "AgentArtifactV1",
+    "semanticVersion": "1.0.0",
+    "componentName": "anvilkit.contract.schema.agent-artifact.v1",
+    "owner": "Agent Service Metadata owner",
+    "stability": "p0-freeze-candidate",
+    "identityFields": [
+      "/artifactId",
+      "/kind",
+      "/schema",
+      "/digest",
+      "/reference",
+      "/lineage",
+      "/producer",
+      "/validation",
+      "/lifecycle"
+    ],
+    "maximumSerializedBytes": 32768,
+    "compatibilityPolicy": "frozen-major",
+    "descriptions": [
+      "contracts/openapi/v1/agent-service.openapi.json",
+      "contracts/asyncapi/v1/agent-events.asyncapi.json"
+    ]
+  }
+}

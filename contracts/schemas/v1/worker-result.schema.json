@@ -1,0 +1,126 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/schemas/v1/worker-result.schema.json",
+  "title": "WorkerResultV1 contract",
+  "description": "Bounded WorkerResultV1 wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 14,
+  "maxProperties": 15,
+  "required": [
+    "apiVersion",
+    "kind",
+    "taskId",
+    "recoveryEpoch",
+    "executionGeneration",
+    "physicalAttemptId",
+    "leaseEpoch",
+    "capability",
+    "buildIdentity",
+    "artifacts",
+    "metrics",
+    "usageReferences",
+    "warnings",
+    "completedAt"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "anvilkit.io/contracts/v1"
+    },
+    "kind": {
+      "const": "WorkerResult"
+    },
+    "taskId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/TaskId"
+    },
+    "recoveryEpoch": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "executionGeneration": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "physicalAttemptId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/PhysicalAttemptId"
+    },
+    "leaseEpoch": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "capability": {
+      "enum": [
+        "provider.invoke",
+        "contract.validate",
+        "artifact.scan",
+        "fake.execute"
+      ]
+    },
+    "buildIdentity": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/BuildId"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/ArtifactReference"
+      }
+    },
+    "metrics": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/BoundedStringMap"
+    },
+    "usageReferences": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/OpaqueId"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "$ref": "anvilkit://schema/problem-details.v1@1.0.0?digest=sha256:6cfe1db66717fb64fd1ec18920ec64b16c191c2ba6a4009350ba4a19163b7647"
+      }
+    },
+    "problem": {
+      "$ref": "anvilkit://schema/problem-details.v1@1.0.0?digest=sha256:6cfe1db66717fb64fd1ec18920ec64b16c191c2ba6a4009350ba4a19163b7647"
+    },
+    "completedAt": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Timestamp"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "problem": "omitted for a successful result"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "WorkerResultV1",
+    "semanticVersion": "1.0.0",
+    "componentName": "anvilkit.contract.schema.worker-result.v1",
+    "owner": "Worker Protocol owner",
+    "stability": "p0-freeze-candidate",
+    "identityFields": [
+      "/taskId",
+      "/recoveryEpoch",
+      "/executionGeneration",
+      "/physicalAttemptId",
+      "/leaseEpoch",
+      "/capability",
+      "/buildIdentity",
+      "/artifacts",
+      "/usageReferences",
+      "/problem"
+    ],
+    "maximumSerializedBytes": 65536,
+    "compatibilityPolicy": "frozen-major",
+    "descriptions": [
+      "contracts/asyncapi/v1/agent-events.asyncapi.json"
+    ]
+  }
+}

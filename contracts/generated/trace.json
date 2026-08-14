@@ -1,0 +1,140 @@
+{
+  "traceVersion": 1,
+  "language": "go",
+  "packageVersion": "0.1.0",
+  "sourceSetSha256": "c4cce2ab130e519ae3ee37ffd808be68095c36fd18556d552a5eceed3b67eacf",
+  "sources": [
+    {
+      "path": "contracts/schemas/v1/agent-artifact.schema.json",
+      "sha256": "a4f1cecb68b04d7693eefaddaa1bec7e82d11180b2f7f2f38fd4c5abed1a42cb"
+    },
+    {
+      "path": "contracts/schemas/v1/agent-budget.schema.json",
+      "sha256": "ae8e0049aa37366c6f59a5e40d354cc361388e8f1403783ea6442c7bdd0b3715"
+    },
+    {
+      "path": "contracts/schemas/v1/agent-definition.schema.json",
+      "sha256": "ea62aa3afe82221022c43813f98373a1111e015ffc15671d6582bfdab70af462"
+    },
+    {
+      "path": "contracts/schemas/v1/agent-event.schema.json",
+      "sha256": "f19775b8dfdd34cac0318fce8067460988671840987a2b9aaeaa3c85710591ab"
+    },
+    {
+      "path": "contracts/schemas/v1/agent-run.schema.json",
+      "sha256": "68949242c9b4557a8b5ff965f76de8f2de49c11523a7cc1e64cfd1b4af824233"
+    },
+    {
+      "path": "contracts/schemas/v1/agent-task.schema.json",
+      "sha256": "45832bc15da304e6c282fb87f5eb64cd424cdec51ecde34b665e44db9f7e6b63"
+    },
+    {
+      "path": "contracts/schemas/v1/apply-authorization.schema.json",
+      "sha256": "67ce757f4792deccb1fc6c442611bfed2fff76aa1cac39ad1aa5ff70eddf97a3"
+    },
+    {
+      "path": "contracts/schemas/v1/approval-request.schema.json",
+      "sha256": "9bbfd3c18ebfabe205bca28a7022035c095c8d4831cddef4834868216919af2c"
+    },
+    {
+      "path": "contracts/schemas/v1/compiled-context.schema.json",
+      "sha256": "7ed9b01d0451d8c1ba34b1959ea119d4c9d65db0b1a2343b7e8eb81c2b1bc037"
+    },
+    {
+      "path": "contracts/schemas/v1/component-package-spec.schema.json",
+      "sha256": "0692c18651185915c2dd509a26fc18c0fe550285db07f7aa5b4d63234c66aa2b"
+    },
+    {
+      "path": "contracts/schemas/v1/contract-revocation-snapshot.schema.json",
+      "sha256": "3f1513e42d97b2f5175cfd5ab1f380719d5233e27095de32caf96c771f5ef410"
+    },
+    {
+      "path": "contracts/schemas/v1/contract-signature-statement.schema.json",
+      "sha256": "01c9337789f939ad964979bb6d26324113b82ac09868ffed4d1be31dad10c049"
+    },
+    {
+      "path": "contracts/schemas/v1/contract-trust-root.schema.json",
+      "sha256": "d4c4ddc353fdf286540f4b03f61bceb1898bcf645b11230a0a8ea73ce5018667"
+    },
+    {
+      "path": "contracts/schemas/v1/image-operation-plan.schema.json",
+      "sha256": "3d60868426e48bec883ce91ae71d10ab609e02b5b559d3a47e1f0c34041c5709"
+    },
+    {
+      "path": "contracts/schemas/v1/input-request.schema.json",
+      "sha256": "93dbc2fb16cc3791dca4473ea51c583ebfea96a98747601adeecd7b17708e922"
+    },
+    {
+      "path": "contracts/schemas/v1/problem-details.schema.json",
+      "sha256": "6cfe1db66717fb64fd1ec18920ec64b16c191c2ba6a4009350ba4a19163b7647"
+    },
+    {
+      "path": "contracts/schemas/v1/provider-continuation.schema.json",
+      "sha256": "68810769703a8bb093f06deec27b822877a655ffef7770d06144a4c5c10143fb"
+    },
+    {
+      "path": "contracts/schemas/v1/shared-primitives.schema.json",
+      "sha256": "de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592"
+    },
+    {
+      "path": "contracts/schemas/v1/target-snapshot.schema.json",
+      "sha256": "89d75fa6d287eea5b21208bfcaae4a8e639debf2e4a7dfad322805ec13ed41c2"
+    },
+    {
+      "path": "contracts/schemas/v1/tool-definition.schema.json",
+      "sha256": "3c76deee323264f5239029fcdb76f9200e99f717ac4182c99069e2eb08462f43"
+    },
+    {
+      "path": "contracts/schemas/v1/usage-observation.schema.json",
+      "sha256": "929bb6dd41798113a64664f83397e7e2b642ea37133698d03041c4ede397c68a"
+    },
+    {
+      "path": "contracts/schemas/v1/worker-lease.schema.json",
+      "sha256": "fdf0052070ba25ccd4bbb524acce0908eee354350a8d6a67a35600539e1f1faf"
+    },
+    {
+      "path": "contracts/schemas/v1/worker-result.schema.json",
+      "sha256": "af74e57340b240d669e1fad7fc9259fd7738361030461c4b4b814c12d175ad8c"
+    },
+    {
+      "path": "contracts/openapi/v1/agent-service.openapi.json",
+      "sha256": "140de862da24742d4b3cdcec4872f62be2ac0efb4010a71812aa65fd1a471514"
+    },
+    {
+      "path": "contracts/openapi/v1/pagix-agent-integration.openapi.json",
+      "sha256": "947409ac4ce349bcbbabd4dd1374b30564e1fbae01df06546d6fcb67868c0734"
+    }
+  ],
+  "projections": {
+    "schemaBundleSha256": "b5da72dec2ad0b0f437d4f2c0db4dfa4a5286774d8f020d7e1c3c32c2290794b",
+    "openapi": {
+      "agent-service": "8a8b7ff24e29e300350c8a6fe242443f6058460e55913777ecf0138dc6d61f61",
+      "pagix-agent-integration": "0b01a609846a529c9194c673c8551ee52ee4fcd1cd8c4b220eedb9009e0f00d5"
+    }
+  },
+  "generators": {
+    "goOpenApi": {
+      "name": "github.com/oapi-codegen/oapi-codegen/v2",
+      "version": "v2.8.0"
+    },
+    "goJsonSchema": {
+      "name": "github.com/atombender/go-jsonschema",
+      "version": "v0.24.1"
+    }
+  },
+  "rootBomIdentity": "sha256:2b0f5a1f42bcf399d640deb60df4597f9ed18d8fe22d52b7f5d4a5638fdc2018",
+  "rootBomState": "composed-candidate-unpublished",
+  "output": {
+    "bytes": 495976,
+    "files": 3,
+    "sha256": "475fc8d2c70862f791f4b60ae0b75ee02f3a6d71aaafc057f82f6b7ef381e9a4",
+    "directories": [
+      {
+        "directory": "generated",
+        "bytes": 495976,
+        "files": 3,
+        "sha256": "baef694466f19140753f97249677f21e451514ddb4c6b871ef2f3134c31bba01"
+      }
+    ]
+  }
+}

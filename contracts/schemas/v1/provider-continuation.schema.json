@@ -1,0 +1,68 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/schemas/v1/provider-continuation.schema.json",
+  "title": "ProviderContinuationV1 contract",
+  "description": "Bounded ProviderContinuationV1 wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 7,
+  "maxProperties": 7,
+  "required": [
+    "apiVersion",
+    "kind",
+    "encryptedBinding",
+    "provider",
+    "expiresAt",
+    "restartPolicy",
+    "bindingDigest"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "anvilkit.io/contracts/v1"
+    },
+    "kind": {
+      "const": "ProviderContinuation"
+    },
+    "encryptedBinding": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 24576,
+      "pattern": "^[A-Za-z0-9_-]+={0,2}$",
+      "contentEncoding": "base64"
+    },
+    "provider": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/OpaqueId"
+    },
+    "expiresAt": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Timestamp"
+    },
+    "restartPolicy": {
+      "enum": [
+        "resume-if-valid",
+        "restart-stage",
+        "restart-run"
+      ]
+    },
+    "bindingDigest": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Digest"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ProviderContinuationV1",
+    "semanticVersion": "1.0.0",
+    "componentName": "anvilkit.contract.schema.provider-continuation.v1",
+    "owner": "Agent Service Adapter owner",
+    "stability": "p0-freeze-candidate",
+    "identityFields": [
+      "/encryptedBinding",
+      "/provider",
+      "/expiresAt",
+      "/restartPolicy"
+    ],
+    "maximumSerializedBytes": 32768,
+    "compatibilityPolicy": "frozen-major",
+    "descriptions": [
+      "contracts/openapi/v1/agent-service.openapi.json"
+    ]
+  }
+}

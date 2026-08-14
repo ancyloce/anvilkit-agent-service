@@ -1,0 +1,554 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/schemas/v1/shared-primitives.schema.json",
+  "title": "AnvilKit Agent shared primitives v1",
+  "description": "Bounded reusable wire primitives for the Agent contract catalog.",
+  "type": "object",
+  "minProperties": 1,
+  "maxProperties": 1,
+  "required": [
+    "$defs"
+  ],
+  "properties": {
+    "$defs": {
+      "$ref": "#/$defs/DefinitionSet"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "SharedPrimitivesV1",
+    "semanticVersion": "1.0.0",
+    "componentName": "anvilkit.contract.schema.shared-primitives.v1",
+    "owner": "Platform Contracts owner",
+    "stability": "p0-freeze-candidate",
+    "identityFields": [
+      "/$defs"
+    ],
+    "maximumSerializedBytes": 131072,
+    "compatibilityPolicy": "frozen-major",
+    "descriptions": []
+  },
+  "$defs": {
+    "OpaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "TenantId": {
+      "$ref": "#/$defs/OpaqueId"
+    },
+    "ActorId": {
+      "$ref": "#/$defs/OpaqueId"
+    },
+    "WorkspaceId": {
+      "$ref": "#/$defs/OpaqueId"
+    },
+    "RunId": {
+      "$ref": "#/$defs/OpaqueId"
+    },
+    "TaskId": {
+      "$ref": "#/$defs/OpaqueId"
+    },
+    "ArtifactId": {
+      "$ref": "#/$defs/OpaqueId"
+    },
+    "AuthorizationId": {
+      "$ref": "#/$defs/OpaqueId"
+    },
+    "RequestId": {
+      "$ref": "#/$defs/OpaqueId"
+    },
+    "ReservationId": {
+      "$ref": "#/$defs/OpaqueId"
+    },
+    "PolicyId": {
+      "$ref": "#/$defs/OpaqueId"
+    },
+    "BuildId": {
+      "$ref": "#/$defs/OpaqueId"
+    },
+    "PhysicalAttemptId": {
+      "$ref": "#/$defs/OpaqueId"
+    },
+    "Digest": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "Timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "IntegerString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^-?(0|[1-9][0-9]*)$",
+      "x-anvilkit-integerString": true
+    },
+    "DecimalString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+      "x-anvilkit-decimalString": true
+    },
+    "TraceContext": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 2,
+      "required": [
+        "traceparent"
+      ],
+      "properties": {
+        "traceparent": {
+          "type": "string",
+          "minLength": 55,
+          "maxLength": 55,
+          "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+        },
+        "tracestate": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[\\x20-\\x7E]+$"
+        }
+      },
+      "additionalProperties": false,
+      "x-anvilkit-omittedSemantics": {
+        "tracestate": "omitted when no vendor trace state is propagated"
+      }
+    },
+    "SchemaReference": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "componentName",
+        "version",
+        "digest"
+      ],
+      "properties": {
+        "componentName": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 160,
+          "pattern": "^anvilkit\\.[a-z0-9][a-z0-9.-]*\\.v[1-9][0-9]*$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 32,
+          "pattern": "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
+        },
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ContractBomReferenceV1": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "required": [
+        "repository",
+        "bomDigest",
+        "ociManifestDigest",
+        "evidenceManifestDigest"
+      ],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[a-z0-9][a-z0-9._/-]*$"
+        },
+        "bomDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "ociManifestDigest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "evidenceManifestDigest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TraceAndScope": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "required": [
+        "tenantId",
+        "workspaceId",
+        "actorId",
+        "traceContext"
+      ],
+      "properties": {
+        "tenantId": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/WorkspaceId"
+        },
+        "actorId": {
+          "$ref": "#/$defs/ActorId"
+        },
+        "traceContext": {
+          "$ref": "#/$defs/TraceContext"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Idempotency": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "scope",
+        "key",
+        "canonicalRequestDigest"
+      ],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9._:-]*$"
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "canonicalRequestDigest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PolicyReference": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "policyId",
+        "version",
+        "digest"
+      ],
+      "properties": {
+        "policyId": {
+          "$ref": "#/$defs/PolicyId"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "TargetReference": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "targetType",
+        "targetId",
+        "workspaceId"
+      ],
+      "properties": {
+        "targetType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9.-]*$"
+        },
+        "targetId": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "workspaceId": {
+          "$ref": "#/$defs/WorkspaceId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ArtifactReference": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "required": [
+        "artifactId",
+        "digest",
+        "mediaType",
+        "sizeBytes"
+      ],
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/ArtifactId"
+        },
+        "digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1073741824
+        }
+      },
+      "additionalProperties": false
+    },
+    "BoundedStringMap": {
+      "type": "object",
+      "minProperties": 0,
+      "maxProperties": 32,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 0,
+        "maxLength": 1024
+      },
+      "x-anvilkit-extensionMap": true
+    },
+    "ResourceLimits": {
+      "type": "object",
+      "minProperties": 5,
+      "maxProperties": 5,
+      "required": [
+        "timeoutMilliseconds",
+        "memoryBytes",
+        "cpuMillis",
+        "gpuMillis",
+        "outputBytes"
+      ],
+      "properties": {
+        "timeoutMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400000
+        },
+        "memoryBytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 1099511627776
+        },
+        "cpuMillis": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400000
+        },
+        "gpuMillis": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 86400000
+        },
+        "outputBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1073741824
+        }
+      },
+      "additionalProperties": false
+    },
+    "Cost": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "amount",
+        "currency"
+      ],
+      "properties": {
+        "amount": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 3,
+          "pattern": "^[A-Z]{3}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "PageInfo": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 3,
+      "required": [
+        "limit",
+        "hasMore"
+      ],
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "nextCursor": {
+          "$ref": "#/$defs/Cursor"
+        }
+      },
+      "additionalProperties": false,
+      "x-anvilkit-omittedSemantics": {
+        "nextCursor": "omitted when no subsequent page exists"
+      }
+    },
+    "DefinitionSet": {
+      "type": "object",
+      "minProperties": 30,
+      "maxProperties": 30,
+      "required": [
+        "OpaqueId",
+        "TenantId",
+        "ActorId",
+        "WorkspaceId",
+        "RunId",
+        "TaskId",
+        "ArtifactId",
+        "AuthorizationId",
+        "RequestId",
+        "ReservationId",
+        "PolicyId",
+        "BuildId",
+        "PhysicalAttemptId",
+        "Digest",
+        "Timestamp",
+        "IntegerString",
+        "DecimalString",
+        "TraceContext",
+        "SchemaReference",
+        "ContractBomReferenceV1",
+        "TraceAndScope",
+        "Idempotency",
+        "PolicyReference",
+        "TargetReference",
+        "ArtifactReference",
+        "BoundedStringMap",
+        "ResourceLimits",
+        "Cost",
+        "Cursor",
+        "PageInfo"
+      ],
+      "properties": {
+        "OpaqueId": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "TenantId": {
+          "$ref": "#/$defs/TenantId"
+        },
+        "ActorId": {
+          "$ref": "#/$defs/ActorId"
+        },
+        "WorkspaceId": {
+          "$ref": "#/$defs/WorkspaceId"
+        },
+        "RunId": {
+          "$ref": "#/$defs/RunId"
+        },
+        "TaskId": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "ArtifactId": {
+          "$ref": "#/$defs/ArtifactId"
+        },
+        "AuthorizationId": {
+          "$ref": "#/$defs/AuthorizationId"
+        },
+        "RequestId": {
+          "$ref": "#/$defs/RequestId"
+        },
+        "ReservationId": {
+          "$ref": "#/$defs/ReservationId"
+        },
+        "PolicyId": {
+          "$ref": "#/$defs/PolicyId"
+        },
+        "BuildId": {
+          "$ref": "#/$defs/BuildId"
+        },
+        "PhysicalAttemptId": {
+          "$ref": "#/$defs/PhysicalAttemptId"
+        },
+        "Digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "Timestamp": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "IntegerString": {
+          "$ref": "#/$defs/IntegerString"
+        },
+        "DecimalString": {
+          "$ref": "#/$defs/DecimalString"
+        },
+        "TraceContext": {
+          "$ref": "#/$defs/TraceContext"
+        },
+        "SchemaReference": {
+          "$ref": "#/$defs/SchemaReference"
+        },
+        "ContractBomReferenceV1": {
+          "$ref": "#/$defs/ContractBomReferenceV1"
+        },
+        "TraceAndScope": {
+          "$ref": "#/$defs/TraceAndScope"
+        },
+        "Idempotency": {
+          "$ref": "#/$defs/Idempotency"
+        },
+        "PolicyReference": {
+          "$ref": "#/$defs/PolicyReference"
+        },
+        "TargetReference": {
+          "$ref": "#/$defs/TargetReference"
+        },
+        "ArtifactReference": {
+          "$ref": "#/$defs/ArtifactReference"
+        },
+        "BoundedStringMap": {
+          "$ref": "#/$defs/BoundedStringMap"
+        },
+        "ResourceLimits": {
+          "$ref": "#/$defs/ResourceLimits"
+        },
+        "Cost": {
+          "$ref": "#/$defs/Cost"
+        },
+        "Cursor": {
+          "$ref": "#/$defs/Cursor"
+        },
+        "PageInfo": {
+          "$ref": "#/$defs/PageInfo"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

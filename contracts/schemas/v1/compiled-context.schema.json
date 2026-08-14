@@ -1,0 +1,191 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/schemas/v1/compiled-context.schema.json",
+  "title": "CompiledContextV1 contract",
+  "description": "Bounded CompiledContextV1 wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 9,
+  "maxProperties": 9,
+  "required": [
+    "apiVersion",
+    "kind",
+    "orderedTrustLayers",
+    "layerDigests",
+    "classifications",
+    "redaction",
+    "tokenBudgets",
+    "policySnapshot",
+    "compiledAt"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "anvilkit.io/contracts/v1"
+    },
+    "kind": {
+      "const": "CompiledContext"
+    },
+    "orderedTrustLayers": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "minProperties": 6,
+        "maxProperties": 6,
+        "required": [
+          "layerId",
+          "position",
+          "digest",
+          "classification",
+          "redacted",
+          "tokenBudget"
+        ],
+        "properties": {
+          "layerId": {
+            "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/OpaqueId"
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1023
+          },
+          "digest": {
+            "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Digest"
+          },
+          "classification": {
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ]
+          },
+          "redacted": {
+            "type": "boolean"
+          },
+          "tokenBudget": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "layerDigests": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Digest"
+      }
+    },
+    "classifications": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": {
+        "enum": [
+          "public",
+          "internal",
+          "confidential",
+          "restricted"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "redaction": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "policy",
+        "removedFieldCount",
+        "replacementMarker"
+      ],
+      "properties": {
+        "policy": {
+          "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/PolicyReference"
+        },
+        "removedFieldCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "replacementMarker": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "additionalProperties": false
+    },
+    "tokenBudgets": {
+      "type": "object",
+      "minProperties": 5,
+      "maxProperties": 5,
+      "required": [
+        "total",
+        "system",
+        "user",
+        "tools",
+        "memory"
+      ],
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "system": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "user": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "tools": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "memory": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "policySnapshot": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/PolicyReference"
+    },
+    "compiledAt": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Timestamp"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "CompiledContextV1",
+    "semanticVersion": "1.0.0",
+    "componentName": "anvilkit.contract.schema.compiled-context.v1",
+    "owner": "Agent Service Context Compiler owner",
+    "stability": "p0-freeze-candidate",
+    "identityFields": [
+      "/orderedTrustLayers",
+      "/layerDigests",
+      "/classifications",
+      "/redaction",
+      "/tokenBudgets",
+      "/policySnapshot"
+    ],
+    "maximumSerializedBytes": 262144,
+    "compatibilityPolicy": "frozen-major",
+    "descriptions": [
+      "contracts/openapi/v1/agent-service.openapi.json"
+    ]
+  }
+}

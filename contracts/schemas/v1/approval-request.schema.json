@@ -1,0 +1,147 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/schemas/v1/approval-request.schema.json",
+  "title": "ApprovalRequestV1 contract",
+  "description": "Bounded ApprovalRequestV1 wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 12,
+  "maxProperties": 12,
+  "required": [
+    "apiVersion",
+    "kind",
+    "requestId",
+    "runId",
+    "actionDigest",
+    "effects",
+    "cost",
+    "allowedDecisions",
+    "expiresAt",
+    "resumeState",
+    "reviewerPolicy",
+    "decisionVersion"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "anvilkit.io/contracts/v1"
+    },
+    "kind": {
+      "const": "ApprovalRequest"
+    },
+    "requestId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/RequestId"
+    },
+    "runId": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/RunId"
+    },
+    "actionDigest": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Digest"
+    },
+    "effects": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "effectType",
+          "target",
+          "summary"
+        ],
+        "properties": {
+          "effectType": {
+            "enum": [
+              "artifact-finalize",
+              "page-persist",
+              "asset-finalize",
+              "component-apply",
+              "package-publish"
+            ]
+          },
+          "target": {
+            "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/TargetReference"
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "cost": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Cost"
+    },
+    "allowedDecisions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "enum": [
+          "approve",
+          "reject",
+          "request-changes"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "expiresAt": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/Timestamp"
+    },
+    "resumeState": {
+      "enum": [
+        "created",
+        "preparing",
+        "planning",
+        "awaiting_input",
+        "executing",
+        "validating",
+        "awaiting_review",
+        "awaiting_approval",
+        "committing",
+        "awaiting_domain_confirmation",
+        "conflict",
+        "cancelling",
+        "failed",
+        "completed",
+        "cancelled",
+        "refused",
+        "discarded"
+      ]
+    },
+    "reviewerPolicy": {
+      "$ref": "anvilkit://schema/shared-primitives.v1@1.0.0?digest=sha256:de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592#/$defs/PolicyReference"
+    },
+    "decisionVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ApprovalRequestV1",
+    "semanticVersion": "1.0.0",
+    "componentName": "anvilkit.contract.schema.approval-request.v1",
+    "owner": "Agent Service Workflow owner",
+    "stability": "p0-freeze-candidate",
+    "identityFields": [
+      "/actionDigest",
+      "/effects",
+      "/cost",
+      "/allowedDecisions",
+      "/expiresAt",
+      "/resumeState",
+      "/reviewerPolicy",
+      "/decisionVersion"
+    ],
+    "maximumSerializedBytes": 65536,
+    "compatibilityPolicy": "frozen-major",
+    "descriptions": [
+      "contracts/openapi/v1/agent-service.openapi.json",
+      "contracts/asyncapi/v1/agent-events.asyncapi.json"
+    ]
+  }
+}
