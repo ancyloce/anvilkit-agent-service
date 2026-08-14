@@ -9,6 +9,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 )
 
 type KeyResolver interface {
@@ -79,6 +81,9 @@ func (v *JWSVerifier) Verify(ctx context.Context, compact string) (Claims, error
 }
 
 func strictJSON(raw []byte, target any) error {
+	if _, err := contractvalidator.Admit(raw); err != nil {
+		return fmt.Errorf("strict JSON admission: %w", err)
+	}
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {

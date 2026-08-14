@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 )
 
 type FileRegistry struct{ path string }
@@ -73,6 +75,9 @@ func (r *FileRegistry) load() (registryFile, error) {
 	raw, err := os.ReadFile(r.path)
 	if err != nil {
 		return registryFile{}, fmt.Errorf("read trust registry: %w", err)
+	}
+	if _, err := contractvalidator.Admit(raw); err != nil {
+		return registryFile{}, fmt.Errorf("admit trust registry: %w", err)
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.DisallowUnknownFields()

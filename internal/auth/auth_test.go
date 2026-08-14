@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,14 +35,20 @@ func TestScopeByOperationAndWrongAudienceFailClosed(t *testing.T) {
 	validator, _ := NewValidator(Config{Issuers: []string{"issuer"}, Audience: "agent-service", MaximumClockSkew: time.Second}, trust, fixedClock{now})
 	base := Claims{Verified: true, Source: SourceDelegated, Issuer: "issuer", Audience: "agent-service", Subject: "workload", ActorID: "actor", TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent-run", KeyID: "key", Scopes: []string{ScopeRead, ScopeWrite, ScopeReviewer, ScopeIssuer}, ExpiresAt: now.Add(time.Minute), NotBefore: now.Add(-time.Minute)}
 	for _, operation := range ProtectedOperations() {
-		claims := base
-		claims.Scopes = RequiredScopes(operation)
-		if _, err := validator.Authorize(context.Background(), claims, operation); err != nil {
-			t.Fatalf("operation %s rejected: %v", operation, err)
+		for _, candidate := range []string{ScopeRead, ScopeWrite, ScopeReviewer, ScopeIssuer, "wrong"} {
+			claims := base
+			claims.Scopes = []string{candidate}
+			_, err := validator.Authorize(context.Background(), claims, operation)
+			allowed := candidate == RequiredScopes(operation)[0]
+			if allowed && err != nil {
+				t.Fatalf("operation %s rejected required scope %s: %v", operation, candidate, err)
+			}
+			if !allowed {
+				assertCode(t, err, problem.CodeAuthorizationDenied)
+			}
 		}
-		claims.Scopes = []string{"wrong"}
-		assertCode(t, validator.Revalidate(context.Background(), claims, operation), problem.CodeAuthorizationDenied)
 	}
+	assertCode(t, validator.Revalidate(context.Background(), base, Operation("unknown")), problem.CodeAuthorizationDenied)
 	wrongAudience := base
 	wrongAudience.Audience = "browser"
 	assertCode(t, validator.Revalidate(context.Background(), wrongAudience, OpGetRun), problem.CodeAuthenticationInvalid)
@@ -52,7 +59,7 @@ func TestIssuerSubjectDelegationTimeAndTrustMatrix(t *testing.T) {
 	baseTrust := &mutableTrust{true, true, true}
 	validator, _ := NewValidator(Config{Issuers: []string{"issuer"}, Audience: "agent-service", MaximumClockSkew: time.Second}, baseTrust, fixedClock{now})
 	base := Claims{Verified: true, Source: SourceDelegated, Issuer: "issuer", Audience: "agent-service", Subject: "workload", ActorID: "actor", TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", Purpose: "purpose", KeyID: "key", Scopes: []string{ScopeRead}, ExpiresAt: now.Add(time.Minute), NotBefore: now.Add(-time.Minute)}
-	cases := []Claims{func() Claims { c := base; c.Verified = false; return c }(), func() Claims { c := base; c.Source = SourceBrowser; return c }(), func() Claims { c := base; c.Issuer = "wrong"; return c }(), func() Claims { c := base; c.Subject = ""; return c }(), func() Claims { c := base; c.ExpiresAt = now.Add(-time.Minute); return c }(), func() Claims { c := base; c.NotBefore = now.Add(time.Minute); return c }()}
+	cases := []Claims{func() Claims { c := base; c.Verified = false; return c }(), func() Claims { c := base; c.Source = SourceBrowser; return c }(), func() Claims { c := base; c.Issuer = "wrong"; return c }(), func() Claims { c := base; c.Subject = ""; return c }(), func() Claims { c := base; c.WorkspaceID = strings.Repeat("w", 129); return c }(), func() Claims { c := base; c.Purpose = strings.Repeat("p", 257); return c }(), func() Claims { c := base; c.ExpiresAt = now.Add(-time.Minute); return c }(), func() Claims { c := base; c.NotBefore = now.Add(time.Minute); return c }()}
 	for index, claims := range cases {
 		if _, err := validator.Authorize(context.Background(), claims, OpGetRun); err == nil {
 			t.Fatalf("case %d accepted", index)

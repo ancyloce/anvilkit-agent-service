@@ -52,6 +52,17 @@ func TestJWSVerifierRejectsAlgorithmAndUnknownFields(t *testing.T) {
 		t.Fatal("unknown signed claim accepted")
 	}
 }
+
+func TestJWSVerifierRejectsDuplicateAuthoritativeClaims(t *testing.T) {
+	public, private, _ := ed25519.GenerateKey(rand.Reader)
+	verifier, _ := NewJWSVerifier(keys{"key": public})
+	header := encodeJSON(t, protectedHeader{Algorithm: "EdDSA", KeyID: "key", Type: "JWT"})
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"trusted","iss":"attacker"}`))
+	signature := ed25519.Sign(private, []byte(header+"."+payload))
+	if _, err := verifier.Verify(context.Background(), header+"."+payload+"."+base64.RawURLEncoding.EncodeToString(signature)); err == nil {
+		t.Fatal("duplicate signed authority claim accepted")
+	}
+}
 func signToken(t *testing.T, private ed25519.PrivateKey, header protectedHeader, claims tokenClaims) string {
 	t.Helper()
 	encodedHeader, encodedPayload := encodeJSON(t, header), encodeJSON(t, claims)

@@ -39,3 +39,15 @@ func TestFileRegistryReloadsRevocationState(t *testing.T) {
 		t.Fatalf("revocation was not reloaded: active=%v err=%v", active, err)
 	}
 }
+
+func TestFileRegistryRejectsDuplicateTrustState(t *testing.T) {
+	public, _, _ := ed25519.GenerateKey(rand.Reader)
+	path := filepath.Join(t.TempDir(), "trust.json")
+	raw := []byte(fmt.Sprintf(`{"keys":{"key-1":{"publicKey":%q,"status":"active","status":"revoked"}},"subjects":{},"delegations":{}}`, base64.RawURLEncoding.EncodeToString(public)))
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewFileRegistry(path); err == nil {
+		t.Fatal("ambiguous trust registry was accepted")
+	}
+}

@@ -93,8 +93,17 @@ func (v *Validator) Authorize(ctx context.Context, claims Claims, operation Oper
 	if !claims.Verified || claims.Source == SourceBrowser || (claims.Source != SourceWorkload && claims.Source != SourceDelegated) {
 		return runs.Scope{}, authProblem(problem.CodeAuthenticationInvalid)
 	}
-	if !contains(v.config.Issuers, claims.Issuer) || claims.Audience != v.config.Audience || claims.Subject == "" || claims.ActorID == "" || claims.TenantID == "" || claims.WorkspaceID == "" || claims.ProjectID == "" || claims.Purpose == "" || claims.KeyID == "" {
+	if !contains(v.config.Issuers, claims.Issuer) || claims.Audience != v.config.Audience || !boundedClaim(claims.Issuer) || !boundedClaim(claims.Audience) || !boundedClaim(claims.Subject) || !boundedClaim(claims.Purpose) || !boundedClaim(claims.KeyID) || len(claims.Scopes) > 64 {
 		return runs.Scope{}, authProblem(problem.CodeAuthenticationInvalid)
+	}
+	scope := runs.Scope{TenantID: claims.TenantID, WorkspaceID: claims.WorkspaceID, ProjectID: claims.ProjectID, ActorID: claims.ActorID}
+	if err := scope.Validate(); err != nil {
+		return runs.Scope{}, authProblem(problem.CodeAuthenticationInvalid)
+	}
+	for _, claimScope := range claims.Scopes {
+		if !boundedClaim(claimScope) {
+			return runs.Scope{}, authProblem(problem.CodeAuthenticationInvalid)
+		}
 	}
 	now := v.clock.Now()
 	if now.IsZero() || claims.ExpiresAt.IsZero() || !now.Before(claims.ExpiresAt.Add(v.config.MaximumClockSkew)) || now.Add(v.config.MaximumClockSkew).Before(claims.NotBefore) {
@@ -125,7 +134,7 @@ func (v *Validator) Authorize(ctx context.Context, claims Claims, operation Oper
 			return runs.Scope{}, authProblem(problem.CodeAuthorizationDenied)
 		}
 	}
-	return runs.Scope{TenantID: claims.TenantID, WorkspaceID: claims.WorkspaceID, ProjectID: claims.ProjectID, ActorID: claims.ActorID}, nil
+	return scope, nil
 }
 
 func (v *Validator) Revalidate(ctx context.Context, claims Claims, operation Operation) error {
@@ -150,3 +159,5 @@ func contains(values []string, target string) bool {
 	}
 	return false
 }
+
+func boundedClaim(value string) bool { return len(value) >= 1 && len(value) <= 256 }
