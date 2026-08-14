@@ -3,6 +3,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -141,7 +142,7 @@ func Load() (Config, error) {
 		ProviderPriority:     csv(os.Getenv("ANVILKIT_PROVIDER_PRIORITY")),
 		PolicySnapshot:       os.Getenv("ANVILKIT_POLICY_SNAPSHOT"),
 		CapabilitySnapshot:   os.Getenv("ANVILKIT_CAPABILITY_SNAPSHOT"),
-		ArtifactPolicy:       env("ANVILKIT_ARTIFACT_POLICY", "p0"),
+		ArtifactPolicy:       env("ANVILKIT_ARTIFACT_POLICY", "baseline"),
 		EgressAllowlist:      csv(os.Getenv("ANVILKIT_EGRESS_ALLOWLIST")),
 		SigningKey:           secret("ANVILKIT_SIGNING_KEY_REF", "ANVILKIT_SIGNING_KEY"),
 		EncryptionKey:        secret("ANVILKIT_ENCRYPTION_KEY_REF", "ANVILKIT_ENCRYPTION_KEY"),
@@ -239,7 +240,7 @@ func (c Config) Validate() error {
 	}
 	if c.FeatureGates["candidate-mutations"] {
 		if c.Environment == EnvironmentProduction {
-			return problem.InvalidConfiguration("ANVILKIT_FEATURE_GATES", "candidate mutations are forbidden in production while Gate D is open")
+			return problem.InvalidConfiguration("ANVILKIT_FEATURE_GATES", "candidate mutations are forbidden in production until the interaction contract is finalized")
 		}
 		for name, value := range map[string]string{"ANVILKIT_AUTH_TRUST_SNAPSHOT": c.AuthTrustSnapshot, "ANVILKIT_AUTH_ISSUERS": strings.Join(c.AuthIssuers, ","), "ANVILKIT_EVENTS_DATABASE_URL": c.EventsDatabase, "ANVILKIT_RUN_AUTHORITY_FILE": c.RunAuthorityFile} {
 			if value == "" {
@@ -259,6 +260,16 @@ func (c Config) Validate() error {
 		for name, target := range map[string]string{"ANVILKIT_AUTH_TRUST_SNAPSHOT": c.AuthTrustSnapshot, "ANVILKIT_AUTH_ISSUERS": strings.Join(c.AuthIssuers, ","), "ANVILKIT_MIGRATION_DATABASE_URL": c.MigrationDatabase, "ANVILKIT_CONTROL_DATABASE_URL": c.ControlDatabase, "ANVILKIT_WORKFLOW_DATABASE_URL": c.WorkflowDatabase, "ANVILKIT_EVENTS_DATABASE_URL": c.EventsDatabase, "ANVILKIT_ARTIFACTS_DATABASE_URL": c.ArtifactsDatabase, "ANVILKIT_EVALUATION_DATABASE_URL": c.EvaluationDatabase, "ANVILKIT_RECEIPT_JOURNAL_URL": c.ReceiptJournal.URL, "ANVILKIT_RECOVERY_REGISTER_URL": c.RecoveryRegister.URL, "ANVILKIT_AUTHORITATIVE_TIME_URL": c.AuthoritativeTime.URL, "ANVILKIT_PROTECTED_AUDIT_URL": c.ProtectedAudit.URL, "ANVILKIT_POLICY_SNAPSHOT": c.PolicySnapshot, "ANVILKIT_CAPABILITY_SNAPSHOT": c.CapabilitySnapshot} {
 			if target == "" {
 				return problem.InvalidConfiguration(name, "is required in production")
+			}
+		}
+		for name, target := range map[string]Endpoint{
+			"ANVILKIT_PAGIX": c.Pagix, "ANVILKIT_CONTRACT_RUNTIME": c.ContractRuntime,
+			"ANVILKIT_OBJECT_STORE": c.ObjectStore, "ANVILKIT_RECOVERY_REGISTER": c.RecoveryRegister,
+			"ANVILKIT_RECEIPT_JOURNAL": c.ReceiptJournal, "ANVILKIT_AUTHORITATIVE_TIME": c.AuthoritativeTime,
+			"ANVILKIT_PROTECTED_AUDIT": c.ProtectedAudit,
+		} {
+			if productionStandIn(target) {
+				return problem.InvalidConfiguration(name, "fake, mock, loopback, and local-development endpoints are forbidden in production")
 			}
 		}
 		if !c.SigningKey.Present() {
@@ -441,4 +452,25 @@ func validURL(value string) bool {
 	}
 	parsed, err := url.Parse(value)
 	return err == nil && parsed.Scheme != ""
+}
+
+func productionStandIn(endpoint Endpoint) bool {
+	trust := strings.ToLower(endpoint.TrustRef)
+	if strings.Contains(trust, "fake") || strings.Contains(trust, "mock") || strings.Contains(trust, "local-dev") {
+		return true
+	}
+	if endpoint.URL == "" {
+		return false
+	}
+	parsed, err := url.Parse(endpoint.URL)
+	if err != nil {
+		return true
+	}
+	host := strings.ToLower(parsed.Hostname())
+	target := host + strings.ToLower(parsed.EscapedPath())
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || strings.Contains(target, "fake") || strings.Contains(target, "mock") {
+		return true
+	}
+	address := net.ParseIP(host)
+	return address != nil && (address.IsLoopback() || address.IsUnspecified())
 }

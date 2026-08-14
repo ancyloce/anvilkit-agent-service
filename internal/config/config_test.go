@@ -56,6 +56,28 @@ func TestProductionRejectsFakeWorker(t *testing.T) {
 	}
 }
 
+func TestProductionEndpointCannotResolveToAStandIn(t *testing.T) {
+	for name, endpoint := range map[string]Endpoint{
+		"mock host":        {URL: "https://pagix-mock.example.test"},
+		"fake path":        {URL: "https://pagix.example.test/fake"},
+		"localhost":        {URL: "http://localhost:8080"},
+		"loopback":         {URL: "http://127.0.0.1:8080"},
+		"local domain":     {URL: "https://pagix.local"},
+		"stand-in trust":   {URL: "https://pagix.example.test", TrustRef: "spiffe://local-dev/pagix"},
+		"mock trust":       {URL: "https://pagix.example.test", TrustRef: "kms://mock-key"},
+		"unspecified host": {URL: "http://[::]:8080"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !productionStandIn(endpoint) {
+				t.Fatalf("production stand-in accepted: %#v", endpoint)
+			}
+		})
+	}
+	if productionStandIn(Endpoint{URL: "https://pagix.prod.example.com", TrustRef: "spiffe://anvilkit/pagix"}) {
+		t.Fatal("production endpoint was classified as a stand-in")
+	}
+}
+
 func TestFeatureGatesDefaultSafe(t *testing.T) {
 	cfg, err := Load()
 	if err != nil {
