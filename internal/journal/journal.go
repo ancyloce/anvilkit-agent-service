@@ -36,16 +36,25 @@ type Fact struct {
 	Projection                 []byte
 }
 
-func NewFact(id, workspaceID, projectID string, class FactClass, order uint64, canonical, projection []byte) (Fact, error) {
-	if id == "" || workspaceID == "" || projectID == "" || order == 0 || len(canonical) == 0 {
-		return Fact{}, fmt.Errorf("journal fact: identity, scope, order, and canonical bytes are required")
+func NewFact(id, workspaceID, projectID string, class FactClass, canonical, projection []byte) (Fact, error) {
+	if id == "" || workspaceID == "" || projectID == "" || !knownClass(class) || len(canonical) == 0 {
+		return Fact{}, fmt.Errorf("journal fact: identity, scope, known class, and canonical bytes are required")
 	}
 	digest := sha256.Sum256(canonical)
-	return Fact{ID: id, WorkspaceID: workspaceID, ProjectID: projectID, Class: class, OperationOrder: order, Canonical: append([]byte(nil), canonical...), Digest: digest, Projection: append([]byte(nil), projection...)}, nil
+	return Fact{ID: id, WorkspaceID: workspaceID, ProjectID: projectID, Class: class, Canonical: append([]byte(nil), canonical...), Digest: digest, Projection: append([]byte(nil), projection...)}, nil
+}
+
+func knownClass(class FactClass) bool {
+	for _, candidate := range Classes() {
+		if class == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 type Store interface {
-	Append(context.Context, Fact) error
+	Append(context.Context, Fact) (Fact, error)
 	List(context.Context) ([]Fact, error)
 	Check(context.Context) error
 }
@@ -59,10 +68,11 @@ func (c *Coordinator) Acknowledge(ctx context.Context, fact Fact, commit Commit)
 		return nil, fmt.Errorf("commit authority fact: %w", err)
 	}
 	fact.Projection = append([]byte(nil), projection...)
-	if err := c.store.Append(ctx, fact); err != nil {
+	retained, err := c.store.Append(ctx, fact)
+	if err != nil {
 		return nil, fmt.Errorf("authority fact remains unacknowledged: %w", err)
 	}
-	return projection, nil
+	return append([]byte(nil), retained.Projection...), nil
 }
 
 type ApplyResult string
@@ -83,7 +93,12 @@ func Reconstruct(ctx context.Context, store Store, target Reconstructor) (map[st
 	}
 	sort.Slice(facts, func(i, j int) bool { return facts[i].OperationOrder < facts[j].OperationOrder })
 	results := make(map[string]ApplyResult, len(facts))
+	var previous uint64
 	for _, fact := range facts {
+		if fact.OperationOrder == 0 || fact.OperationOrder <= previous || !knownClass(fact.Class) || sha256.Sum256(fact.Canonical) != fact.Digest {
+			return nil, fmt.Errorf("reconstruct fact %s: invalid retained envelope", fact.ID)
+		}
+		previous = fact.OperationOrder
 		outcome, err := target.Apply(ctx, fact)
 		if err != nil {
 			return nil, fmt.Errorf("reconstruct fact %s: %w", fact.ID, err)
@@ -100,6 +115,7 @@ type MemoryStore struct {
 	lock      sync.Mutex
 	available bool
 	facts     map[string]Fact
+	nextOrder uint64
 }
 
 func NewMemoryStore() *MemoryStore {
@@ -118,20 +134,22 @@ func (s *MemoryStore) Check(context.Context) error {
 	}
 	return nil
 }
-func (s *MemoryStore) Append(_ context.Context, fact Fact) error {
+func (s *MemoryStore) Append(_ context.Context, fact Fact) (Fact, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	if !s.available {
-		return fmt.Errorf("journal unavailable")
+		return Fact{}, fmt.Errorf("journal unavailable")
 	}
 	if existing, ok := s.facts[fact.ID]; ok {
-		if existing.Digest != fact.Digest || !bytes.Equal(existing.Projection, fact.Projection) {
-			return fmt.Errorf("journal conflict: fact identity reused with different bytes")
+		if existing.WorkspaceID != fact.WorkspaceID || existing.ProjectID != fact.ProjectID || existing.Class != fact.Class || existing.Digest != fact.Digest || !bytes.Equal(existing.Canonical, fact.Canonical) || !bytes.Equal(existing.Projection, fact.Projection) {
+			return Fact{}, fmt.Errorf("journal conflict: fact identity reused with different bytes")
 		}
-		return nil
+		return cloneFact(existing), nil
 	}
+	s.nextOrder++
+	fact.OperationOrder = s.nextOrder
 	s.facts[fact.ID] = fact
-	return nil
+	return cloneFact(fact), nil
 }
 func (s *MemoryStore) List(context.Context) ([]Fact, error) {
 	s.lock.Lock()
@@ -141,7 +159,13 @@ func (s *MemoryStore) List(context.Context) ([]Fact, error) {
 	}
 	result := make([]Fact, 0, len(s.facts))
 	for _, fact := range s.facts {
-		result = append(result, fact)
+		result = append(result, cloneFact(fact))
 	}
 	return result, nil
+}
+
+func cloneFact(fact Fact) Fact {
+	fact.Canonical = append([]byte(nil), fact.Canonical...)
+	fact.Projection = append([]byte(nil), fact.Projection...)
+	return fact
 }
