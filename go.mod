@@ -1,6 +1,6 @@
 module github.com/ancyloce/anvilkit-agent-service
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/dbos-inc/dbos-transact-golang v0.20.0
