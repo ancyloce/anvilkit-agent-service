@@ -107,7 +107,7 @@ func TestAccessEligibilityMatrixAndQuarantineRevokesOldGrant(t *testing.T) {
 				t.Fatalf("state=%s purpose=%s granted=%v", state, purpose, err == nil)
 			}
 			if err == nil {
-				if _, err := service.UseGrant(context.Background(), input.WorkspaceID, input.ProjectID, grant, artifactNow.Add(time.Minute)); err != nil {
+				if _, err := service.UseGrant(context.Background(), input.WorkspaceID, input.ProjectID, "actor-01", grant, artifactNow.Add(time.Minute)); err != nil {
 					t.Fatalf("eligible grant unusable: %v", err)
 				}
 			}
@@ -122,6 +122,9 @@ func TestAccessEligibilityMatrixAndQuarantineRevokesOldGrant(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := service.UseGrant(context.Background(), input.WorkspaceID, input.ProjectID, "actor-02", grant, artifactNow.Add(time.Second)); err == nil {
+		t.Fatal("actor-substituted grant succeeded")
+	}
 	quarantined, err := service.Transition(context.Background(), input.WorkspaceID, input.ProjectID, input.ID, record.Version, Quarantined, artifactNow.Add(time.Second))
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +132,7 @@ func TestAccessEligibilityMatrixAndQuarantineRevokesOldGrant(t *testing.T) {
 	if quarantined.SecurityGeneration == grant.SecurityGeneration {
 		t.Fatal("quarantine did not revoke grants")
 	}
-	if _, err := service.UseGrant(context.Background(), input.WorkspaceID, input.ProjectID, grant, artifactNow.Add(2*time.Second)); err == nil {
+	if _, err := service.UseGrant(context.Background(), input.WorkspaceID, input.ProjectID, "actor-01", grant, artifactNow.Add(2*time.Second)); err == nil {
 		t.Fatal("old grant survived quarantine")
 	}
 }
@@ -148,7 +151,7 @@ func TestAccessQuarantineRaceFailsClosedAfterRevocation(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			<-start
-			_, _ = service.UseGrant(context.Background(), input.WorkspaceID, input.ProjectID, grant, artifactNow.Add(time.Second))
+			_, _ = service.UseGrant(context.Background(), input.WorkspaceID, input.ProjectID, "actor-01", grant, artifactNow.Add(time.Second))
 		}()
 	}
 	close(start)
@@ -158,7 +161,7 @@ func TestAccessQuarantineRaceFailsClosedAfterRevocation(t *testing.T) {
 	}
 	wait.Wait()
 	for index := 0; index < 32; index++ {
-		if _, err := service.UseGrant(context.Background(), input.WorkspaceID, input.ProjectID, grant, artifactNow.Add(2*time.Second)); err == nil {
+		if _, err := service.UseGrant(context.Background(), input.WorkspaceID, input.ProjectID, "actor-01", grant, artifactNow.Add(2*time.Second)); err == nil {
 			t.Fatal("post-revocation access succeeded")
 		}
 	}

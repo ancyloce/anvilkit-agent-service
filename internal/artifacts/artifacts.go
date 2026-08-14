@@ -95,6 +95,7 @@ type Grant struct {
 	Digest             string
 	SecurityGeneration uint64
 	Purpose            Purpose
+	ActorID            string
 	URL                string
 	ExpiresAt          time.Time
 }
@@ -186,24 +187,29 @@ func (s *Service) Grant(ctx context.Context, workspace, project string, id ID, p
 	if !ok {
 		return Grant{}, problem.New(problem.CodeResourceNotFound, "")
 	}
-	if !eligible(value.State, purpose) || actor == "" {
+	if !eligible(value.State, purpose) || actor == "" || len(actor) > 128 || now.IsZero() || now.Before(value.CreatedAt) {
 		return Grant{}, problem.New(problem.CodeArtifactAccessDenied, "")
 	}
 	url, err := s.reader.SignRead(ctx, clone(value), s.grantTTL)
 	if err != nil {
 		return Grant{}, err
 	}
-	return Grant{value.ID, value.Digest, value.SecurityGeneration, purpose, url, now.Add(s.grantTTL)}, nil
-}
-func (s *Service) UseGrant(ctx context.Context, workspace, project string, grant Grant, now time.Time) (Record, error) {
-	value, err := s.Get(ctx, workspace, project, grant.ArtifactID)
-	if err != nil {
-		return Record{}, err
+	if url == "" {
+		return Grant{}, fmt.Errorf("artifact reader returned an empty signed URL")
 	}
-	if !now.Before(grant.ExpiresAt) || value.Digest != grant.Digest || value.SecurityGeneration != grant.SecurityGeneration || !eligible(value.State, grant.Purpose) {
+	return Grant{ArtifactID: value.ID, Digest: value.Digest, SecurityGeneration: value.SecurityGeneration, Purpose: purpose, ActorID: actor, URL: url, ExpiresAt: now.Add(s.grantTTL)}, nil
+}
+func (s *Service) UseGrant(_ context.Context, workspace, project, actor string, grant Grant, now time.Time) (Record, error) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	value, ok := s.records[key(workspace, project, grant.ArtifactID)]
+	if !ok {
+		return Record{}, problem.New(problem.CodeResourceNotFound, "")
+	}
+	if actor == "" || actor != grant.ActorID || now.IsZero() || !now.Before(grant.ExpiresAt) || now.Before(value.CreatedAt) || value.Digest != grant.Digest || value.SecurityGeneration != grant.SecurityGeneration || !eligible(value.State, grant.Purpose) {
 		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
 	}
-	return value, nil
+	return clone(value), nil
 }
 func (s *Service) SetLegalHold(_ context.Context, workspace, project string, id ID, expected uint64, hold bool, now time.Time) (Record, error) {
 	s.lock.Lock()
