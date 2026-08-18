@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
 )
 
@@ -36,15 +37,22 @@ func NewMonitor(repository Repository, alerts AlertSink, clock Clock, policies m
 }
 
 func (m *Monitor) Heartbeat(ctx context.Context, scope runs.Scope, id runs.ID, state runs.State) error {
-	return m.repository.RecordProgress(ctx, scope, id, state, m.clock.Now().UTC())
+	now := m.clock.Now().UTC()
+	if now.IsZero() {
+		return problem.New(problem.CodeAuthorityStale, "")
+	}
+	return m.repository.RecordProgress(ctx, scope, id, state, now)
 }
 
 func (m *Monitor) Scan(ctx context.Context) (int, error) {
+	now := m.clock.Now().UTC()
+	if now.IsZero() {
+		return 0, problem.New(problem.CodeAuthorityStale, "")
+	}
 	progress, err := m.repository.Progress(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("query run progress: %w", err)
 	}
-	now := m.clock.Now().UTC()
 	emitted := 0
 	for _, item := range progress {
 		policy, nonterminal := m.policies[item.State]

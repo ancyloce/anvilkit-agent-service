@@ -5,13 +5,16 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/idempotency"
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
@@ -67,7 +70,8 @@ func (s *Store) OpenInput(ctx context.Context, write interrupts.Write, request i
 	}
 	var value envelope
 	replay, err := s.execute(ctx, write, "request-input", digest, func(ctx context.Context, tx pgx.Tx) (any, error) {
-		if _, err := tx.Exec(ctx, `INSERT INTO agent_control.input_requests(workspace_id,project_id,run_id,request_id,request_version,run_version,question,response_schema,resume_checkpoint,expires_at,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, request.ID, request.Version, write.ExpectedVersion, request.Question, request.ResponseSchema, request.ResumeCheckpoint, request.ExpiresAt, request.CreatedAt); err != nil {
+		err := tx.QueryRow(ctx, `INSERT INTO agent_control.input_requests(workspace_id,project_id,run_id,request_id,request_version,run_version,question,response_schema,resume_checkpoint,expires_at,created_at) VALUES($1,$2,$3,$4,(SELECT COALESCE(MAX(request_version),0)+1 FROM agent_control.input_requests WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3),$5,$6,$7,$8,$9,$10) RETURNING request_version`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, request.ID, write.ExpectedVersion, request.Question, request.ResponseSchema, request.ResumeCheckpoint, request.ExpiresAt, request.CreatedAt).Scan(&request.Version)
+		if err != nil {
 			return nil, err
 		}
 		snapshot, err := s.transition(ctx, tx, write, runs.Command{Kind: runs.RequestInput, Traceparent: write.Traceparent}, request.CreatedAt)
@@ -145,7 +149,8 @@ func (s *Store) OpenApproval(ctx context.Context, write interrupts.Write, reques
 	}
 	var value envelope
 	replay, err := s.execute(ctx, write, "request-approval", digest, func(ctx context.Context, tx pgx.Tx) (any, error) {
-		if _, err := tx.Exec(ctx, `INSERT INTO agent_control.approval_requests(workspace_id,project_id,run_id,request_id,decision_version,run_version,action_digest,effects,expected_cost,reviewer_policy,resume_checkpoint,expires_at,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, request.ID, request.Version, write.ExpectedVersion, request.ActionDigest, request.Effects, request.ExpectedCost, request.ReviewerPolicy, request.ResumeCheckpoint, request.ExpiresAt, request.CreatedAt); err != nil {
+		err := tx.QueryRow(ctx, `INSERT INTO agent_control.approval_requests(workspace_id,project_id,run_id,request_id,decision_version,run_version,action_digest,effects,expected_cost,reviewer_policy,resume_checkpoint,expires_at,created_at) VALUES($1,$2,$3,$4,(SELECT COALESCE(MAX(decision_version),0)+1 FROM agent_control.approval_requests WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3),$5,$6,$7,$8,$9,$10,$11,$12) RETURNING decision_version`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, request.ID, write.ExpectedVersion, request.ActionDigest, request.Effects, request.ExpectedCost, request.ReviewerPolicy, request.ResumeCheckpoint, request.ExpiresAt, request.CreatedAt).Scan(&request.Version)
+		if err != nil {
 			return nil, err
 		}
 		snapshot, err := s.transition(ctx, tx, write, runs.Command{Kind: runs.RequestApproval, Traceparent: write.Traceparent}, request.CreatedAt)
@@ -373,7 +378,14 @@ func (s *Store) CreateChild(ctx context.Context, write interrupts.Write, child i
 			return nil, err
 		}
 		childWrite := interrupts.Write{Scope: write.Scope, RunID: child.RunID, Traceparent: write.Traceparent}
-		event, _ := json.Marshal(map[string]any{"apiVersion": "anvilkit.io/contracts/v1", "kind": "AgentEvent", "eventId": childSnapshot.LatestEventID, "runId": child.RunID, "rootRunId": child.RootRunID, "parentRunId": child.ParentRunID, "sequence": 1, "eventType": "run.created", "occurredAt": child.CreatedAt.UTC().Format(time.RFC3339Nano), "traceContext": map[string]string{"traceparent": write.Traceparent}, "payload": map[string]string{"state": string(runs.Created)}})
+		event, err := marshalEvent(childWrite, childSnapshot, 1, childSnapshot.LatestEventID, "run.created", map[string]string{
+			"parentRunId": string(child.ParentRunID),
+			"rootRunId":   string(child.RootRunID),
+			"state":       string(runs.Created),
+		}, child.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
 		if err := s.persistEvent(ctx, tx, childWrite, 1, childSnapshot.LatestEventID, event, child.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -583,7 +595,10 @@ func (s *Store) transition(ctx context.Context, tx pgx.Tx, write interrupts.Writ
 	if err != nil {
 		return runs.Snapshot{}, translate(err)
 	}
-	event, _ := json.Marshal(map[string]any{"apiVersion": "anvilkit.io/contracts/v1", "kind": "AgentEvent", "eventId": snapshot.LatestEventID, "runId": write.RunID, "sequence": sequence, "eventType": "run.state-changed", "occurredAt": now.UTC().Format(time.RFC3339Nano), "traceContext": map[string]string{"traceparent": write.Traceparent}, "payload": map[string]string{"previousState": string(transition.Previous), "state": string(transition.Current)}})
+	event, err := marshalEvent(write, snapshot, sequence, snapshot.LatestEventID, "run.state-changed", map[string]string{"previousState": string(transition.Previous), "state": string(transition.Current)}, now)
+	if err != nil {
+		return runs.Snapshot{}, err
+	}
 	if err := s.persistEvent(ctx, tx, write, sequence, snapshot.LatestEventID, event, now); err != nil {
 		return runs.Snapshot{}, err
 	}
@@ -605,16 +620,69 @@ func (s *Store) controlEvent(ctx context.Context, tx pgx.Tx, write interrupts.Wr
 		return err
 	}
 	id := fmt.Sprintf("%s:control:%d", write.RunID, sequence)
-	event, _ := json.Marshal(map[string]any{"apiVersion": "anvilkit.io/contracts/v1", "kind": "AgentEvent", "eventId": id, "runId": write.RunID, "sequence": sequence, "eventType": eventType, "occurredAt": now.UTC().Format(time.RFC3339Nano), "traceContext": map[string]string{"traceparent": write.Traceparent}})
+	wireEventType, err := wireTypeForControlEvent(eventType)
+	if err != nil {
+		return err
+	}
+	event, err := marshalEvent(write, snapshot, sequence, id, wireEventType, map[string]string{"controlType": eventType, "state": string(snapshot.Status)}, now)
+	if err != nil {
+		return err
+	}
 	return s.persistEvent(ctx, tx, write, sequence, id, event, now)
 }
 func (s *Store) persistEvent(ctx context.Context, tx pgx.Tx, write interrupts.Write, sequence uint64, id string, event []byte, now time.Time) error {
+	if err := events.ValidateEnvelope(event, events.DefaultBounds(), id, string(write.RunID), sequence); err != nil {
+		return fmt.Errorf("validate interrupt event: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, sequence, id, event, now); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,$5,'agent.events.v1',$6,$7)`, write.Scope.WorkspaceID, write.Scope.ProjectID, id, write.RunID, sequence, event, now)
 	return err
 }
+
+func wireTypeForControlEvent(eventType string) (string, error) {
+	switch eventType {
+	case "approval.decided", "run.cancellation-requested":
+		return "run.state-changed", nil
+	case "run.stuck":
+		return "run.problem-recorded", nil
+	default:
+		return "", fmt.Errorf("unsupported control event type %q", eventType)
+	}
+}
+
+func marshalEvent(write interrupts.Write, snapshot runs.Snapshot, sequence uint64, id, eventType string, payload map[string]string, now time.Time) ([]byte, error) {
+	switch eventType {
+	case "run.created", "run.state-changed", "run.input-requested", "run.approval-requested", "run.artifact-available", "run.problem-recorded":
+	default:
+		return nil, fmt.Errorf("unsupported agent event type %q", eventType)
+	}
+	envelope := map[string]any{
+		"apiVersion":           "anvilkit.io/contracts/v1",
+		"kind":                 "AgentEvent",
+		"eventId":              id,
+		"runId":                write.RunID,
+		"sequence":             sequence,
+		"eventType":            eventType,
+		"occurredAt":           contractTimestamp(now),
+		"traceContext":         map[string]string{"traceparent": write.Traceparent},
+		"contractBomReference": snapshot.ContractBOM,
+	}
+	if len(payload) != 0 {
+		envelope["payload"] = payload
+	}
+	event, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, fmt.Errorf("marshal interrupt event: %w", err)
+	}
+	return event, nil
+}
+
+func contractTimestamp(value time.Time) string {
+	return value.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
+}
+
 func decodeSnapshot(raw []byte, version uint64) (runs.Snapshot, error) {
 	var value runs.Snapshot
 	if err := json.Unmarshal(raw, &value); err != nil {
@@ -630,8 +698,12 @@ func interruptsProblem(code problem.Code, detail string) problem.Details {
 	return value
 }
 func translate(err error) error {
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return problem.New(problem.CodeResourceNotFound, "")
+	}
+	var postgresError *pgconn.PgError
+	if errors.As(err, &postgresError) && postgresError.Code == "23505" {
+		return problem.New(problem.CodeIdempotencyConflict, "")
 	}
 	text := err.Error()
 	if contains(text, "canonical digest") || contains(text, "version bound differs") {

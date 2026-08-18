@@ -97,6 +97,15 @@ func (r *MemoryRepository) OpenInput(_ context.Context, write Write, request Inp
 	if err != nil {
 		return InputRequest{}, OperationResult{}, err
 	}
+	request.Version = 0
+	for _, prior := range entry.inputs {
+		if prior.Version >= request.Version {
+			request.Version = prior.Version + 1
+		}
+	}
+	if request.Version == 0 {
+		request.Version = 1
+	}
 	entry.inputs[request.ID] = cloneInput(request)
 	r.advance(entry, snapshot, request.CreatedAt)
 	result := OperationResult{Snapshot: cloneSnapshot(snapshot)}
@@ -179,6 +188,15 @@ func (r *MemoryRepository) OpenApproval(_ context.Context, write Write, request 
 	snapshot, err := transition(entry.snapshot, runs.Command{Kind: runs.RequestApproval, Traceparent: write.Traceparent})
 	if err != nil {
 		return ApprovalRequest{}, OperationResult{}, err
+	}
+	request.Version = 0
+	for _, prior := range entry.approvals {
+		if prior.Version >= request.Version {
+			request.Version = prior.Version + 1
+		}
+	}
+	if request.Version == 0 {
+		request.Version = 1
 	}
 	entry.approvals[request.ID] = cloneApproval(request)
 	r.advance(entry, snapshot, request.CreatedAt)

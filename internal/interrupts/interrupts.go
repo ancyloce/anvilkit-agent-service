@@ -240,7 +240,15 @@ type CancellationReconciler interface {
 }
 
 type Reservation interface {
-	ReserveChild(context.Context, runs.Scope, runs.ID, runs.ID, ChildMode) error
+	ReserveChild(context.Context, ChildBudgetRequest) error
+}
+
+type ChildBudgetRequest struct {
+	Write       Write
+	ChildRunID  runs.ID
+	Mode        ChildMode
+	Digest      string
+	RequestedAt time.Time
 }
 
 type AlertSink interface {

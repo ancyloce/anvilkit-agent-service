@@ -147,10 +147,10 @@ type testReservation struct {
 	err   error
 }
 
-func (r *testReservation) ReserveChild(_ context.Context, _ runs.Scope, parent, child runs.ID, mode ChildMode) error {
+func (r *testReservation) ReserveChild(_ context.Context, request ChildBudgetRequest) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
-	r.calls = append(r.calls, fmt.Sprintf("%s:%s:%s", parent, child, mode))
+	r.calls = append(r.calls, fmt.Sprintf("%s:%s:%s", request.Write.RunID, request.ChildRunID, request.Mode))
 	return r.err
 }
 
@@ -162,6 +162,9 @@ func snapshot(id runs.ID, state runs.State, version uint64) runs.Snapshot {
 }
 func write(id runs.ID, version uint64, key string) Write {
 	return Write{Scope: scope(), RunID: id, ExpectedVersion: version, IdempotencyKey: key, Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"}
+}
+func reviewerPolicy() json.RawMessage {
+	return json.RawMessage(`{"policyId":"policy.reviewers","version":"v1","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)
 }
 
 func newTestService(t *testing.T, repository *MemoryRepository, clock *testClock, authority *testAuthority, reconciler *testReconciler, reservation *testReservation) (*Service, *testRuntime, *testLeases) {
@@ -281,12 +284,32 @@ func TestInputResponseConflictCodesAndExpiryNeverInventOutcome(t *testing.T) {
 	}
 }
 
+func TestSequentialInputRequestsReceiveMonotonicVersions(t *testing.T) {
+	repository := NewMemoryRepository()
+	_ = repository.Seed(scope(), snapshot("run", runs.Planning, 1))
+	clock := &testClock{now: testNow}
+	service, _, _ := newTestService(t, repository, clock, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
+	schema := json.RawMessage(`{"type":"object","required":["answer"],"properties":{"answer":{"type":"string"}},"additionalProperties":false}`)
+	first, opened, err := service.RequestInput(context.Background(), write("run", 1, "open-1"), OpenInput{Question: "first", ResponseSchema: schema, ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "planning:first"})
+	if err != nil || first.Version != 1 {
+		t.Fatalf("first request = %#v, %v", first, err)
+	}
+	responded, err := service.RespondInput(context.Background(), write("run", opened.Snapshot.Version, "respond-1"), InputResponseCommand{RequestID: first.ID, RequestVersion: first.Version, Value: json.RawMessage(`{"answer":"one"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := service.RequestInput(context.Background(), write("run", responded.Snapshot.Version, "open-2"), OpenInput{Question: "second", ResponseSchema: schema, ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "planning:second"})
+	if err != nil || second.Version != 2 {
+		t.Fatalf("second request = %#v, %v; want version 2", second, err)
+	}
+}
+
 func TestApprovalEvidenceIsImmutableAndCannotCommitWithoutM5Gateway(t *testing.T) {
 	repository := NewMemoryRepository()
 	_ = repository.Seed(scope(), snapshot("run", runs.AwaitingReview, 7))
 	clock := &testClock{now: testNow}
 	service, runtime, _ := newTestService(t, repository, clock, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
-	command := OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"kind":"page-apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: json.RawMessage(`{"scope":"agent:review"}`), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review:approved"}
+	command := OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"kind":"page-apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: reviewerPolicy(), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review:approved"}
 	request, opened, err := service.RequestApproval(context.Background(), write("run", 7, "open"), command)
 	if err != nil || opened.Snapshot.Status != runs.AwaitingApproval {
 		t.Fatalf("opened=%#v err=%v", opened, err)
@@ -316,7 +339,7 @@ func TestApprovalWaitSurvivesServiceReplacement(t *testing.T) {
 	clock := &testClock{now: testNow}
 	authority := &testAuthority{}
 	service, _, _ := newTestService(t, repository, clock, authority, &testReconciler{clear: true}, &testReservation{})
-	request, opened, err := service.RequestApproval(context.Background(), write("run", 7, "open-restart"), OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"kind":"page-apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: json.RawMessage(`{"scope":"agent:review"}`), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review:approved"})
+	request, opened, err := service.RequestApproval(context.Background(), write("run", 7, "open-restart"), OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"kind":"page-apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: reviewerPolicy(), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review:approved"})
 	if err != nil || opened.Snapshot.Status != runs.AwaitingApproval {
 		t.Fatalf("opened=%#v err=%v", opened, err)
 	}
@@ -333,7 +356,7 @@ func TestApprovalRejectAndChangeReturnToReview(t *testing.T) {
 			repository := NewMemoryRepository()
 			_ = repository.Seed(scope(), snapshot("run", runs.AwaitingReview, 1))
 			service, runtime, _ := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
-			request, opened, err := service.RequestApproval(context.Background(), write("run", 1, "open"), OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"effect":"apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: json.RawMessage(`{"reviewer":"required"}`), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review"})
+			request, opened, err := service.RequestApproval(context.Background(), write("run", 1, "open"), OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"effect":"apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: reviewerPolicy(), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -342,6 +365,55 @@ func TestApprovalRejectAndChangeReturnToReview(t *testing.T) {
 				t.Fatalf("decision=%s result=%#v resumed=%v err=%v", decision, result, runtime.resumed, err)
 			}
 		})
+	}
+}
+
+func TestApprovalReviewerPolicyMustBeAContractReference(t *testing.T) {
+	repository := NewMemoryRepository()
+	_ = repository.Seed(scope(), snapshot("run", runs.AwaitingReview, 1))
+	service, _, _ := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
+	_, _, err := service.RequestApproval(context.Background(), write("run", 1, "open"), OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"effect":"apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: json.RawMessage(`{"scope":"agent:review"}`), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review"})
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeRequestInvalid) {
+		t.Fatalf("invalid reviewer policy was accepted: %v", err)
+	}
+	current, currentErr := repository.Current(context.Background(), scope(), "run")
+	if currentErr != nil || current.Status != runs.AwaitingReview || current.Version != 1 {
+		t.Fatalf("invalid reviewer policy mutated run: %#v, %v", current, currentErr)
+	}
+}
+
+func TestSequentialApprovalRequestsReceiveMonotonicVersions(t *testing.T) {
+	repository := NewMemoryRepository()
+	_ = repository.Seed(scope(), snapshot("run", runs.AwaitingReview, 1))
+	service, _, _ := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
+	command := OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"effect":"apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: reviewerPolicy(), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review"}
+	first, opened, err := service.RequestApproval(context.Background(), write("run", 1, "open-1"), command)
+	if err != nil || first.Version != 1 {
+		t.Fatalf("first request = %#v, %v", first, err)
+	}
+	rejected, err := service.DecideApproval(context.Background(), write("run", opened.Snapshot.Version, "reject-1"), ApprovalDecisionCommand{RequestID: first.ID, RequestVersion: first.Version, Decision: DecisionReject})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := service.RequestApproval(context.Background(), write("run", rejected.Snapshot.Version, "open-2"), command)
+	if err != nil || second.Version != 2 {
+		t.Fatalf("second request = %#v, %v; want version 2", second, err)
+	}
+}
+
+func TestInterruptMutationsFailClosedWhenAuthorityClockIsUnavailable(t *testing.T) {
+	repository := NewMemoryRepository()
+	_ = repository.Seed(scope(), snapshot("run", runs.Planning, 1))
+	service, _, _ := newTestService(t, repository, &testClock{}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
+	_, _, err := service.RequestInput(context.Background(), write("run", 1, "open"), OpenInput{Question: "q", ResponseSchema: json.RawMessage(`{"type":"string"}`), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "planning"})
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeAuthorityStale) {
+		t.Fatalf("zero authority clock err = %v", err)
+	}
+	current, currentErr := repository.Current(context.Background(), scope(), "run")
+	if currentErr != nil || current.Status != runs.Planning || current.Version != 1 {
+		t.Fatalf("clock failure mutated run: %#v, %v", current, currentErr)
 	}
 }
 
@@ -363,7 +435,7 @@ func TestApprovalDecisionConflictFamiliesDoNotMutateWait(t *testing.T) {
 			_ = repository.Seed(scope(), snapshot("run", runs.AwaitingReview, 1))
 			clock, authority := &testClock{now: testNow}, &testAuthority{}
 			service, _, _ := newTestService(t, repository, clock, authority, &testReconciler{clear: true}, &testReservation{})
-			request, opened, err := service.RequestApproval(context.Background(), write("run", 1, "open"), OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"effect":"apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: json.RawMessage(`{"reviewer":"required"}`), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review"})
+			request, opened, err := service.RequestApproval(context.Background(), write("run", 1, "open"), OpenApproval{ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Effects: json.RawMessage(`{"effect":"apply"}`), ExpectedCost: json.RawMessage(`{"amount":"1"}`), ReviewerPolicy: reviewerPolicy(), ExpiresAt: testNow.Add(time.Hour), ResumeCheckpoint: "review"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -572,6 +644,26 @@ func TestChildrenInheritAuthorityEnforceBoundsAndGateFallbackReservation(t *test
 	// The two-child fanout is already full, so fallback still cannot dispatch.
 	if _, err = service.CreateChild(context.Background(), write("parent", 4, "fallback"), CreateChild{Mode: ChildFallback, PredecessorRunID: &predecessor}); err == nil {
 		t.Fatal("fallback bypassed fanout")
+	}
+}
+
+func TestChildBudgetDenialPreventsDurableCreationAndDispatch(t *testing.T) {
+	repository := NewMemoryRepository()
+	_ = repository.Seed(scope(), snapshot("parent", runs.Executing, 4))
+	denial := problem.New(problem.CodeBudgetDenied, "")
+	reservation := &testReservation{err: denial}
+	service, runtime, _ := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, reservation)
+	_, err := service.CreateChild(context.Background(), write("parent", 4, "budget-denied"), CreateChild{Mode: ChildRequired})
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeBudgetDenied) {
+		t.Fatalf("child budget denial err=%v", err)
+	}
+	if len(runtime.children) != 0 {
+		t.Fatalf("budget-denied child dispatched: %#v", runtime.children)
+	}
+	children, childrenErr := repository.Descendants(context.Background(), scope(), "parent")
+	if childrenErr != nil || len(children) != 0 {
+		t.Fatalf("budget-denied child persisted: %#v, %v", children, childrenErr)
 	}
 }
 

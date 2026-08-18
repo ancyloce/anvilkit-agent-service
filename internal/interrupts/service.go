@@ -45,6 +45,14 @@ func NewService(repository Repository, schema SchemaValidator, authority Authori
 	return &Service{repository: repository, schema: schema, authority: authority, runtime: runtime, leases: leases, reconciler: reconciler, reservation: reservation, receipts: receipts, clock: clock, ids: ids, limits: limits}, nil
 }
 
+func (s *Service) now() (time.Time, error) {
+	now := s.clock.Now().UTC()
+	if now.IsZero() {
+		return time.Time{}, problem.New(problem.CodeAuthorityStale, "")
+	}
+	return now, nil
+}
+
 type OpenInput struct {
 	Question, ResumeCheckpoint string
 	ResponseSchema             json.RawMessage
@@ -59,11 +67,14 @@ func (s *Service) RequestInput(ctx context.Context, write Write, command OpenInp
 	if err != nil {
 		return InputRequest{}, OperationResult{}, fmt.Errorf("allocate input request identity: %w", err)
 	}
-	now := s.clock.Now().UTC()
+	now, err := s.now()
+	if err != nil {
+		return InputRequest{}, OperationResult{}, err
+	}
 	if !now.Before(command.ExpiresAt) {
 		return InputRequest{}, OperationResult{}, stable(problem.CodeRequestInvalid, "input request expiry must be in the future")
 	}
-	request := InputRequest{ID: id, RunID: write.RunID, Version: 1, Question: command.Question, ResponseSchema: clone(command.ResponseSchema), ExpiresAt: command.ExpiresAt.UTC(), ResumeCheckpoint: command.ResumeCheckpoint, CreatedAt: now}
+	request := InputRequest{ID: id, RunID: write.RunID, Question: command.Question, ResponseSchema: clone(command.ResponseSchema), ExpiresAt: command.ExpiresAt.UTC(), ResumeCheckpoint: command.ResumeCheckpoint, CreatedAt: now}
 	digest, err := digestFor(write, command)
 	if err != nil {
 		return InputRequest{}, OperationResult{}, err
@@ -72,7 +83,7 @@ func (s *Service) RequestInput(ctx context.Context, write Write, command OpenInp
 	if err != nil {
 		return InputRequest{}, OperationResult{}, err
 	}
-	if err := s.runtime.OpenWait(ctx, write.Scope, inputWaitWorkflowID(write.RunID, stored.ID), inputTopic(stored.ID), stored.ExpiresAt.Sub(s.clock.Now())); err != nil {
+	if err := s.runtime.OpenWait(ctx, write.Scope, inputWaitWorkflowID(write.RunID, stored.ID), inputTopic(stored.ID), stored.ExpiresAt.Sub(now)); err != nil {
 		return InputRequest{}, OperationResult{}, fmt.Errorf("open durable input wait: %w", err)
 	}
 	return stored, result, nil
@@ -96,7 +107,11 @@ func (s *Service) RespondInput(ctx context.Context, write Write, command InputRe
 	if err := s.schema.Validate(ctx, request.ResponseSchema, command.Value); err != nil {
 		return OperationResult{}, stable(problem.CodeInputSchemaInvalid, "input response violates the recorded response schema")
 	}
-	result, err := s.repository.AcceptInput(ctx, write, command, digest, s.clock.Now().UTC())
+	now, err := s.now()
+	if err != nil {
+		return OperationResult{}, err
+	}
+	result, err := s.repository.AcceptInput(ctx, write, command, digest, now)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -123,15 +138,21 @@ func (s *Service) RequestApproval(ctx context.Context, write Write, command Open
 	if !validDigest(command.ActionDigest) || len(command.Effects) == 0 || len(command.ExpectedCost) == 0 || len(command.ReviewerPolicy) == 0 || command.ExpiresAt.IsZero() || command.ResumeCheckpoint == "" {
 		return ApprovalRequest{}, OperationResult{}, stable(problem.CodeRequestInvalid, "approval request evidence is incomplete")
 	}
+	if _, err := decodePolicyReference(command.ReviewerPolicy); err != nil {
+		return ApprovalRequest{}, OperationResult{}, stable(problem.CodeRequestInvalid, "approval reviewer policy is invalid")
+	}
 	id, err := s.ids.NewRequestID()
 	if err != nil {
 		return ApprovalRequest{}, OperationResult{}, fmt.Errorf("allocate approval request identity: %w", err)
 	}
-	now := s.clock.Now().UTC()
+	now, err := s.now()
+	if err != nil {
+		return ApprovalRequest{}, OperationResult{}, err
+	}
 	if !now.Before(command.ExpiresAt) {
 		return ApprovalRequest{}, OperationResult{}, stable(problem.CodeRequestInvalid, "approval request expiry must be in the future")
 	}
-	request := ApprovalRequest{ID: id, RunID: write.RunID, Version: 1, ActionDigest: command.ActionDigest, Effects: clone(command.Effects), ExpectedCost: clone(command.ExpectedCost), ReviewerPolicy: clone(command.ReviewerPolicy), ExpiresAt: command.ExpiresAt.UTC(), ResumeCheckpoint: command.ResumeCheckpoint, CreatedAt: now}
+	request := ApprovalRequest{ID: id, RunID: write.RunID, ActionDigest: command.ActionDigest, Effects: clone(command.Effects), ExpectedCost: clone(command.ExpectedCost), ReviewerPolicy: clone(command.ReviewerPolicy), ExpiresAt: command.ExpiresAt.UTC(), ResumeCheckpoint: command.ResumeCheckpoint, CreatedAt: now}
 	digest, err := digestValue(command)
 	if err != nil {
 		return ApprovalRequest{}, OperationResult{}, err
@@ -140,7 +161,7 @@ func (s *Service) RequestApproval(ctx context.Context, write Write, command Open
 	if err != nil {
 		return ApprovalRequest{}, OperationResult{}, err
 	}
-	if err := s.runtime.OpenWait(ctx, write.Scope, approvalWaitWorkflowID(write.RunID, stored.ID), approvalTopic(stored.ID), stored.ExpiresAt.Sub(s.clock.Now())); err != nil {
+	if err := s.runtime.OpenWait(ctx, write.Scope, approvalWaitWorkflowID(write.RunID, stored.ID), approvalTopic(stored.ID), stored.ExpiresAt.Sub(now)); err != nil {
 		return ApprovalRequest{}, OperationResult{}, fmt.Errorf("open durable approval wait: %w", err)
 	}
 	return stored, result, nil
@@ -161,7 +182,11 @@ func (s *Service) DecideApproval(ctx context.Context, write Write, command Appro
 	if err != nil {
 		return OperationResult{}, err
 	}
-	result, err := s.repository.DecideApproval(ctx, write, command, digest, s.clock.Now().UTC())
+	now, err := s.now()
+	if err != nil {
+		return OperationResult{}, err
+	}
+	result, err := s.repository.DecideApproval(ctx, write, command, digest, now)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -182,7 +207,11 @@ func (s *Service) DecideApproval(ctx context.Context, write Write, command Appro
 
 func (s *Service) Cancel(ctx context.Context, write Write) (OperationResult, error) {
 	digest, _ := digestFor(write, struct{}{})
-	cancellation, result, err := s.repository.RequestCancellation(ctx, write, digest, s.clock.Now().UTC())
+	now, err := s.now()
+	if err != nil {
+		return OperationResult{}, err
+	}
+	cancellation, result, err := s.repository.RequestCancellation(ctx, write, digest, now)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -338,11 +367,18 @@ func (s *Service) CreateChild(ctx context.Context, write Write, command CreateCh
 			return Child{}, stable(problem.CodeChildPredecessorIneligible, "fallback predecessor has not reached an eligible failure")
 		}
 	}
-	if err := s.reservation.ReserveChild(ctx, write.Scope, write.RunID, childID, command.Mode); err != nil {
+	digest, err := digestFor(write, command)
+	if err != nil {
+		return Child{}, err
+	}
+	now, err := s.now()
+	if err != nil {
+		return Child{}, err
+	}
+	if err := s.reservation.ReserveChild(ctx, ChildBudgetRequest{Write: write, ChildRunID: childID, Mode: command.Mode, Digest: digest, RequestedAt: now}); err != nil {
 		return Child{}, fmt.Errorf("reserve root budget before child dispatch: %w", err)
 	}
-	child := Child{RunID: childID, ParentRunID: write.RunID, WorkspaceID: write.Scope.WorkspaceID, ProjectID: write.Scope.ProjectID, ActorID: write.Scope.ActorID, Mode: command.Mode, PredecessorRunID: command.PredecessorRunID, Depth: parentDepth + 1, CreatedAt: s.clock.Now().UTC()}
-	digest, _ := digestValue(command)
+	child := Child{RunID: childID, ParentRunID: write.RunID, WorkspaceID: write.Scope.WorkspaceID, ProjectID: write.Scope.ProjectID, ActorID: write.Scope.ActorID, Mode: command.Mode, PredecessorRunID: command.PredecessorRunID, Depth: parentDepth + 1, CreatedAt: now}
 	created, err := s.repository.CreateChild(ctx, write, child, digest)
 	if err != nil {
 		return Child{}, err
