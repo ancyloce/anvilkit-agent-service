@@ -194,13 +194,6 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 		return runs.Snapshot{}, err
 	}
 	traceparent := command.Traceparent
-	eventBytes, err := json.Marshal(map[string]any{"apiVersion": "anvilkit.io/contracts/v1", "kind": "AgentEvent", "eventId": snapshot.LatestEventID, "runId": id, "sequence": updated.Version, "eventType": "run.state-changed", "occurredAt": contractTimestamp(snapshot.UpdatedAt), "traceContext": map[string]string{"traceparent": traceparent}, "contractBomReference": snapshot.ContractBOM, "payload": map[string]string{"previousState": string(transition.Previous), "state": string(transition.Current)}})
-	if err != nil {
-		return runs.Snapshot{}, fmt.Errorf("marshal run transition event: %w", err)
-	}
-	if err := events.ValidateEnvelope(eventBytes, s.eventBounds, snapshot.LatestEventID, string(id), updated.Version); err != nil {
-		return runs.Snapshot{}, fmt.Errorf("validate run transition event: %w", err)
-	}
 	var sequence uint64
 	err = tx.QueryRow(ctx, `UPDATE agent_control.agent_runs SET state=$4,version=$5,execution_generation=$6,next_event_sequence=next_event_sequence+1,snapshot=$7,updated_at=$8 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND version=$9 RETURNING next_event_sequence-1`, scope.WorkspaceID, scope.ProjectID, id, updated.State, updated.Version, updated.ExecutionGeneration, updatedBytes, snapshot.UpdatedAt, expectedVersion).Scan(&sequence)
 	if err != nil {
@@ -211,6 +204,13 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 	}
 	if err := s.fail(AfterRunWrite); err != nil {
 		return runs.Snapshot{}, err
+	}
+	eventBytes, err := json.Marshal(map[string]any{"apiVersion": "anvilkit.io/contracts/v1", "kind": "AgentEvent", "eventId": snapshot.LatestEventID, "runId": id, "sequence": sequence, "eventType": "run.state-changed", "occurredAt": contractTimestamp(snapshot.UpdatedAt), "traceContext": map[string]string{"traceparent": traceparent}, "contractBomReference": snapshot.ContractBOM, "payload": map[string]string{"previousState": string(transition.Previous), "state": string(transition.Current)}})
+	if err != nil {
+		return runs.Snapshot{}, fmt.Errorf("marshal run transition event: %w", err)
+	}
+	if err := events.ValidateEnvelope(eventBytes, s.eventBounds, snapshot.LatestEventID, string(id), sequence); err != nil {
+		return runs.Snapshot{}, fmt.Errorf("validate run transition event: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, scope.WorkspaceID, scope.ProjectID, id, sequence, snapshot.LatestEventID, eventBytes, snapshot.UpdatedAt); err != nil {
 		return runs.Snapshot{}, err

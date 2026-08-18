@@ -224,6 +224,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CreateOutcome,
 		return CreateOutcome{}, fmt.Errorf("allocate run identity: generated identity violates the bounded run/event contract")
 	}
 	now := s.clock.Now().UTC()
+	if now.IsZero() {
+		return CreateOutcome{}, problem.New(problem.CodeAuthorityStale, "")
+	}
 	snapshot := Snapshot{APIVersion: "anvilkit.io/contracts/v1", Kind: "AgentRun", RunID: runID, RootRunID: runID, TenantID: input.Scope.TenantID, WorkspaceID: input.Scope.WorkspaceID, ActorID: input.Scope.ActorID, Domain: request.Domain, Operation: request.Operation, Target: Target{Type: request.Target.Type, ID: request.Target.ID, WorkspaceID: input.Scope.WorkspaceID}, ContractBOM: append(json.RawMessage(nil), input.Authority.ContractBOM...), Policy: append(json.RawMessage(nil), input.Authority.Policy...), Budget: append(json.RawMessage(nil), input.Authority.Budget...), Idempotency: IdempotencyProjection{Scope: input.Scope.WorkspaceID + ":create-run", Key: input.Key, CanonicalRequestDigest: digest}, Status: Created, Version: 1, ExecutionGeneration: 1, LatestEventID: string(runID) + ":1", CreatedAt: now, UpdatedAt: now}
 	outcome, err := s.store.Create(ctx, CreateRecord{Scope: input.Scope, Key: input.Key, Digest: digest, Traceparent: input.Traceparent, Snapshot: snapshot})
 	if err != nil {
