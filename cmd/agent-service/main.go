@@ -31,9 +31,12 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/lifecycle"
 	lifecyclepg "github.com/ancyloce/anvilkit-agent-service/internal/lifecycle/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/persistence"
+	"github.com/ancyloce/anvilkit-agent-service/internal/queue"
+	queuepg "github.com/ancyloce/anvilkit-agent-service/internal/queue/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runapp"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
 	runpg "github.com/ancyloce/anvilkit-agent-service/internal/runs/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/securityaudit"
 	"github.com/ancyloce/anvilkit-agent-service/internal/telemetry"
 	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
 	workflowdbos "github.com/ancyloce/anvilkit-agent-service/internal/workflow/dbos"
@@ -97,15 +100,15 @@ func main() {
 		os.Exit(1)
 	}
 	defer pools.Close()
-	if pools.Control != nil {
-		_ = persistence.NewRunRepository(pools.Control)
+	outboxDispatcher, err := newOutboxDispatcher(pools)
+	if err != nil {
+		logger.Error("outbox dispatcher initialization failed", "error", err)
+		os.Exit(1)
 	}
-	if pools.Authority != nil {
-		_ = eventpg.New(pools.Authority, nil, guard, events.Bounds{MaximumBytes: cfg.Limits.EventBytes, MaximumFields: 32, MaximumFieldBytes: 512})
-		if _, err := idempotency.New(pools.Authority, idempotency.Config{Retention: 30 * 24 * time.Hour, MinimumLifetime: 30 * 24 * time.Hour}); err != nil {
-			logger.Error("idempotency initialization failed", "error", err)
-			os.Exit(1)
-		}
+	if outboxDispatcher != nil {
+		go outboxDispatcher.Run(ctx, 250*time.Millisecond, func(err error) {
+			logger.Error("outbox dispatch failed", "error", err)
+		})
 	}
 
 	if cfg.WorkflowDatabase == "" {
@@ -263,13 +266,23 @@ func endpointOrDevelopment(url string, environment config.Environment) lifecycle
 
 func openPersistencePools(ctx context.Context, cfg config.Config) (persistence.Pools, error) {
 	var pools persistence.Pools
+	if err := persistence.ValidateColocated(
+		persistence.DatabaseTarget{Name: "migration", URL: cfg.MigrationDatabase},
+		persistence.DatabaseTarget{Name: "control", URL: cfg.ControlDatabase},
+		persistence.DatabaseTarget{Name: "workflow", URL: cfg.WorkflowDatabase},
+		persistence.DatabaseTarget{Name: "events", URL: cfg.EventsDatabase},
+		persistence.DatabaseTarget{Name: "artifacts", URL: cfg.ArtifactsDatabase},
+		persistence.DatabaseTarget{Name: "evaluation", URL: cfg.EvaluationDatabase},
+	); err != nil {
+		return persistence.Pools{}, err
+	}
 	inputs := []struct {
 		target    **pgxpool.Pool
 		url, role string
 		maximum   int32
 	}{
 		{&pools.Control, cfg.ControlDatabase, "agent_control_rw", int32(cfg.ControlPoolSize)},
-		{&pools.Authority, cfg.EventsDatabase, "agent_authority_rw", int32(cfg.EventsPoolSize)},
+		{&pools.Authority, cfg.ControlDatabase, "agent_authority_rw", int32(cfg.ControlPoolSize)},
 		{&pools.Events, cfg.EventsDatabase, "agent_events_rw", int32(cfg.EventsPoolSize)},
 		{&pools.Workflow, cfg.WorkflowDatabase, "agent_workflow_rw", int32(cfg.WorkflowPoolSize)},
 		{&pools.Artifacts, cfg.ArtifactsDatabase, "agent_artifacts_rw", int32(cfg.ArtifactsPoolSize)},
@@ -289,6 +302,44 @@ func openPersistencePools(ctx context.Context, cfg config.Config) (persistence.P
 	return pools, nil
 }
 
+func newOutboxDispatcher(pools persistence.Pools) (*events.Dispatcher, error) {
+	if pools.Events == nil && pools.Authority == nil {
+		return nil, nil
+	}
+	if pools.Events == nil || pools.Authority == nil {
+		return nil, fmt.Errorf("outbox dispatch requires events and authority pools")
+	}
+	store, err := eventpg.NewOutboxStore(pools.Events)
+	if err != nil {
+		return nil, err
+	}
+	broker, err := queuepg.New(pools.Authority)
+	if err != nil {
+		return nil, err
+	}
+	return events.NewDispatcher(store, eventQueuePublisher{broker: broker}, 100)
+}
+
+type queueMessagePublisher interface {
+	Publish(context.Context, queue.Message) error
+}
+
+type eventQueuePublisher struct{ broker queueMessagePublisher }
+
+func (p eventQueuePublisher) Publish(ctx context.Context, message events.OutboxMessage) error {
+	return p.broker.Publish(ctx, queue.Message{
+		ID:          message.ID,
+		WorkspaceID: message.WorkspaceID,
+		ProjectID:   message.ProjectID,
+		RunID:       message.RunID,
+		TaskID:      "run-event",
+		Topic:       message.Topic,
+		Payload:     append([]byte(nil), message.Payload...),
+	})
+}
+
+var _ events.Publisher = eventQueuePublisher{}
+
 func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.Pools, runtime workflow.Runtime, receipts journal.Store, observability *telemetry.Telemetry, guard *contractguard.Guard) ([]api.Option, error) {
 	if pools.Authority == nil || cfg.AuthTrustSnapshot == "" {
 		return nil, nil
@@ -301,7 +352,11 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	if err != nil {
 		return nil, err
 	}
-	validator, err := auth.NewValidator(auth.Config{Issuers: cfg.AuthIssuers, Audience: cfg.AuthAudience, MaximumClockSkew: cfg.MaximumClockSkew}, registry, runapp.SystemClock{})
+	clock, err := applicationClock(cfg)
+	if err != nil {
+		return nil, err
+	}
+	validator, err := auth.NewValidator(auth.Config{Issuers: cfg.AuthIssuers, Audience: cfg.AuthAudience, MaximumClockSkew: cfg.MaximumClockSkew}, registry, clock)
 	if err != nil {
 		return nil, err
 	}
@@ -311,14 +366,13 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	}
 	eventBounds := events.Bounds{MaximumBytes: cfg.Limits.EventBytes, MaximumFields: 32, MaximumFieldBytes: 512}
 	runStore := runpg.NewConfigured(pools.Authority, idempotencyStore, eventBounds, nil)
-	runService := runs.NewService(runStore, runapp.NewRuntimeStarter(runtime), runapp.RandomIDs{}, runapp.SystemClock{}, receipts)
-	authority := runapp.StaticAuthority{}
+	runService := runs.NewService(runStore, runapp.NewRuntimeStarter(runtime), runapp.RandomIDs{}, clock, receipts)
+	var authority runapp.AuthorityProvider = runapp.StaticAuthority{}
 	if cfg.RunAuthorityFile != "" {
-		loaded, err := loadRunAuthority(cfg.RunAuthorityFile, guard)
+		authority, err = newFileRunAuthority(cfg.RunAuthorityFile, guard)
 		if err != nil {
 			return nil, err
 		}
-		authority.Value = loaded
 	}
 	reader := eventpg.NewReader(pools.Authority, guard, eventBounds)
 	application := runapp.New(validator, runService, reader, events.StreamConfig{Heartbeat: cfg.Limits.SSEHeartbeat, Revalidation: cfg.AuthRevalidation, ReplayLimit: 100, Bounds: eventBounds, Observer: observability}, authority)
@@ -326,7 +380,15 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	if err != nil {
 		return nil, err
 	}
-	interruptService, err := interrupts.NewService(interruptStore, interrupts.BoundSchemaValidator{}, currentInterruptAuthority{}, runtimeSignals{runtime}, workflowLeaseRevoker{pools.Workflow}, safeCancellationReconciler{}, rootBudgetReservation{pools.Authority}, receipts, runapp.SystemClock{}, runapp.RandomIDs{}, interrupts.Limits{ChildDepth: cfg.Limits.ChildDepth, ChildFanout: cfg.Limits.ChildFanout})
+	interruptAuthority, err := interrupts.NewCurrentAuthority(interruptStore, authority)
+	if err != nil {
+		return nil, err
+	}
+	childBudget, err := interruptpg.NewChildBudgetReservation(pools.Control, cfg.BudgetUnits, cfg.BudgetHeadroomMicros, cfg.RunTimeout)
+	if err != nil {
+		return nil, err
+	}
+	interruptService, err := interrupts.NewService(interruptStore, interrupts.BoundSchemaValidator{}, interruptAuthority, runtimeSignals{runtime}, workflowLeaseRevoker{pools.Workflow}, safeCancellationReconciler{}, childBudget, receipts, clock, runapp.RandomIDs{}, interrupts.Limits{ChildDepth: cfg.Limits.ChildDepth, ChildFanout: cfg.Limits.ChildFanout})
 	if err != nil {
 		return nil, err
 	}
@@ -335,7 +397,7 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	for _, state := range []runs.State{runs.Created, runs.Preparing, runs.Planning, runs.AwaitingInput, runs.Executing, runs.Validating, runs.AwaitingReview, runs.AwaitingApproval, runs.Committing, runs.AwaitingDomainConfirmation, runs.Conflict, runs.Cancelling, runs.Failed} {
 		policies[state] = interrupts.DwellPolicy{Deadline: cfg.DwellDeadline, Owner: "agent-service-oncall"}
 	}
-	monitor, err := interrupts.NewMonitor(interruptStore, operatorAlert{}, runapp.SystemClock{}, policies)
+	monitor, err := interrupts.NewMonitor(interruptStore, operatorAlert{}, clock, policies)
 	if err != nil {
 		return nil, err
 	}
@@ -347,22 +409,31 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	return options, nil
 }
 
-type currentInterruptAuthority struct{}
+type applicationTime interface{ Now() time.Time }
 
-func (currentInterruptAuthority) AuthorizeInput(context.Context, runs.Scope, interrupts.InputRequest) error {
-	return nil
-}
-func (currentInterruptAuthority) AuthorizeReviewer(context.Context, runs.Scope, interrupts.ApprovalRequest, interrupts.DecisionKind) error {
-	return nil
-}
-func (currentInterruptAuthority) RetryEligibility(_ context.Context, _ runs.Scope, snapshot runs.Snapshot) (bool, string, error) {
-	if snapshot.Status != runs.Failed {
-		return false, "", nil
+func applicationClock(cfg config.Config) (applicationTime, error) {
+	local := runapp.SystemClock{}
+	if cfg.AuthoritativeTime.URL == "" {
+		if cfg.Environment == config.EnvironmentProduction {
+			return nil, fmt.Errorf("authoritative time endpoint is required")
+		}
+		return local, nil
 	}
-	if snapshot.Problem != nil && (snapshot.Problem.Retryability == "safe-after-backoff" || snapshot.Problem.Retryability == "operator-action") {
-		return true, "preparing:authority", nil
+	client := &http.Client{
+		Timeout: 2 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
-	return false, "", nil
+	source, err := securityaudit.NewHTTPTimeSource(cfg.AuthoritativeTime.URL, client)
+	if err != nil {
+		return nil, err
+	}
+	authority, err := securityaudit.NewAuthoritativeClock(source, local, cfg.MaximumClockSkew)
+	if err != nil {
+		return nil, err
+	}
+	return securityaudit.FailClosedClock{Authority: authority}, nil
 }
 
 type runtimeSignals struct{ runtime workflow.Runtime }
@@ -413,22 +484,6 @@ func (safeCancellationReconciler) Reconcile(_ context.Context, _ runs.Scope, _ r
 	return !commit, nil, nil
 }
 
-type rootBudgetReservation struct{ pool *pgxpool.Pool }
-
-func (r rootBudgetReservation) ReserveChild(ctx context.Context, scope runs.Scope, parent, child runs.ID, _ interrupts.ChildMode) error {
-	if r.pool == nil {
-		return errors.New("root budget authority unavailable")
-	}
-	var present bool
-	if err := r.pool.QueryRow(ctx, `SELECT snapshot ? 'budget' FROM agent_control.agent_runs WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, parent).Scan(&present); err != nil {
-		return err
-	}
-	if !present {
-		return errors.New("root budget reservation is absent")
-	}
-	return nil
-}
-
 type operatorAlert struct{}
 
 func (operatorAlert) Alert(_ context.Context, kind string, scope runs.Scope, id runs.ID, state runs.State) error {
@@ -470,3 +525,24 @@ func loadRunAuthority(path string, guard *contractguard.Guard) (runs.Authority, 
 	}
 	return authority, nil
 }
+
+type fileRunAuthority struct {
+	path  string
+	guard *contractguard.Guard
+}
+
+func newFileRunAuthority(path string, guard *contractguard.Guard) (*fileRunAuthority, error) {
+	if path == "" || guard == nil {
+		return nil, fmt.Errorf("file run authority requires path and contract guard")
+	}
+	if _, err := loadRunAuthority(path, guard); err != nil {
+		return nil, err
+	}
+	return &fileRunAuthority{path: path, guard: guard}, nil
+}
+
+func (a *fileRunAuthority) Current(context.Context, runs.Scope) (runs.Authority, error) {
+	return loadRunAuthority(a.path, a.guard)
+}
+
+var _ runapp.AuthorityProvider = (*fileRunAuthority)(nil)
