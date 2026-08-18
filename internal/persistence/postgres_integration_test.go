@@ -762,6 +762,16 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if err != nil || !replayed.Replayed || replayed.Snapshot.Version != response.Snapshot.Version {
 		t.Fatalf("input replay=%#v err=%v", replayed, err)
 	}
+	secondWrite := interrupts.Write{Scope: scope, RunID: current.RunID, ExpectedVersion: response.Snapshot.Version, IdempotencyKey: "open-input-2", Traceparent: trace}
+	second, secondOpened, err := store.OpenInput(ctx, secondWrite, interrupts.InputRequest{ID: "input-2", RunID: current.RunID, Version: 99, Question: "second question", ResponseSchema: schema, ExpiresAt: now.Add(time.Hour), ResumeCheckpoint: "planning-2", CreatedAt: now}, "sha256:open-2")
+	if err != nil || second.Version != 2 || secondOpened.Snapshot.Status != runs.AwaitingInput {
+		t.Fatalf("second input=%#v result=%#v err=%v", second, secondOpened, err)
+	}
+	secondResponseWrite := interrupts.Write{Scope: scope, RunID: current.RunID, ExpectedVersion: secondOpened.Snapshot.Version, IdempotencyKey: "respond-input-2", Traceparent: trace}
+	secondResponse, err := store.AcceptInput(ctx, secondResponseWrite, interrupts.InputResponseCommand{RequestID: second.ID, RequestVersion: second.Version, Value: json.RawMessage(`{"answer":"again"}`)}, "sha256:response-2", now)
+	if err != nil || secondResponse.Snapshot.Status != runs.Planning {
+		t.Fatalf("second input response=%#v err=%v", secondResponse, err)
+	}
 	var eventCount, checkpointCount int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&eventCount); err != nil {
 		t.Fatal(err)
@@ -769,8 +779,59 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_workflow.checkpoints WHERE workspace_id=$1 AND project_id=$2 AND workflow_id=$3`, scope.WorkspaceID, scope.ProjectID, string(current.RunID)+":v1").Scan(&checkpointCount); err != nil {
 		t.Fatal(err)
 	}
-	if eventCount != 5 || checkpointCount != 5 {
+	if eventCount != 7 || checkpointCount != 7 {
 		t.Fatalf("atomic Control evidence events=%d checkpoints=%d", eventCount, checkpointCount)
+	}
+	outbox, err := eventpg.NewOutboxStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher := &eventPublisherCapture{}
+	if _, err := outbox.DispatchReady(ctx, publisher, 1000); err != nil {
+		t.Fatal(err)
+	}
+	var publishedCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.outbox WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND published_at IS NOT NULL`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&publishedCount); err != nil || publishedCount != 7 {
+		t.Fatalf("published outbox count=%d err=%v", publishedCount, err)
+	}
+	if len(publisher.messages) < publishedCount {
+		t.Fatalf("publisher received %d messages, want at least %d", len(publisher.messages), publishedCount)
+	}
+	childBudget, err := interruptpg.NewChildBudgetReservation(pool, 400_000_000, 1_000_000_000, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budgetRequest := interrupts.ChildBudgetRequest{Write: interrupts.Write{Scope: scope, RunID: current.RunID, ExpectedVersion: secondResponse.Snapshot.Version, IdempotencyKey: "reserve-child", Traceparent: trace}, ChildRunID: "budget-child-1", Mode: interrupts.ChildRequired, Digest: "sha256:" + strings.Repeat("a", 64), RequestedAt: now}
+	staleBudgetRequest := budgetRequest
+	staleBudgetRequest.Write.IdempotencyKey = "reserve-child-stale"
+	staleBudgetRequest.Write.ExpectedVersion--
+	var staleBudget problem.Details
+	if err := childBudget.ReserveChild(ctx, staleBudgetRequest); !errors.As(err, &staleBudget) || staleBudget.Code != string(problem.CodeVersionConflict) {
+		t.Fatalf("stale child budget reservation err=%v", err)
+	}
+	if err := childBudget.ReserveChild(ctx, budgetRequest); err != nil {
+		t.Fatalf("child budget reservation failed: %v", err)
+	}
+	budgetRequest.ChildRunID = "discarded-retry-id"
+	if err := childBudget.ReserveChild(ctx, budgetRequest); err != nil {
+		t.Fatalf("idempotent child budget replay failed: %v", err)
+	}
+	changed := budgetRequest
+	changed.Digest = "sha256:" + strings.Repeat("b", 64)
+	var conflict problem.Details
+	if err := childBudget.ReserveChild(ctx, changed); !errors.As(err, &conflict) || conflict.Code != string(problem.CodeIdempotencyConflict) {
+		t.Fatalf("changed child reservation replay err=%v", err)
+	}
+	exhausted := budgetRequest
+	exhausted.Write.IdempotencyKey = "reserve-child-exhausted"
+	exhausted.ChildRunID = "budget-child-2"
+	var denied problem.Details
+	if err := childBudget.ReserveChild(ctx, exhausted); !errors.As(err, &denied) || denied.Code != string(problem.CodeBudgetDenied) {
+		t.Fatalf("exhausted root budget err=%v", err)
+	}
+	var childReservations int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_control.budget_reservations WHERE workspace_id=$1 AND project_id=$2 AND root_run_id=$3 AND run_id LIKE 'budget-child-%'`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&childReservations); err != nil || childReservations != 1 {
+		t.Fatalf("child budget reservations=%d err=%v", childReservations, err)
 	}
 
 	progress, err := store.Progress(ctx)
@@ -795,7 +856,7 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if err := pool.QueryRow(ctx, `SELECT stuck_at FROM agent_control.run_progress WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&stuckAt); err != nil || stuckAt != nil {
 		t.Fatalf("failed stuck transaction left marker=%v err=%v", stuckAt, err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&eventCount); err != nil || eventCount != 5 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&eventCount); err != nil || eventCount != 7 {
 		t.Fatalf("failed stuck transaction leaked event count=%d err=%v", eventCount, err)
 	}
 	marked, err := store.MarkStuck(ctx, currentProgress, breachedAt, "agent-service-oncall")
@@ -810,12 +871,16 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_control.run_alerts WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND state=$4`, scope.WorkspaceID, scope.ProjectID, current.RunID, runs.Planning).Scan(&alertCount); err != nil || alertCount != 1 {
 		t.Fatalf("durable stuck alert count=%d err=%v", alertCount, err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&eventCount); err != nil || eventCount != 6 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&eventCount); err != nil || eventCount != 8 {
 		t.Fatalf("durable stuck event count=%d err=%v", eventCount, err)
 	}
 	afterStuck, err := store.Current(ctx, scope, current.RunID)
-	if err != nil || afterStuck.Status != runs.Planning || afterStuck.Version != response.Snapshot.Version {
+	if err != nil || afterStuck.Status != runs.Planning || afterStuck.Version != secondResponse.Snapshot.Version {
 		t.Fatalf("dwell breach invented outcome=%#v err=%v", afterStuck, err)
+	}
+	afterControlTransition, err := runService.Transition(ctx, scope, current.RunID, afterStuck.Version, runs.Command{Kind: runs.BeginExecution, Traceparent: trace})
+	if err != nil || afterControlTransition.Status != runs.Executing {
+		t.Fatalf("transition after control event=%#v err=%v", afterControlTransition, err)
 	}
 	staleCancel := interrupts.Write{Scope: scope, RunID: current.RunID, ExpectedVersion: afterStuck.Version - 1, IdempotencyKey: "stale-cancel", Traceparent: trace}
 	_, _, err = store.RequestCancellation(ctx, staleCancel, "sha256:stale-cancel", now)
@@ -823,7 +888,7 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if !errors.As(err, &staleDetails) || staleDetails.Code != string(problem.CodeVersionConflict) {
 		t.Fatalf("stale Control precondition err=%v", err)
 	}
-	cancelWrite := interrupts.Write{Scope: scope, RunID: current.RunID, ExpectedVersion: afterStuck.Version, IdempotencyKey: "cancel", Traceparent: trace}
+	cancelWrite := interrupts.Write{Scope: scope, RunID: current.RunID, ExpectedVersion: afterControlTransition.Version, IdempotencyKey: "cancel", Traceparent: trace}
 	cancellation, cancelling, err := store.RequestCancellation(ctx, cancelWrite, "sha256:cancel", now)
 	if err != nil || cancelling.Snapshot.Status != runs.Cancelling {
 		t.Fatalf("durable cancellation request=%#v cancellation=%#v err=%v", cancelling, cancellation, err)
@@ -852,6 +917,24 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if err != nil || !replayedFinish.Replayed || replayedFinish.Snapshot.Version != finished.Snapshot.Version {
 		t.Fatalf("reconciled cancellation replay=%#v err=%v", replayedFinish, err)
 	}
+	guard, err := contractguard.NewGuard("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replay, err := eventpg.NewReader(pool, guard).Replay(ctx, events.ReplayRequest{Scope: events.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID}, RunID: string(current.RunID), Limit: 100})
+	if err != nil || len(replay.Events) != 11 {
+		t.Fatalf("control event replay=%#v err=%v", replay, err)
+	}
+	if err := events.ValidateContiguous(replay.Events, 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type eventPublisherCapture struct{ messages []events.OutboxMessage }
+
+func (p *eventPublisherCapture) Publish(_ context.Context, message events.OutboxMessage) error {
+	p.messages = append(p.messages, message)
+	return nil
 }
 
 func assertDurableCreateLatency(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
