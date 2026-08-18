@@ -40,7 +40,13 @@ race tests, and the binary build. `make ci` adds a mandatory strict
 - The foundation memory schema intentionally has no tables or call sites.
 
 Production startup is fail-closed. It requires separate migration, control,
-workflow, events/authority, artifact, and evaluation database configuration;
+workflow, events, artifact, and evaluation pool configuration targeting the
+same Platform Postgres database (with separate schemas and roles);
 an independent receipt journal; recovery register; authoritative time;
 protected audit; signing capability; and pinned contract/policy material.
+The authoritative-time endpoint must answer `HEAD` with an RFC 7231 `Date`
+header. Event outbox rows are dispatched into the durable event queue and are
+marked published only after that idempotent handoff succeeds.
+`ANVILKIT_BUDGET_UNITS` is the per-child upper-bound reservation in currency
+micros; root contract headroom and `ANVILKIT_BUDGET_HEADROOM_MICROS` both cap it.
 Provider availability changes eligibility and is not base liveness.
