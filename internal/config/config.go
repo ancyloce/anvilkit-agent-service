@@ -91,7 +91,7 @@ type Config struct {
 	PolicySnapshot          string
 	CapabilitySnapshot      string
 	ArtifactPolicy          string
-	BudgetUnits             int64
+	BudgetUnits             int64 // per-child reservation upper bound in currency micros
 	BudgetHeadroomMicros    int64
 	BudgetReviewBasisPoints int
 	RunTimeout              time.Duration
@@ -242,7 +242,7 @@ func (c Config) Validate() error {
 		if c.Environment == EnvironmentProduction {
 			return problem.InvalidConfiguration("ANVILKIT_FEATURE_GATES", "candidate mutations are forbidden in production until the interaction contract is finalized")
 		}
-		for name, value := range map[string]string{"ANVILKIT_AUTH_TRUST_SNAPSHOT": c.AuthTrustSnapshot, "ANVILKIT_AUTH_ISSUERS": strings.Join(c.AuthIssuers, ","), "ANVILKIT_EVENTS_DATABASE_URL": c.EventsDatabase, "ANVILKIT_RUN_AUTHORITY_FILE": c.RunAuthorityFile} {
+		for name, value := range map[string]string{"ANVILKIT_AUTH_TRUST_SNAPSHOT": c.AuthTrustSnapshot, "ANVILKIT_AUTH_ISSUERS": strings.Join(c.AuthIssuers, ","), "ANVILKIT_CONTROL_DATABASE_URL": c.ControlDatabase, "ANVILKIT_EVENTS_DATABASE_URL": c.EventsDatabase, "ANVILKIT_RUN_AUTHORITY_FILE": c.RunAuthorityFile} {
 			if value == "" {
 				return problem.InvalidConfiguration(name, "is required when candidate mutations are enabled")
 			}

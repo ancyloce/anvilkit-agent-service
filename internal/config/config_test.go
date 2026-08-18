@@ -103,3 +103,16 @@ func TestCandidateMutationGateRequiresCompleteNonProductionAuthority(t *testing.
 		t.Fatalf("incomplete candidate mutation gate was accepted: %v", err)
 	}
 }
+
+func TestCandidateMutationGateRequiresControlDatabase(t *testing.T) {
+	t.Setenv("ANVILKIT_FEATURE_GATES", "candidate-mutations=true")
+	t.Setenv("ANVILKIT_AUTH_TRUST_SNAPSHOT", "trust.json")
+	t.Setenv("ANVILKIT_AUTH_ISSUERS", "https://issuer.example.com")
+	t.Setenv("ANVILKIT_EVENTS_DATABASE_URL", "postgres://events@db.example.com/anvilkit")
+	t.Setenv("ANVILKIT_RUN_AUTHORITY_FILE", "authority.json")
+	_, err := Load()
+	var details problem.Details
+	if !errors.As(err, &details) || details.Fields["ANVILKIT_CONTROL_DATABASE_URL"] == "" {
+		t.Fatalf("candidate mutations accepted without control authority database: %v", err)
+	}
+}
