@@ -35,7 +35,6 @@ type tokenClaims struct {
 	Audience    string   `json:"aud"`
 	Subject     string   `json:"sub"`
 	ActorID     string   `json:"actorId"`
-	TenantID    string   `json:"tenantId"`
 	WorkspaceID string   `json:"workspaceId"`
 	ProjectID   string   `json:"projectId"`
 	Purpose     string   `json:"purpose"`
@@ -77,7 +76,7 @@ func (v *JWSVerifier) Verify(ctx context.Context, compact string) (Claims, error
 	if err := strictJSON(payloadBytes, &token); err != nil {
 		return Claims{}, fmt.Errorf("verify JWS claims: %w", err)
 	}
-	return Claims{Verified: true, Source: token.Source, Issuer: token.Issuer, Audience: token.Audience, Subject: token.Subject, ActorID: token.ActorID, TenantID: token.TenantID, WorkspaceID: token.WorkspaceID, ProjectID: token.ProjectID, Purpose: token.Purpose, KeyID: header.KeyID, Scopes: append([]string(nil), token.Scopes...), ExpiresAt: time.Unix(token.ExpiresAt, 0), NotBefore: time.Unix(token.NotBefore, 0)}, nil
+	return Claims{Verified: true, Source: token.Source, Issuer: token.Issuer, Audience: token.Audience, Subject: token.Subject, ActorID: token.ActorID, WorkspaceID: token.WorkspaceID, ProjectID: token.ProjectID, Purpose: token.Purpose, KeyID: header.KeyID, Scopes: append([]string(nil), token.Scopes...), ExpiresAt: time.Unix(token.ExpiresAt, 0), NotBefore: time.Unix(token.NotBefore, 0)}, nil
 }
 
 func strictJSON(raw []byte, target any) error {

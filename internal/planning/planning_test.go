@@ -75,9 +75,9 @@ func request(scenario string) modelgateway.InvokeRequest {
 func corpusGuard(t *testing.T) (*toolpolicy.Guard, toolpolicy.Intent, toolpolicy.CurrentAuthority) {
 	t.Helper()
 	policy := toolpolicy.PolicyReference{PolicyID: "policy", Version: "p1", Digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
-	schema := toolpolicy.SchemaReference{ComponentName: "anvilkit.contract.schema.synthetic.v1", Version: "1.0.0", Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	schema := toolpolicy.SchemaReference{ComponentName: "anvilkit.contract.schema.synthetic", Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	definition := func(id, capability string) toolpolicy.Definition {
-		return toolpolicy.Definition{APIVersion: "anvilkit.io/contracts/v1", Kind: "ToolDefinition", Capability: capability, CapabilityVersion: capability + "/v1", InputSchema: schema, OutputSchema: schema, SideEffectClass: "none", RiskClass: "low", ApprovalPolicy: policy, TimeoutPolicy: toolpolicy.TimeoutPolicy{TimeoutMilliseconds: 1000}, RetryPolicy: toolpolicy.RetryPolicy{MaximumAttempts: 1, Retryability: []string{}}, AcceptedDataClasses: []string{"internal"}, ToolID: id}
+		return toolpolicy.Definition{Kind: "ToolDefinition", Capability: capability, InputSchema: schema, OutputSchema: schema, SideEffectClass: "none", RiskClass: "low", ApprovalPolicy: policy, TimeoutPolicy: toolpolicy.TimeoutPolicy{TimeoutMilliseconds: 1000}, RetryPolicy: toolpolicy.RetryPolicy{MaximumAttempts: 1, Retryability: []string{}}, AcceptedDataClasses: []string{"internal"}, ToolID: id}
 	}
 	profile, err := toolpolicy.NewProfile("manager", "v1", policy, []toolpolicy.Definition{definition("fake.execute", "fake.execute"), definition("contract.validate", "contract.validate"), definition("artifact.scan", "artifact.scan")})
 	if err != nil {
@@ -168,8 +168,8 @@ func TestAcceptedOutputAlwaysStrictSchemaValidAndAttemptsRetained(t *testing.T) 
 
 func TestTypedPlanStrictAdmissionRejectsDuplicateKeysAndUnsafeNumbers(t *testing.T) {
 	for _, raw := range [][]byte{
-		[]byte(`{"apiVersion":"anvilkit.io/contracts/v1","kind":"TypedPlan","kind":"TypedPlan","steps":[{"tool":"fake.execute","arguments":{}}]}`),
-		[]byte(`{"apiVersion":"anvilkit.io/contracts/v1","kind":"TypedPlan","steps":[{"tool":"fake.execute","arguments":{"unsafe":9007199254740992}}]}`),
+		[]byte(`{"kind":"TypedPlan","kind":"TypedPlan","steps":[{"tool":"fake.execute","arguments":{}}]}`),
+		[]byte(`{"kind":"TypedPlan","steps":[{"tool":"fake.execute","arguments":{"unsafe":9007199254740992}}]}`),
 	} {
 		if _, findings := Decode(raw, 32); len(findings) == 0 {
 			t.Fatalf("strict admission accepted %s", raw)

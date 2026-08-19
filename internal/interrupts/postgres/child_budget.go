@@ -135,7 +135,6 @@ func lockBudgetRun(ctx context.Context, tx pgx.Tx, scope runs.Scope, id runs.ID)
 }
 
 type rootBudget struct {
-	APIVersion     string          `json:"apiVersion"`
 	Kind           string          `json:"kind"`
 	ModelLimits    json.RawMessage `json:"modelLimits"`
 	TokenLimits    json.RawMessage `json:"tokenLimits"`
@@ -170,7 +169,7 @@ func decodeRootBudget(raw []byte) (rootBudget, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return rootBudget{}, fmt.Errorf("trailing budget JSON")
 	}
-	if value.APIVersion != "anvilkit.io/contracts/v1" || value.Kind != "AgentBudget" || value.ReservationID == "" || value.Policy.PolicyID == "" || value.Policy.Version == "" || value.Policy.Digest == "" || len(value.ModelLimits) == 0 || len(value.TokenLimits) == 0 || len(value.WorkerLimits) == 0 || len(value.GPULimits) == 0 {
+	if value.Kind != "AgentBudget" || value.ReservationID == "" || value.Policy.PolicyID == "" || value.Policy.Version == "" || value.Policy.Digest == "" || len(value.ModelLimits) == 0 || len(value.TokenLimits) == 0 || len(value.WorkerLimits) == 0 || len(value.GPULimits) == 0 {
 		return rootBudget{}, fmt.Errorf("incomplete root budget")
 	}
 	return value, nil

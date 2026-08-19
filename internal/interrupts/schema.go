@@ -8,7 +8,7 @@ import (
 	"io"
 )
 
-// BoundSchemaValidator implements the deliberately small InputRequestV1
+// BoundSchemaValidator implements the deliberately small InputRequest
 // response-schema profile used before the Contract Runtime boundary. It is
 // fail-closed and rejects unsupported schema keywords.
 type BoundSchemaValidator struct{}

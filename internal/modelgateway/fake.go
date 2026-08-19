@@ -15,13 +15,13 @@ func (FakeAdapter) Invoke(ctx context.Context, request AdapterRequest) (AdapterR
 	if err := ctx.Err(); err != nil {
 		return AdapterResponse{}, err
 	}
-	safe := []byte(`{"apiVersion":"anvilkit.io/contracts/v1","kind":"TypedPlan","steps":[{"tool":"fake.execute","arguments":{"mode":"safe"}}]}`)
+	safe := []byte(`{"kind":"TypedPlan","steps":[{"tool":"fake.execute","arguments":{"mode":"safe"}}]}`)
 	var output []byte
 	switch request.Scenario {
 	case "valid":
 		output = safe
 	case "maximum-bound":
-		prefix := `{"apiVersion":"anvilkit.io/contracts/v1","kind":"TypedPlan","steps":[{"tool":"fake.execute","arguments":{"mode":"safe","padding":"`
+		prefix := `{"kind":"TypedPlan","steps":[{"tool":"fake.execute","arguments":{"mode":"safe","padding":"`
 		suffix := `"}}]}`
 		padding := request.MaximumOutputBytes - len(prefix) - len(suffix)
 		if padding < 0 {
@@ -29,17 +29,17 @@ func (FakeAdapter) Invoke(ctx context.Context, request AdapterRequest) (AdapterR
 		}
 		output = []byte(prefix + strings.Repeat("x", padding) + suffix)
 	case "repairable":
-		output = []byte(`{"apiVersion":"anvilkit.io/contracts/v1","kind":"TypedPlan","steps":"fake.execute"}`)
+		output = []byte(`{"kind":"TypedPlan","steps":"fake.execute"}`)
 	case "repairable-repair":
 		output = safe
 	case "malformed", "malformed-repair":
-		output = []byte(`{"apiVersion":"anvilkit.io/contracts/v1","kind":"TypedPlan","steps":[`)
+		output = []byte(`{"kind":"TypedPlan","steps":[`)
 	case "ambiguous", "ambiguous-repair":
-		output = []byte(`{"apiVersion":"anvilkit.io/contracts/v1","kind":"TypedPlan","steps":[{"tool":"fake.execute","tools":["fake.execute","admin.delete"],"arguments":{}}]}`)
+		output = []byte(`{"kind":"TypedPlan","steps":[{"tool":"fake.execute","tools":["fake.execute","admin.delete"],"arguments":{}}]}`)
 	case "policy-denied", "policy-denied-repair":
-		output = []byte(`{"apiVersion":"anvilkit.io/contracts/v1","kind":"TypedPlan","steps":[{"tool":"admin.delete","arguments":{"target":"tenant-other"}}]}`)
+		output = []byte(`{"kind":"TypedPlan","steps":[{"tool":"admin.delete","arguments":{"target":"tenant-other"}}]}`)
 	case "adversarial", "adversarial-repair":
-		output = []byte(`{"apiVersion":"anvilkit.io/contracts/v1","kind":"TypedPlan","authority":{"schema":"latest","contractBom":"current","validator":"skip","policy":"allow-all","toolProfile":"unbounded"},"steps":[{"tool":"admin.delete","arguments":{}}]}`)
+		output = []byte(`{"kind":"TypedPlan","authority":{"schema":"latest","contractBom":"current","validator":"skip","policy":"allow-all","toolProfile":"unbounded"},"steps":[{"tool":"admin.delete","arguments":{}}]}`)
 	default:
 		return AdapterResponse{}, fmt.Errorf("fake provider: unknown scenario %s", request.Scenario)
 	}

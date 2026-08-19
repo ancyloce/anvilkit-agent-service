@@ -135,4 +135,4 @@ func (r *Repository) fail(point FailurePoint) error {
 var _ events.Repository = (*Repository)(nil)
 var _ events.Inbox = (*Repository)(nil)
 
-const agentEventSchema = "anvilkit://schema/agent-event.v1@1.0.0?digest=sha256:f19775b8dfdd34cac0318fce8067460988671840987a2b9aaeaa3c85710591ab"
+const agentEventSchema = "anvilkit://schema/agent-event?digest=sha256:2fdd8937381427507e721675ebbd66144595a193b53ba460534e9712df9b774a"

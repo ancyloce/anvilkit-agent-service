@@ -15,7 +15,7 @@ import (
 var policy = PolicyReference{PolicyID: "policy", Version: "v1", Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 
 func request() Request {
-	return Request{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", RunID: "run", Policy: policy, RedactionPolicy: policy, TotalTokens: 20, CompiledAt: time.Unix(100, 0), Sources: []Source{{ID: "user", Trust: User, Classification: Internal, Content: "hello SECRET", TenantID: "tenant", TokenBudget: 5}, {ID: "system", Trust: System, Classification: Restricted, Content: "immutable policy", TenantID: "tenant", TokenBudget: 5}, {ID: "tools", Trust: Tools, Classification: Internal, Content: "tool policy", TenantID: "tenant", TokenBudget: 5}}}
+	return Request{WorkspaceID: "workspace", ProjectID: "project", RunID: "run", Policy: policy, RedactionPolicy: policy, TotalTokens: 20, CompiledAt: time.Unix(100, 0), Sources: []Source{{ID: "user", Trust: User, Classification: Internal, Content: "hello SECRET", WorkspaceID: "workspace", TokenBudget: 5}, {ID: "system", Trust: System, Classification: Restricted, Content: "immutable policy", WorkspaceID: "workspace", TokenBudget: 5}, {ID: "tools", Trust: Tools, Classification: Internal, Content: "tool policy", WorkspaceID: "workspace", TokenBudget: 5}}}
 }
 func TestCompileIsDeterministicOrderedAndEvidenceComplete(t *testing.T) {
 	compiler := New([]string{"SECRET"})
@@ -48,9 +48,9 @@ func TestCompileIsDeterministicOrderedAndEvidenceComplete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const schema = "anvilkit://schema/compiled-context.v1@1.0.0?digest=sha256:7ed9b01d0451d8c1ba34b1959ea119d4c9d65db0b1a2343b7e8eb81c2b1bc037"
+	const schema = "anvilkit://schema/compiled-context?digest=sha256:e535dd923ac156840b06932f5a54aa7e70ea6dcc6f0bce8314a6e562ad784c33"
 	if findings := validator.Validate(schema, raw); len(findings) != 0 {
-		t.Fatalf("CompiledContextV1 findings: %#v", findings)
+		t.Fatalf("CompiledContext findings: %#v", findings)
 	}
 }
 
@@ -72,9 +72,9 @@ func TestExclusionsScopeAndMemoryFailClosed(t *testing.T) {
 		}
 	}
 	input = request()
-	input.Sources[0].TenantID = "other"
+	input.Sources[0].WorkspaceID = "other"
 	if _, err := compiler.Compile(context.Background(), input); err == nil {
-		t.Fatal("cross-tenant source accepted")
+		t.Fatal("cross-workspace source accepted")
 	}
 }
 func TestUntrustedLayerCannotReorderOrMutatePolicy(t *testing.T) {

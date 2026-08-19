@@ -51,7 +51,7 @@ func TestCreateIsDurableBeforeWorkflowAndReplayIsStable(t *testing.T) {
 	service := NewService(store, starter, fixedID("run-1"), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore())
 	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
 	digest, _ := canonical.Digest(raw)
-	input := CreateInput{Scope: Scope{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Raw: raw, Authority: testAuthority()}
+	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Raw: raw, Authority: testAuthority()}
 	input.Traceparent = testTraceparent
 	first, err := service.Create(context.Background(), input)
 	if err != nil {
@@ -68,9 +68,9 @@ func TestCreateIsDurableBeforeWorkflowAndReplayIsStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	findings := guard.Validate(context.Background(), contractguard.APIIn, "anvilkit://schema/agent-run.v1@1.0.0?digest=sha256:68949242c9b4557a8b5ff965f76de8f2de49c11523a7cc1e64cfd1b4af824233", first.Bytes)
+	findings := guard.Validate(context.Background(), contractguard.APIIn, "anvilkit://schema/agent-run?digest=sha256:e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564", first.Bytes)
 	if len(findings) != 0 {
-		t.Fatalf("created representation violates AgentRunV1: %#v raw=%s", findings, first.Bytes)
+		t.Fatalf("created representation violates AgentRun: %#v raw=%s", findings, first.Bytes)
 	}
 }
 
@@ -80,7 +80,7 @@ func TestConversationalAndHeadlessCreateHaveInteractionParity(t *testing.T) {
 	create := func(runID, key string) CreateOutcome {
 		store := &fakeStore{}
 		service := NewService(store, &checkingStarter{store: store}, fixedID(runID), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore())
-		outcome, err := service.Create(context.Background(), CreateInput{Scope: Scope{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: key, ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()})
+		outcome, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: key, ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -101,7 +101,7 @@ func TestCreateCannotAcknowledgeWhenReceiptJournalIsUnavailable(t *testing.T) {
 	service := NewService(store, starter, fixedID("run-journal"), fixedClock{time.Unix(100, 0)}, receipts)
 	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
 	digest, _ := canonical.Digest(raw)
-	input := CreateInput{Scope: Scope{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "journal-key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()}
+	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "journal-key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()}
 	if _, err := service.Create(context.Background(), input); err == nil {
 		t.Fatal("create acknowledged without independent journal")
 	}
@@ -128,7 +128,7 @@ func TestTraceparentAndAuthorityIdentitiesUseClosedBounds(t *testing.T) {
 	if validTraceparent("00-"+strings.Repeat("0", 32)+"-0123456789abcdef-01") || validTraceparent("00-0123456789abcdef0123456789abcdef-"+strings.Repeat("0", 16)+"-01") || validTraceparent("ff-0123456789abcdef0123456789abcdef-0123456789abcdef-01") {
 		t.Fatal("invalid W3C trace identity accepted")
 	}
-	if err := (Scope{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: strings.Repeat("p", 129), ActorID: "actor"}).Validate(); err == nil {
+	if err := (Scope{WorkspaceID: "workspace", ProjectID: strings.Repeat("p", 129), ActorID: "actor"}).Validate(); err == nil {
 		t.Fatal("unbounded authoritative scope accepted")
 	}
 }
@@ -138,7 +138,7 @@ func TestCreateRejectsGeneratedIdentityThatCannotProduceBoundedEventIDs(t *testi
 	service := NewService(store, &checkingStarter{store: store}, fixedID(strings.Repeat("r", 108)), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore())
 	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
 	digest, _ := canonical.Digest(raw)
-	_, err := service.Create(context.Background(), CreateInput{Scope: Scope{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()})
+	_, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()})
 	if err == nil || store.created != nil {
 		t.Fatalf("unbounded generated identity reached persistence: err=%v", err)
 	}
@@ -185,9 +185,10 @@ func (s *checkingStarter) Ensure(context.Context, Start) error {
 func testAuthority() Authority {
 	policy := json.RawMessage(`{"policyId":"policy.synthetic","version":"v1","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)
 	return Authority{
+		Definition:  json.RawMessage(`{"definitionId":"definition.synthetic.001","definitionDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}`),
 		ContractBOM: json.RawMessage(`{"repository":"anvilkit/contracts","bomDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ociManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidenceManifestDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}`),
 		Policy:      policy,
-		Budget:      json.RawMessage(`{"apiVersion":"anvilkit.io/contracts/v1","kind":"AgentBudget","modelLimits":{"maximumCalls":10,"maximumConcurrentCalls":2},"tokenLimits":{"inputTokens":4096,"outputTokens":2048,"totalTokens":6144},"workerLimits":{"maximumAttempts":4,"maximumDurationMilliseconds":60000},"gpuLimits":{"maximumGpuMilliseconds":0},"currencyLimits":{"maximumCost":{"amount":"1000","currency":"USD"},"reservedCost":{"amount":"500","currency":"USD"}},"reservationId":"reservation.synthetic.001","exceedBehavior":"refuse","policy":` + string(policy) + `}`),
+		Budget:      json.RawMessage(`{"kind":"AgentBudget","modelLimits":{"maximumCalls":10,"maximumConcurrentCalls":2},"tokenLimits":{"inputTokens":4096,"outputTokens":2048,"totalTokens":6144},"workerLimits":{"maximumAttempts":4,"maximumDurationMilliseconds":60000},"gpuLimits":{"maximumGpuMilliseconds":0},"currencyLimits":{"maximumCost":{"amount":"1000","currency":"USD"},"reservedCost":{"amount":"500","currency":"USD"}},"reservationId":"reservation.synthetic.001","exceedBehavior":"refuse","policy":` + string(policy) + `}`),
 	}
 }
 

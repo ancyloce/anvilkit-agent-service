@@ -15,11 +15,11 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 )
 
-type Scope struct{ TenantID, WorkspaceID, ProjectID, ActorID string }
+type Scope struct{ WorkspaceID, ProjectID, ActorID string }
 
 func (s Scope) Validate() error {
-	if !validOpaqueID(s.TenantID) || !validOpaqueID(s.WorkspaceID) || !validOpaqueID(s.ProjectID) || !validOpaqueID(s.ActorID) {
-		return fmt.Errorf("run scope requires bounded tenant, workspace, project, and actor identities")
+	if !validOpaqueID(s.WorkspaceID) || !validOpaqueID(s.ProjectID) || !validOpaqueID(s.ActorID) {
+		return fmt.Errorf("run scope requires bounded workspace, project, and actor identities")
 	}
 	return nil
 }
@@ -37,6 +37,7 @@ type TargetCommand struct {
 }
 
 type Authority struct {
+	Definition  json.RawMessage
 	ContractBOM json.RawMessage
 	Policy      json.RawMessage
 	Budget      json.RawMessage
@@ -45,6 +46,7 @@ type Target struct {
 	Type        string `json:"targetType"`
 	ID          string `json:"targetId"`
 	WorkspaceID string `json:"workspaceId"`
+	ProjectID   string `json:"projectId"`
 }
 type IdempotencyProjection struct {
 	Scope                  string `json:"scope"`
@@ -52,17 +54,16 @@ type IdempotencyProjection struct {
 	CanonicalRequestDigest string `json:"canonicalRequestDigest"`
 }
 type Snapshot struct {
-	APIVersion          string                `json:"apiVersion"`
 	Kind                string                `json:"kind"`
 	RunID               ID                    `json:"runId"`
 	RootRunID           ID                    `json:"rootRunId"`
 	ParentRunID         *ID                   `json:"parentRunId,omitempty"`
-	TenantID            string                `json:"tenantId"`
 	WorkspaceID         string                `json:"workspaceId"`
 	ActorID             string                `json:"actorId"`
 	Domain              string                `json:"domain"`
 	Operation           string                `json:"operation"`
 	Target              Target                `json:"target"`
+	Definition          json.RawMessage       `json:"definition"`
 	ContractBOM         json.RawMessage       `json:"contractBomReference"`
 	Policy              json.RawMessage       `json:"policy"`
 	Budget              json.RawMessage       `json:"budget"`
@@ -78,28 +79,28 @@ type Snapshot struct {
 
 func (s Snapshot) MarshalJSON() ([]byte, error) {
 	type wire struct {
-		APIVersion          string                `json:"apiVersion"`
 		Kind                string                `json:"kind"`
 		RunID               ID                    `json:"runId"`
 		RootRunID           ID                    `json:"rootRunId"`
 		ParentRunID         *ID                   `json:"parentRunId,omitempty"`
-		TenantID            string                `json:"tenantId"`
 		WorkspaceID         string                `json:"workspaceId"`
 		ActorID             string                `json:"actorId"`
 		Domain              string                `json:"domain"`
 		Operation           string                `json:"operation"`
 		Target              Target                `json:"target"`
+		Definition          json.RawMessage       `json:"definition"`
 		ContractBOM         json.RawMessage       `json:"contractBomReference"`
 		Policy              json.RawMessage       `json:"policy"`
 		Budget              json.RawMessage       `json:"budget"`
 		Idempotency         IdempotencyProjection `json:"idempotency"`
 		Status              State                 `json:"status"`
 		ExecutionGeneration uint64                `json:"executionGeneration"`
+		ResourceRevision    uint64                `json:"resourceRevision"`
 		Problem             *problem.Details      `json:"problem,omitempty"`
 		CreatedAt           string                `json:"createdAt"`
 		UpdatedAt           string                `json:"updatedAt"`
 	}
-	return json.Marshal(wire{APIVersion: s.APIVersion, Kind: s.Kind, RunID: s.RunID, RootRunID: s.RootRunID, ParentRunID: s.ParentRunID, TenantID: s.TenantID, WorkspaceID: s.WorkspaceID, ActorID: s.ActorID, Domain: s.Domain, Operation: s.Operation, Target: s.Target, ContractBOM: s.ContractBOM, Policy: s.Policy, Budget: s.Budget, Idempotency: s.Idempotency, Status: s.Status, ExecutionGeneration: s.ExecutionGeneration, Problem: s.Problem, CreatedAt: contractTimestamp(s.CreatedAt), UpdatedAt: contractTimestamp(s.UpdatedAt)})
+	return json.Marshal(wire{Kind: s.Kind, RunID: s.RunID, RootRunID: s.RootRunID, ParentRunID: s.ParentRunID, WorkspaceID: s.WorkspaceID, ActorID: s.ActorID, Domain: s.Domain, Operation: s.Operation, Target: s.Target, Definition: s.Definition, ContractBOM: s.ContractBOM, Policy: s.Policy, Budget: s.Budget, Idempotency: s.Idempotency, Status: s.Status, ExecutionGeneration: s.ExecutionGeneration, ResourceRevision: s.Version, Problem: s.Problem, CreatedAt: contractTimestamp(s.CreatedAt), UpdatedAt: contractTimestamp(s.UpdatedAt)})
 }
 
 func contractTimestamp(value time.Time) string {
@@ -213,7 +214,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CreateOutcome,
 	if !validTraceparent(input.Traceparent) {
 		return CreateOutcome{}, requestProblem("traceparent is required and must use the W3C format")
 	}
-	if len(input.Authority.ContractBOM) == 0 || len(input.Authority.Policy) == 0 || len(input.Authority.Budget) == 0 {
+	if len(input.Authority.Definition) == 0 || len(input.Authority.ContractBOM) == 0 || len(input.Authority.Policy) == 0 || len(input.Authority.Budget) == 0 {
 		return CreateOutcome{}, fmt.Errorf("create run: server authority is incomplete")
 	}
 	runID, err := s.ids.NewID()
@@ -227,7 +228,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CreateOutcome,
 	if now.IsZero() {
 		return CreateOutcome{}, problem.New(problem.CodeAuthorityStale, "")
 	}
-	snapshot := Snapshot{APIVersion: "anvilkit.io/contracts/v1", Kind: "AgentRun", RunID: runID, RootRunID: runID, TenantID: input.Scope.TenantID, WorkspaceID: input.Scope.WorkspaceID, ActorID: input.Scope.ActorID, Domain: request.Domain, Operation: request.Operation, Target: Target{Type: request.Target.Type, ID: request.Target.ID, WorkspaceID: input.Scope.WorkspaceID}, ContractBOM: append(json.RawMessage(nil), input.Authority.ContractBOM...), Policy: append(json.RawMessage(nil), input.Authority.Policy...), Budget: append(json.RawMessage(nil), input.Authority.Budget...), Idempotency: IdempotencyProjection{Scope: input.Scope.WorkspaceID + ":create-run", Key: input.Key, CanonicalRequestDigest: digest}, Status: Created, Version: 1, ExecutionGeneration: 1, LatestEventID: string(runID) + ":1", CreatedAt: now, UpdatedAt: now}
+	snapshot := Snapshot{Kind: "AgentRun", RunID: runID, RootRunID: runID, WorkspaceID: input.Scope.WorkspaceID, ActorID: input.Scope.ActorID, Domain: request.Domain, Operation: request.Operation, Target: Target{Type: request.Target.Type, ID: request.Target.ID, WorkspaceID: input.Scope.WorkspaceID, ProjectID: input.Scope.ProjectID}, Definition: append(json.RawMessage(nil), input.Authority.Definition...), ContractBOM: append(json.RawMessage(nil), input.Authority.ContractBOM...), Policy: append(json.RawMessage(nil), input.Authority.Policy...), Budget: append(json.RawMessage(nil), input.Authority.Budget...), Idempotency: IdempotencyProjection{Scope: input.Scope.WorkspaceID + ":create-run", Key: input.Key, CanonicalRequestDigest: digest}, Status: Created, Version: 1, ExecutionGeneration: 1, LatestEventID: string(runID) + ":1", CreatedAt: now, UpdatedAt: now}
 	outcome, err := s.store.Create(ctx, CreateRecord{Scope: input.Scope, Key: input.Key, Digest: digest, Traceparent: input.Traceparent, Snapshot: snapshot})
 	if err != nil {
 		return CreateOutcome{}, err

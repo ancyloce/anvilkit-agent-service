@@ -79,7 +79,7 @@ func TestStreamConfigurationRejectsInvalidEventBounds(t *testing.T) {
 	}
 }
 
-const validBoundedEvent = `{"apiVersion":"anvilkit.io/contracts/v1","kind":"AgentEvent","eventId":"event.1","runId":"run.1","sequence":1,"eventType":"run.created","occurredAt":"2026-08-13T00:00:00.000Z","traceContext":{"traceparent":"00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"},"contractBomReference":{"repository":"anvilkit/contracts","bomDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ociManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidenceManifestDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"payload":{"state":"created"}}`
+const validBoundedEvent = `{"kind":"AgentEvent","eventId":"event.1","runId":"run.1","workspaceId":"workspace.1","projectId":"project.1","sequence":1,"eventType":"run.created","occurredAt":"2026-08-13T00:00:00.000Z","subject":{"subjectType":"system","subjectId":"agent-service"},"traceContext":{"traceparent":"00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"},"contractBomReference":{"repository":"anvilkit/contracts","bomDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ociManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidenceManifestDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"payload":{"state":"created"}}`
 
 func TestGapDetection(t *testing.T) {
 	if err := ValidateContiguous([]Event{{Sequence: 2}, {Sequence: 4}}, 1); err == nil {
@@ -196,7 +196,7 @@ func TestTokenExpiryMidStreamTerminatesBeforeNextEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", TenantID: "tenant", WorkspaceID: "w", ProjectID: "p", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Minute)}
+	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "w", ProjectID: "p", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Minute)}
 	second := strings.ReplaceAll(strings.ReplaceAll(validBoundedEvent, "event.1", "event.2"), `"sequence":1`, `"sequence":2`)
 	reader := &fixedPageReader{events: []Event{{ID: "event.1", RunID: "run.1", Sequence: 1, CreatedAt: now, Bytes: []byte(validBoundedEvent)}, {ID: "event.2", RunID: "run.1", Sequence: 2, CreatedAt: now, Bytes: []byte(second)}}}
 	stream, err := NewStream(reader, validatingAuthority{validator, claims}, StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 100, Bounds: Bounds{MaximumBytes: 2048, MaximumFields: 4, MaximumFieldBytes: 32}, Observer: advancingObserver{advance: func() { clock.now.Store(now.Add(2 * time.Minute).UnixNano()) }}})

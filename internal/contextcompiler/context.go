@@ -48,11 +48,10 @@ type Source struct {
 	Trust          Trust
 	Classification Classification
 	Content        string
-	TenantID       string
+	WorkspaceID    string
 	TokenBudget    int
 }
 type Request struct {
-	TenantID        string
 	WorkspaceID     string
 	ProjectID       string
 	RunID           string
@@ -88,7 +87,6 @@ type Redaction struct {
 	ReplacementMarker string          `json:"replacementMarker"`
 }
 type Compiled struct {
-	APIVersion         string           `json:"apiVersion"`
 	Kind               string           `json:"kind"`
 	OrderedTrustLayers []Layer          `json:"orderedTrustLayers"`
 	LayerDigests       []string         `json:"layerDigests"`
@@ -133,7 +131,7 @@ func (c *Compiler) Compile(ctx context.Context, request Request) (Result, error)
 	if request.Memory != nil {
 		return Result{}, fmt.Errorf("durable memory is forbidden in foundation")
 	}
-	if request.TenantID == "" || request.WorkspaceID == "" || request.ProjectID == "" || request.RunID == "" || len(request.Sources) == 0 || len(request.Sources) > 128 || request.TotalTokens < 1 || request.TotalTokens > 1_000_000 || request.CompiledAt.IsZero() || !validPolicy(request.Policy) || !validPolicy(request.RedactionPolicy) {
+	if request.WorkspaceID == "" || request.ProjectID == "" || request.RunID == "" || len(request.Sources) == 0 || len(request.Sources) > 128 || request.TotalTokens < 1 || request.TotalTokens > 1_000_000 || request.CompiledAt.IsZero() || !validPolicy(request.Policy) || !validPolicy(request.RedactionPolicy) {
 		return Result{}, fmt.Errorf("context compilation authority is incomplete")
 	}
 	if request.Replacement == "" {
@@ -150,12 +148,12 @@ func (c *Compiler) Compile(ctx context.Context, request Request) (Result, error)
 		}
 		return sources[i].ID < sources[j].ID
 	})
-	result := Result{Evidence: Compiled{APIVersion: "anvilkit.io/contracts/v1", Kind: "CompiledContext", PolicySnapshot: request.Policy, CompiledAt: request.CompiledAt.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z"), Redaction: Redaction{Policy: request.RedactionPolicy, ReplacementMarker: request.Replacement}, TokenBudgets: TokenBudgets{Total: request.TotalTokens, Memory: 0}}, Truncations: map[string]int{}}
+	result := Result{Evidence: Compiled{Kind: "CompiledContext", PolicySnapshot: request.Policy, CompiledAt: request.CompiledAt.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z"), Redaction: Redaction{Policy: request.RedactionPolicy, ReplacementMarker: request.Replacement}, TokenBudgets: TokenBudgets{Total: request.TotalTokens, Memory: 0}}, Truncations: map[string]int{}}
 	seen := map[string]bool{}
 	classes := map[Classification]bool{}
 	remaining := request.TotalTokens
 	for position, source := range sources {
-		if !opaque(source.ID, 128) || seen[source.ID] || source.TenantID != request.TenantID || trustRank(source.Trust) < 0 || !validClass(source.Classification) || !utf8.ValidString(source.Content) {
+		if !opaque(source.ID, 128) || seen[source.ID] || source.WorkspaceID != request.WorkspaceID || trustRank(source.Trust) < 0 || !validClass(source.Classification) || !utf8.ValidString(source.Content) {
 			return Result{}, fmt.Errorf("context source identity, scope, trust, or classification is invalid")
 		}
 		seen[source.ID] = true

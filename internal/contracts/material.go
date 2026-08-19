@@ -1,7 +1,6 @@
 package contracts
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -14,47 +13,40 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/lattice-substrate/json-canon/jcs"
-
 	"github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 )
 
 const maximumMaterialBytes = 1_048_576
 
+// materialPin binds the service's contract intake to the exact canonical
+// P0-Kernel Profile and lock produced by the platform repository (ADR-018).
+// Contract identity is the canonical path, content digest, profile, lock, and
+// repository commit — no release generation, consumer generation window, or
+// publication state machine exists in the canonical system.
 type materialPin struct {
-	PinVersion             int    `json:"pinVersion"`
-	BOMVersion             string `json:"bomVersion"`
-	BOMDigest              string `json:"bomDigest"`
-	OCIManifestDigest      string `json:"ociManifestDigest"`
-	EvidenceManifestDigest string `json:"evidenceManifestDigest"`
-	ConsumerGeneration     int    `json:"consumerGeneration"`
-	State                  string `json:"state"`
-	Source                 string `json:"source"`
+	PinVersion int          `json:"pinVersion"`
+	State      string       `json:"state"`
+	Profile    materialFile `json:"profile"`
+	Lock       materialFile `json:"lock"`
+	Source     string       `json:"source"`
 }
 
-type releaseBOM struct {
-	Version       string         `json:"version"`
-	Digest        string         `json:"digest"`
-	Compatibility compatibility  `json:"compatibility"`
-	Components    []bomComponent `json:"components"`
+type materialFile struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
 }
 
-type compatibility struct {
-	MinimumConsumerGeneration int `json:"minimumConsumerGeneration"`
-	MaximumConsumerGeneration int `json:"maximumConsumerGeneration"`
+type canonicalLock struct {
+	LockVersion int               `json:"lockVersion"`
+	Profile     materialFile      `json:"profile"`
+	Sources     map[string]string `json:"sources"`
 }
 
-type bomComponent struct {
-	Kind             string `json:"kind"`
-	Name             string `json:"name"`
-	Size             int64  `json:"size"`
-	ProvenanceDigest string `json:"provenanceDigest"`
-}
-
-// VerifyPinnedMaterial verifies the local pin, root BOM identity, and every
-// schema byte binding. Published material can be required at production
-// startup and readiness boundaries.
-func VerifyPinnedMaterial(repositoryRoot string, requirePublished bool) error {
+// VerifyPinnedMaterial verifies the local pin, the pinned canonical profile
+// and lock copies, and every canonical schema byte binding. It is
+// self-contained: only material inside the service checkout is read, so the
+// same verification runs at production startup and readiness boundaries.
+func VerifyPinnedMaterial(repositoryRoot string) error {
 	contractRoot, err := os.OpenRoot(filepath.Join(repositoryRoot, "contracts"))
 	if err != nil {
 		return fmt.Errorf("open pinned contract root: %w", err)
@@ -69,131 +61,98 @@ func VerifyPinnedMaterial(repositoryRoot string, requirePublished bool) error {
 	if err := decodeStrict(pinBytes, &pin); err != nil {
 		return fmt.Errorf("decode contract pin: %w", err)
 	}
-	if err := validatePin(pin, requirePublished); err != nil {
-		return err
+	if pin.PinVersion != 1 || pin.State != "canonical" || pin.Source == "" {
+		return errors.New("contract pin metadata is incomplete or not canonical")
+	}
+	if pin.Profile.Path != "agent/profile/p0-kernel-profile.json" || pin.Lock.Path != "agent/lock/contracts.lock.json" {
+		return errors.New("contract pin does not reference the canonical profile and lock")
+	}
+	if !validDigest(pin.Profile.SHA256) || !validDigest(pin.Lock.SHA256) {
+		return errors.New("contract pin digests are invalid")
 	}
 
-	bomBytes, err := readRegularMaterial(contractRoot, "bom/release-bom.json")
+	profileBytes, err := readRegularMaterial(contractRoot, pin.Profile.Path)
 	if err != nil {
 		return err
 	}
-	if _, err := validator.Admit(bomBytes); err != nil {
-		return fmt.Errorf("admit release BOM: %w", err)
+	if !equalDigest(digestOf(profileBytes), pin.Profile.SHA256) {
+		return errors.New("pinned profile bytes do not match the pin digest")
 	}
-	var bom releaseBOM
-	if err := json.Unmarshal(bomBytes, &bom); err != nil {
-		return fmt.Errorf("decode release BOM: %w", err)
-	}
-	computedDigest, err := contractBOMDigest(bomBytes)
+	lockBytes, err := readRegularMaterial(contractRoot, pin.Lock.Path)
 	if err != nil {
 		return err
 	}
-	if !equalDigest(computedDigest, bom.Digest) || !equalDigest(bom.Digest, pin.BOMDigest) {
-		return errors.New("release BOM identity does not match the pinned digest")
+	if !equalDigest(digestOf(lockBytes), pin.Lock.SHA256) {
+		return errors.New("pinned lock bytes do not match the pin digest")
 	}
-	if bom.Version != pin.BOMVersion {
-		return errors.New("release BOM version does not match the pin")
+	if _, err := validator.Admit(lockBytes); err != nil {
+		return fmt.Errorf("admit canonical lock: %w", err)
 	}
-	if pin.ConsumerGeneration < bom.Compatibility.MinimumConsumerGeneration || pin.ConsumerGeneration > bom.Compatibility.MaximumConsumerGeneration {
-		return errors.New("consumer generation is outside release BOM compatibility")
+	var lock canonicalLock
+	if err := json.Unmarshal(lockBytes, &lock); err != nil {
+		return fmt.Errorf("decode canonical lock: %w", err)
 	}
-	if err := verifySchemaBindings(contractRoot, bom.Components); err != nil {
-		return err
+	if lock.LockVersion != 1 || len(lock.Sources) == 0 {
+		return errors.New("canonical lock is incomplete")
 	}
-	return nil
+	if !equalDigest(lock.Profile.SHA256, pin.Profile.SHA256) {
+		return errors.New("canonical lock does not bind the pinned profile")
+	}
+	return verifySchemaBindings(contractRoot, lock.Sources)
 }
 
-func validatePin(pin materialPin, requirePublished bool) error {
-	if pin.PinVersion != 1 || pin.BOMVersion == "" || pin.ConsumerGeneration < 1 || pin.Source == "" {
-		return errors.New("contract pin metadata is incomplete")
-	}
-	for name, digest := range map[string]string{
-		"BOM": pin.BOMDigest, "OCI manifest": pin.OCIManifestDigest, "evidence manifest": pin.EvidenceManifestDigest,
-	} {
+// verifySchemaBindings requires every canonical schema recorded in the lock to
+// be present in the intake with exactly the locked bytes, and rejects any
+// intake schema absent from the lock.
+func verifySchemaBindings(contractRoot *os.Root, sources map[string]string) error {
+	const lockPrefix = "contracts/agent/schemas/"
+	expected := make(map[string]string)
+	for path, digest := range sources {
+		if !strings.HasPrefix(path, lockPrefix) || !strings.HasSuffix(path, ".schema.json") {
+			continue
+		}
 		if !validDigest(digest) {
-			return fmt.Errorf("%s digest is invalid", name)
+			return fmt.Errorf("canonical lock digest for %s is invalid", path)
 		}
+		expected[strings.TrimPrefix(path, "contracts/")] = digest
 	}
-	if pin.State != "published" && pin.State != "candidate-unpublished" {
-		return fmt.Errorf("contract pin state %q is not recognized", pin.State)
+	if len(expected) == 0 {
+		return errors.New("canonical lock contains no schema sources")
 	}
-	if requirePublished && pin.State != "published" {
-		return errors.New("production requires published contract material")
-	}
-	return nil
-}
-
-func verifySchemaBindings(contractRoot *os.Root, components []bomComponent) error {
-	const prefix = "anvilkit.contract.schema."
-	const suffix = ".v1"
-	expected := make(map[string]bomComponent)
-	for _, component := range components {
-		if component.Kind != "json-schema" {
-			continue
-		}
-		if !strings.HasPrefix(component.Name, prefix) || !strings.HasSuffix(component.Name, suffix) || !validDigest(component.ProvenanceDigest) || component.Size < 1 || component.Size > maximumMaterialBytes {
-			return fmt.Errorf("release BOM contains invalid schema component %q", component.Name)
-		}
-		name := strings.TrimSuffix(strings.TrimPrefix(component.Name, prefix), suffix) + ".schema.json"
-		if _, duplicate := expected[name]; duplicate {
-			return fmt.Errorf("release BOM contains duplicate schema component %q", component.Name)
-		}
-		expected[name] = component
-	}
-
-	entries, err := fs.ReadDir(contractRoot.FS(), "schemas/v1")
-	if err != nil {
-		return fmt.Errorf("read pinned schema directory: %w", err)
-	}
-	seen := make(map[string]bool, len(expected))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".schema.json") {
-			continue
-		}
-		component, ok := expected[entry.Name()]
-		if !ok {
-			return fmt.Errorf("pinned schema %s is absent from the release BOM", entry.Name())
-		}
-		raw, err := readRegularMaterial(contractRoot, "schemas/v1/"+entry.Name())
+	seen := 0
+	for _, directory := range []string{"agent/schemas", "agent/schemas/meta"} {
+		entries, err := fs.ReadDir(contractRoot.FS(), directory)
 		if err != nil {
-			return err
+			return fmt.Errorf("read pinned schema directory %s: %w", directory, err)
 		}
-		digest := sha256.Sum256(raw)
-		actualDigest := "sha256:" + hex.EncodeToString(digest[:])
-		if int64(len(raw)) != component.Size || !equalDigest(actualDigest, component.ProvenanceDigest) {
-			return fmt.Errorf("pinned schema %s does not match the release BOM", entry.Name())
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".schema.json") {
+				continue
+			}
+			name := directory + "/" + entry.Name()
+			digest, ok := expected[name]
+			if !ok {
+				return fmt.Errorf("pinned schema %s is absent from the canonical lock", name)
+			}
+			raw, err := readRegularMaterial(contractRoot, name)
+			if err != nil {
+				return err
+			}
+			if !equalDigest(digestOf(raw), digest) {
+				return fmt.Errorf("pinned schema %s does not match the canonical lock", name)
+			}
+			seen++
 		}
-		seen[entry.Name()] = true
 	}
-	if len(seen) != len(expected) {
-		return errors.New("release BOM schema set is incomplete on disk")
+	if seen != len(expected) {
+		return errors.New("canonical schema set is incomplete on disk")
 	}
 	return nil
 }
 
-func contractBOMDigest(raw []byte) (string, error) {
-	var object map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
-		return "", errors.New("release BOM root must be an object")
-	}
-	if _, ok := object["digest"]; !ok {
-		return "", errors.New("release BOM digest is absent")
-	}
-	delete(object, "digest")
-	withoutDigest, err := json.Marshal(object)
-	if err != nil {
-		return "", fmt.Errorf("encode release BOM identity: %w", err)
-	}
-	canonical, err := jcs.Canonicalize(withoutDigest)
-	if err != nil {
-		return "", fmt.Errorf("canonicalize release BOM identity: %w", err)
-	}
-	hash := sha256.New()
-	_, _ = hash.Write([]byte("anvilkit.contract-bom.identity.v1\x00"))
-	_, _ = hash.Write([]byte("application/vnd.anvilkit.contract-bom.v1+json"))
-	_, _ = hash.Write([]byte{0})
-	_, _ = hash.Write(canonical)
-	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+func digestOf(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func readRegularMaterial(root *os.Root, name string) ([]byte, error) {
@@ -223,7 +182,7 @@ func decodeStrict(raw []byte, target any) error {
 	if _, err := validator.Admit(raw); err != nil {
 		return err
 	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return err

@@ -146,7 +146,7 @@ func (s *ContinuationStore) Put(ctx context.Context, id string, value modelgatew
 	if err != nil {
 		return fmt.Errorf("parse continuation expiry: %w", err)
 	}
-	_, err = s.database.Exec(ctx, `INSERT INTO agent_workflow.provider_continuations(workspace_id,project_id,continuation_id,api_version,kind,encrypted_binding,key_reference,provider,expires_at,restart_policy,binding_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(workspace_id,project_id,continuation_id) DO UPDATE SET encrypted_binding=EXCLUDED.encrypted_binding,key_reference=EXCLUDED.key_reference,provider=EXCLUDED.provider,expires_at=EXCLUDED.expires_at,restart_policy=EXCLUDED.restart_policy,binding_digest=EXCLUDED.binding_digest,updated_at=transaction_timestamp()`, s.workspaceID, s.projectID, id, value.APIVersion, value.Kind, value.EncryptedBinding, value.KeyReference, value.Provider, expires, value.RestartPolicy, value.BindingDigest)
+	_, err = s.database.Exec(ctx, `INSERT INTO agent_workflow.provider_continuations(workspace_id,project_id,continuation_id,kind,encrypted_binding,key_reference,provider,expires_at,restart_policy,binding_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT(workspace_id,project_id,continuation_id) DO UPDATE SET encrypted_binding=EXCLUDED.encrypted_binding,key_reference=EXCLUDED.key_reference,provider=EXCLUDED.provider,expires_at=EXCLUDED.expires_at,restart_policy=EXCLUDED.restart_policy,binding_digest=EXCLUDED.binding_digest,updated_at=transaction_timestamp()`, s.workspaceID, s.projectID, id, value.Kind, value.EncryptedBinding, value.KeyReference, value.Provider, expires, value.RestartPolicy, value.BindingDigest)
 	if err != nil {
 		return fmt.Errorf("persist encrypted continuation: %w", err)
 	}
@@ -156,7 +156,7 @@ func (s *ContinuationStore) Put(ctx context.Context, id string, value modelgatew
 func (s *ContinuationStore) Get(ctx context.Context, id string) (modelgateway.Continuation, bool, error) {
 	var value modelgateway.Continuation
 	var expires time.Time
-	err := s.database.QueryRow(ctx, `SELECT api_version,kind,encrypted_binding,key_reference,provider,expires_at,restart_policy,binding_digest FROM agent_workflow.provider_continuations WHERE workspace_id=$1 AND project_id=$2 AND continuation_id=$3`, s.workspaceID, s.projectID, id).Scan(&value.APIVersion, &value.Kind, &value.EncryptedBinding, &value.KeyReference, &value.Provider, &expires, &value.RestartPolicy, &value.BindingDigest)
+	err := s.database.QueryRow(ctx, `SELECT kind,encrypted_binding,key_reference,provider,expires_at,restart_policy,binding_digest FROM agent_workflow.provider_continuations WHERE workspace_id=$1 AND project_id=$2 AND continuation_id=$3`, s.workspaceID, s.projectID, id).Scan(&value.Kind, &value.EncryptedBinding, &value.KeyReference, &value.Provider, &expires, &value.RestartPolicy, &value.BindingDigest)
 	if err == pgx.ErrNoRows {
 		return modelgateway.Continuation{}, false, nil
 	}

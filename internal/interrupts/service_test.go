@@ -155,10 +155,10 @@ func (r *testReservation) ReserveChild(_ context.Context, request ChildBudgetReq
 }
 
 func scope() runs.Scope {
-	return runs.Scope{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}
+	return runs.Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}
 }
 func snapshot(id runs.ID, state runs.State, version uint64) runs.Snapshot {
-	return runs.Snapshot{RunID: id, RootRunID: id, TenantID: "tenant", WorkspaceID: "workspace", ActorID: "actor", Status: state, Version: version, ExecutionGeneration: 1, ContractBOM: json.RawMessage(`{"bom":"v1"}`), Policy: json.RawMessage(`{"dataPolicy":"restricted"}`), Budget: json.RawMessage(`{"reservation":"root"}`), CreatedAt: testNow.Add(-time.Hour), UpdatedAt: testNow.Add(-time.Minute)}
+	return runs.Snapshot{RunID: id, RootRunID: id, WorkspaceID: "workspace", ActorID: "actor", Status: state, Version: version, ExecutionGeneration: 1, ContractBOM: json.RawMessage(`{"bom":"v1"}`), Policy: json.RawMessage(`{"dataPolicy":"restricted"}`), Budget: json.RawMessage(`{"reservation":"root"}`), CreatedAt: testNow.Add(-time.Hour), UpdatedAt: testNow.Add(-time.Minute)}
 }
 func write(id runs.ID, version uint64, key string) Write {
 	return Write{Scope: scope(), RunID: id, ExpectedVersion: version, IdempotencyKey: key, Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"}

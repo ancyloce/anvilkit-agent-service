@@ -73,13 +73,15 @@ func ValidateBytes(raw []byte, bounds Bounds) error {
 		}
 	}
 	var event struct {
-		APIVersion           string            `json:"apiVersion"`
 		Kind                 string            `json:"kind"`
 		EventID              string            `json:"eventId"`
 		RunID                string            `json:"runId"`
+		WorkspaceID          string            `json:"workspaceId"`
+		ProjectID            string            `json:"projectId"`
 		Sequence             uint64            `json:"sequence"`
 		EventType            string            `json:"eventType"`
 		OccurredAt           string            `json:"occurredAt"`
+		Subject              json.RawMessage   `json:"subject"`
 		TraceContext         json.RawMessage   `json:"traceContext"`
 		ContractBOMReference json.RawMessage   `json:"contractBomReference"`
 		TaskID               string            `json:"taskId,omitempty"`
@@ -95,7 +97,7 @@ func ValidateBytes(raw []byte, bounds Bounds) error {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return eventProblem("event must contain exactly one JSON object")
 	}
-	if event.APIVersion == "" || event.Kind == "" || event.EventID == "" || event.RunID == "" || event.Sequence == 0 || event.EventType == "" || event.OccurredAt == "" || len(event.TraceContext) == 0 || len(event.ContractBOMReference) == 0 {
+	if event.Kind == "" || event.EventID == "" || event.RunID == "" || event.WorkspaceID == "" || event.ProjectID == "" || event.Sequence == 0 || event.EventType == "" || event.OccurredAt == "" || len(event.Subject) == 0 || len(event.TraceContext) == 0 || len(event.ContractBOMReference) == 0 {
 		return eventProblem("event omits required correlation fields")
 	}
 	if event.Payload != nil {

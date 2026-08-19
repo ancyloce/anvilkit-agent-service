@@ -637,7 +637,7 @@ func (s *Store) persistEvent(ctx context.Context, tx pgx.Tx, write interrupts.Wr
 	if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, sequence, id, event, now); err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,$5,'agent.events.v1',$6,$7)`, write.Scope.WorkspaceID, write.Scope.ProjectID, id, write.RunID, sequence, event, now)
+	_, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,$5,'agent.public-events',$6,$7)`, write.Scope.WorkspaceID, write.Scope.ProjectID, id, write.RunID, sequence, event, now)
 	return err
 }
 
@@ -659,13 +659,15 @@ func marshalEvent(write interrupts.Write, snapshot runs.Snapshot, sequence uint6
 		return nil, fmt.Errorf("unsupported agent event type %q", eventType)
 	}
 	envelope := map[string]any{
-		"apiVersion":           "anvilkit.io/contracts/v1",
 		"kind":                 "AgentEvent",
 		"eventId":              id,
 		"runId":                write.RunID,
+		"workspaceId":          write.Scope.WorkspaceID,
+		"projectId":            write.Scope.ProjectID,
 		"sequence":             sequence,
 		"eventType":            eventType,
 		"occurredAt":           contractTimestamp(now),
+		"subject":              map[string]string{"subjectType": "system", "subjectId": "agent-service"},
 		"traceContext":         map[string]string{"traceparent": write.Traceparent},
 		"contractBomReference": snapshot.ContractBOM,
 	}

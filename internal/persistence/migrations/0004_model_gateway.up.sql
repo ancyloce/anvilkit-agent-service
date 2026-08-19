@@ -48,7 +48,6 @@ CREATE TABLE IF NOT EXISTS agent_workflow.provider_continuations (
     workspace_id text NOT NULL,
     project_id text NOT NULL,
     continuation_id text NOT NULL,
-    api_version text NOT NULL CHECK (api_version = 'anvilkit.io/contracts/v1'),
     kind text NOT NULL CHECK (kind = 'ProviderContinuation'),
     encrypted_binding text NOT NULL,
     key_reference text NOT NULL,

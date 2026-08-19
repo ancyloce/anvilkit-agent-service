@@ -23,7 +23,7 @@ type clock struct{}
 
 func (clock) Now() time.Time { return time.Unix(1, 0) }
 func definition(id, effect, risk string, classes ...string) Definition {
-	return Definition{APIVersion: "anvilkit.io/contracts/v1", Kind: "ToolDefinition", Capability: "fake.execute", CapabilityVersion: "fake.execute/v1", InputSchema: SchemaReference{ComponentName: "anvilkit.contract.schema.synthetic.v1", Version: "1.0.0", Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, OutputSchema: SchemaReference{ComponentName: "anvilkit.contract.schema.synthetic.v1", Version: "1.0.0", Digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, SideEffectClass: effect, RiskClass: risk, ApprovalPolicy: PolicyReference{PolicyID: "policy", Version: "v1", Digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}, TimeoutPolicy: TimeoutPolicy{1000}, RetryPolicy: RetryPolicy{1, 0, []string{}}, AcceptedDataClasses: classes, ToolID: id}
+	return Definition{Kind: "ToolDefinition", Capability: "fake.execute", InputSchema: SchemaReference{ComponentName: "anvilkit.contract.schema.synthetic", Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, OutputSchema: SchemaReference{ComponentName: "anvilkit.contract.schema.synthetic", Digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, SideEffectClass: effect, RiskClass: risk, ApprovalPolicy: PolicyReference{PolicyID: "policy", Version: "v1", Digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}, TimeoutPolicy: TimeoutPolicy{1000}, RetryPolicy: RetryPolicy{1, 0, []string{}}, AcceptedDataClasses: classes, ToolID: id}
 }
 func profile(t *testing.T) Profile {
 	value, err := NewProfile("manager", "v1", PolicyReference{PolicyID: "policy", Version: "v1", Digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}, []Definition{definition("fake.execute", "none", "low", "internal"), definition("contract.validate", "read", "low", "internal"), definition("artifact.write", "artifact-write", "medium", "internal")})
@@ -67,11 +67,11 @@ func TestProfileBoundAndPinnedImmutably(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const schema = "anvilkit://schema/tool-definition.v1@1.0.0?digest=sha256:3c76deee323264f5239029fcdb76f9200e99f717ac4182c99069e2eb08462f43"
+	const schema = "anvilkit://schema/tool-definition?digest=sha256:61e67b664f0d67945f9c7ee33dc371dd11e78095576b7642d905c51558f7803e"
 	for _, tool := range pinned.Definitions {
 		raw, _ := json.Marshal(tool)
 		if findings := validator.Validate(schema, raw); len(findings) != 0 {
-			t.Fatalf("ToolDefinitionV1 findings for %s: %#v", tool.ToolID, findings)
+			t.Fatalf("ToolDefinition findings for %s: %#v", tool.ToolID, findings)
 		}
 	}
 }

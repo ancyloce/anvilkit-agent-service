@@ -21,9 +21,8 @@ type Step struct {
 	Arguments map[string]json.RawMessage `json:"arguments"`
 }
 type Plan struct {
-	APIVersion string `json:"apiVersion"`
-	Kind       string `json:"kind"`
-	Steps      []Step `json:"steps"`
+	Kind  string `json:"kind"`
+	Steps []Step `json:"steps"`
 }
 type Finding struct{ Code, Stage, InstancePath, SchemaPath string }
 type Attempt struct {
@@ -136,7 +135,7 @@ func Decode(raw []byte, maximumSteps int) (Plan, []Finding) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return Plan{}, []Finding{{"PLAN_TRAILING", "provider-output-parse", "/", "/json"}}
 	}
-	if plan.APIVersion != "anvilkit.io/contracts/v1" || plan.Kind != "TypedPlan" || len(plan.Steps) < 1 || len(plan.Steps) > maximumSteps {
+	if plan.Kind != "TypedPlan" || len(plan.Steps) < 1 || len(plan.Steps) > maximumSteps {
 		return Plan{}, []Finding{{"PLAN_SCHEMA", "typed-plan-validation", "/steps", "/properties/steps"}}
 	}
 	for index, step := range plan.Steps {

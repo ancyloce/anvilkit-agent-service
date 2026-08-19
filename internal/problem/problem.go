@@ -168,13 +168,12 @@ func New(code Code, traceID string) Details {
 	if !ok {
 		definition, _ = Lookup(CodeInternal)
 	}
-	return Details{APIVersion: "anvilkit.io/contracts/v1", Kind: "ProblemDetails", Type: definition.Type, Title: definition.Title, Status: definition.Status, Code: string(definition.Code), Retryability: definition.Retryability, TraceID: NormalizeTraceID(traceID), FieldErrors: []FieldError{}}
+	return Details{Kind: "ProblemDetails", Type: definition.Type, Title: definition.Title, Status: definition.Status, Code: string(definition.Code), Retryability: definition.Retryability, TraceID: NormalizeTraceID(traceID), FieldErrors: []FieldError{}}
 }
 
-// Details is the service-side projection of ProblemDetailsV1. It deliberately
+// Details is the service-side projection of ProblemDetails. It deliberately
 // contains only contract-serializable values.
 type Details struct {
-	APIVersion   string            `json:"apiVersion"`
 	Kind         string            `json:"kind"`
 	Code         string            `json:"code"`
 	Retryability string            `json:"retryability"`
@@ -205,7 +204,7 @@ func (f FieldError) MarshalJSON() ([]byte, error) {
 }
 
 // MarshalJSON prevents transport-only status and internal diagnostic fields
-// from escaping the closed ProblemDetailsV1 contract.
+// from escaping the closed ProblemDetails contract.
 func (p Details) MarshalJSON() ([]byte, error) {
 	message := p.Message
 	if p.Detail != "" {
@@ -219,7 +218,6 @@ func (p Details) MarshalJSON() ([]byte, error) {
 		fieldErrors = []FieldError{}
 	}
 	type wire struct {
-		APIVersion   string       `json:"apiVersion"`
 		Kind         string       `json:"kind"`
 		Code         string       `json:"code"`
 		Retryability string       `json:"retryability"`
@@ -229,7 +227,7 @@ func (p Details) MarshalJSON() ([]byte, error) {
 		RunID        string       `json:"runId,omitempty"`
 		TraceID      string       `json:"traceId,omitempty"`
 	}
-	return json.Marshal(wire{APIVersion: p.APIVersion, Kind: p.Kind, Code: p.Code, Retryability: p.Retryability, Message: message, FieldErrors: fieldErrors, Stage: p.Stage, RunID: p.RunID, TraceID: NormalizeTraceID(p.TraceID)})
+	return json.Marshal(wire{Kind: p.Kind, Code: p.Code, Retryability: p.Retryability, Message: message, FieldErrors: fieldErrors, Stage: p.Stage, RunID: p.RunID, TraceID: NormalizeTraceID(p.TraceID)})
 }
 
 func NormalizeTraceID(value string) string {
@@ -258,7 +256,6 @@ func (p Details) Error() string {
 // InvalidConfiguration returns the stable startup-validation problem.
 func InvalidConfiguration(field, detail string) Details {
 	return Details{
-		APIVersion:   "anvilkit.io/contracts/v1",
 		Kind:         "ProblemDetails",
 		Type:         "urn:anvilkit:problem:configuration-invalid",
 		Title:        "Invalid service configuration",

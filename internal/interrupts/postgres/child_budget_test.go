@@ -32,7 +32,7 @@ func TestCurrencyMicrosIsExactAndOverflowSafe(t *testing.T) {
 }
 
 func TestDecodeRootBudgetRejectsPartialOrUnknownAuthority(t *testing.T) {
-	valid := json.RawMessage(`{"apiVersion":"anvilkit.io/contracts/v1","kind":"AgentBudget","modelLimits":{},"tokenLimits":{},"workerLimits":{},"gpuLimits":{},"currencyLimits":{"maximumCost":{"amount":"1","currency":"USD"},"reservedCost":{"amount":"0","currency":"USD"}},"reservationId":"root-reservation","exceedBehavior":"refuse","policy":{"policyId":"policy","version":"v1","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`)
+	valid := json.RawMessage(`{"kind":"AgentBudget","modelLimits":{},"tokenLimits":{},"workerLimits":{},"gpuLimits":{},"currencyLimits":{"maximumCost":{"amount":"1","currency":"USD"},"reservedCost":{"amount":"0","currency":"USD"}},"reservationId":"root-reservation","exceedBehavior":"refuse","policy":{"policyId":"policy","version":"v1","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`)
 	if _, err := decodeRootBudget(valid); err != nil {
 		t.Fatal(err)
 	}
@@ -40,13 +40,13 @@ func TestDecodeRootBudgetRejectsPartialOrUnknownAuthority(t *testing.T) {
 	if _, err := decodeRootBudget(unknown); err == nil {
 		t.Fatal("unknown root budget authority was accepted")
 	}
-	if _, err := decodeRootBudget(json.RawMessage(`{"apiVersion":"anvilkit.io/contracts/v1","kind":"AgentBudget"}`)); err == nil {
+	if _, err := decodeRootBudget(json.RawMessage(`{"kind":"AgentBudget"}`)); err == nil {
 		t.Fatal("partial root budget authority was accepted")
 	}
 }
 
 func TestChildReservationIdentityIsStableAcrossGeneratedChildIDs(t *testing.T) {
-	base := interrupts.ChildBudgetRequest{Write: interrupts.Write{Scope: runs.Scope{TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, RunID: "parent", IdempotencyKey: "spawn"}, ChildRunID: "child-1", Mode: interrupts.ChildRequired, Digest: "sha256:" + strings.Repeat("a", 64), RequestedAt: time.Now()}
+	base := interrupts.ChildBudgetRequest{Write: interrupts.Write{Scope: runs.Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, RunID: "parent", IdempotencyKey: "spawn"}, ChildRunID: "child-1", Mode: interrupts.ChildRequired, Digest: "sha256:" + strings.Repeat("a", 64), RequestedAt: time.Now()}
 	first := childReservationID(base)
 	base.ChildRunID = "child-2"
 	base.Digest = "sha256:" + strings.Repeat("b", 64)

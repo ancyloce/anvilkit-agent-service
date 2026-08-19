@@ -84,10 +84,10 @@ func (*CurrentAuthority) RetryEligibility(_ context.Context, _ runs.Scope, snaps
 	return false, "", nil
 }
 
-func decodePolicyReference(raw json.RawMessage) (contractschema.SharedPrimitivesV1PolicyReference, error) {
-	var reference contractschema.SharedPrimitivesV1PolicyReference
+func decodePolicyReference(raw json.RawMessage) (contractschema.SharedPrimitivesPolicyReference, error) {
+	var reference contractschema.SharedPrimitivesPolicyReference
 	if err := json.Unmarshal(raw, &reference); err != nil {
-		return contractschema.SharedPrimitivesV1PolicyReference{}, err
+		return contractschema.SharedPrimitivesPolicyReference{}, err
 	}
 	return reference, nil
 }

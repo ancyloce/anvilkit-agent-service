@@ -33,7 +33,7 @@ func TestScopeByOperationAndWrongAudienceFailClosed(t *testing.T) {
 	now := time.Unix(1000, 0)
 	trust := &mutableTrust{true, true, true}
 	validator, _ := NewValidator(Config{Issuers: []string{"issuer"}, Audience: "agent-service", MaximumClockSkew: time.Second}, trust, fixedClock{now})
-	base := Claims{Verified: true, Source: SourceDelegated, Issuer: "issuer", Audience: "agent-service", Subject: "workload", ActorID: "actor", TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent-run", KeyID: "key", Scopes: []string{ScopeRead, ScopeWrite, ScopeReviewer, ScopeIssuer}, ExpiresAt: now.Add(time.Minute), NotBefore: now.Add(-time.Minute)}
+	base := Claims{Verified: true, Source: SourceDelegated, Issuer: "issuer", Audience: "agent-service", Subject: "workload", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent-run", KeyID: "key", Scopes: []string{ScopeRead, ScopeWrite, ScopeReviewer, ScopeIssuer}, ExpiresAt: now.Add(time.Minute), NotBefore: now.Add(-time.Minute)}
 	for _, operation := range ProtectedOperations() {
 		for _, candidate := range []string{ScopeRead, ScopeWrite, ScopeReviewer, ScopeIssuer, "wrong"} {
 			claims := base
@@ -58,7 +58,7 @@ func TestIssuerSubjectDelegationTimeAndTrustMatrix(t *testing.T) {
 	now := time.Unix(1000, 0)
 	baseTrust := &mutableTrust{true, true, true}
 	validator, _ := NewValidator(Config{Issuers: []string{"issuer"}, Audience: "agent-service", MaximumClockSkew: time.Second}, baseTrust, fixedClock{now})
-	base := Claims{Verified: true, Source: SourceDelegated, Issuer: "issuer", Audience: "agent-service", Subject: "workload", ActorID: "actor", TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", Purpose: "purpose", KeyID: "key", Scopes: []string{ScopeRead}, ExpiresAt: now.Add(time.Minute), NotBefore: now.Add(-time.Minute)}
+	base := Claims{Verified: true, Source: SourceDelegated, Issuer: "issuer", Audience: "agent-service", Subject: "workload", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "purpose", KeyID: "key", Scopes: []string{ScopeRead}, ExpiresAt: now.Add(time.Minute), NotBefore: now.Add(-time.Minute)}
 	cases := []Claims{func() Claims { c := base; c.Verified = false; return c }(), func() Claims { c := base; c.Source = SourceBrowser; return c }(), func() Claims { c := base; c.Issuer = "wrong"; return c }(), func() Claims { c := base; c.Subject = ""; return c }(), func() Claims { c := base; c.WorkspaceID = strings.Repeat("w", 129); return c }(), func() Claims { c := base; c.Purpose = strings.Repeat("p", 257); return c }(), func() Claims { c := base; c.ExpiresAt = now.Add(-time.Minute); return c }(), func() Claims { c := base; c.NotBefore = now.Add(time.Minute); return c }()}
 	for index, claims := range cases {
 		if _, err := validator.Authorize(context.Background(), claims, OpGetRun); err == nil {
@@ -76,7 +76,7 @@ func TestIssuerSubjectDelegationTimeAndTrustMatrix(t *testing.T) {
 func TestBrowserClaimsNeverBecomeServerScope(t *testing.T) {
 	now := time.Now()
 	validator, _ := NewValidator(Config{Issuers: []string{"issuer"}, Audience: "agent", MaximumClockSkew: 0}, &mutableTrust{true, true, true}, fixedClock{now})
-	claims := Claims{Verified: true, Source: SourceBrowser, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", TenantID: "attacker", WorkspaceID: "attacker", ProjectID: "attacker", Purpose: "agent", KeyID: "key", Scopes: []string{ScopeRead}, ExpiresAt: now.Add(time.Hour)}
+	claims := Claims{Verified: true, Source: SourceBrowser, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "attacker", ProjectID: "attacker", Purpose: "agent", KeyID: "key", Scopes: []string{ScopeRead}, ExpiresAt: now.Add(time.Hour)}
 	if _, err := validator.Authorize(context.Background(), claims, OpGetRun); err == nil {
 		t.Fatal("browser-derived scope accepted")
 	}
@@ -85,7 +85,7 @@ func TestBrowserClaimsNeverBecomeServerScope(t *testing.T) {
 func TestZeroAuthoritativeTimeFailsClosed(t *testing.T) {
 	now := time.Now()
 	validator, _ := NewValidator(Config{Issuers: []string{"issuer"}, Audience: "agent", MaximumClockSkew: time.Second}, &mutableTrust{true, true, true}, fixedClock{})
-	claims := Claims{Verified: true, Source: SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", Purpose: "purpose", KeyID: "key", Scopes: []string{ScopeRead}, NotBefore: now.Add(-time.Minute), ExpiresAt: now.Add(time.Minute)}
+	claims := Claims{Verified: true, Source: SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "purpose", KeyID: "key", Scopes: []string{ScopeRead}, NotBefore: now.Add(-time.Minute), ExpiresAt: now.Add(time.Minute)}
 	if _, err := validator.Authorize(context.Background(), claims, OpGetRun); err == nil {
 		t.Fatal("authorization accepted without authoritative time")
 	}

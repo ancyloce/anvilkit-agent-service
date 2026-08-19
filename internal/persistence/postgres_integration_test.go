@@ -175,8 +175,8 @@ func assertWorkflowLeaseCleanup(t *testing.T, ctx context.Context, pool *pgxpool
 	t.Helper()
 	now := time.Now().UTC()
 	_, err := pool.Exec(ctx, `
-INSERT INTO agent_workflow.agent_tasks(workspace_id,project_id,task_id,run_id,root_run_id,recovery_epoch,execution_generation,capability,capability_version,reservation_id,input_digest,input_object_key,state,lease_epoch,physical_attempts,created_at)
-VALUES('workspace-scheduler-injected','project-scheduler','task-workflow-cleanup','run-scheduler-injected','root-scheduler-injected',2,3,'fake.execute','fake.execute/v1','reservation-scheduler-injected',$1,'inputs/cleanup','leased',1,1,$2)`,
+INSERT INTO agent_workflow.agent_tasks(workspace_id,project_id,task_id,run_id,root_run_id,recovery_epoch,execution_generation,capability,reservation_id,input_digest,input_object_key,state,lease_epoch,physical_attempts,created_at)
+VALUES('workspace-scheduler-injected','project-scheduler','task-workflow-cleanup','run-scheduler-injected','root-scheduler-injected',2,3,'fake.execute','reservation-scheduler-injected',$1,'inputs/cleanup','leased',1,1,$2)`,
 		"sha256:"+strings.Repeat("a", 64), now)
 	if err != nil {
 		t.Fatal(err)
@@ -558,7 +558,7 @@ func seedSchedulerResult(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 		{`INSERT INTO agent_control.agent_runs(workspace_id,project_id,run_id,state,version,execution_generation,snapshot) VALUES($1,$2,$3,'executing',1,3,'{}')`, []any{scope.WorkspaceID, scope.ProjectID, runID}},
 		{`INSERT INTO agent_control.budget_reservations(workspace_id,project_id,root_run_id,run_id,reservation_id,controller_generation,policy_version,budget_version,upper_bound_micros,attempt_final,expires_at) VALUES($1,$2,$3,$4,$5,1,'policy','budget',100,true,$6)`, []any{scope.WorkspaceID, scope.ProjectID, rootRunID, runID, reservationID, now.Add(time.Minute)}},
 		{`INSERT INTO agent_artifacts.metadata(workspace_id,project_id,artifact_id,run_id,digest,actual_digest,state,security_generation,lineage,object_reference,schema_identity) VALUES($1,$2,$3,$4,$5,$5,'pending',1,'{}','{}','{}')`, []any{scope.WorkspaceID, scope.ProjectID, artifactID, runID, digest("b")}},
-		{`INSERT INTO agent_workflow.agent_tasks(workspace_id,project_id,task_id,run_id,root_run_id,recovery_epoch,execution_generation,capability,capability_version,reservation_id,input_digest,input_object_key,state,lease_epoch,physical_attempts,created_at) VALUES($1,$2,$3,$4,$5,2,3,'fake.execute','fake.execute/v1',$6,$7,'inputs/task','leased',4,1,$8)`, []any{scope.WorkspaceID, scope.ProjectID, taskID, runID, rootRunID, reservationID, digest("a"), now}},
+		{`INSERT INTO agent_workflow.agent_tasks(workspace_id,project_id,task_id,run_id,root_run_id,recovery_epoch,execution_generation,capability,reservation_id,input_digest,input_object_key,state,lease_epoch,physical_attempts,created_at) VALUES($1,$2,$3,$4,$5,2,3,'fake.execute',$6,$7,'inputs/task','leased',4,1,$8)`, []any{scope.WorkspaceID, scope.ProjectID, taskID, runID, rootRunID, reservationID, digest("a"), now}},
 		{`INSERT INTO agent_workflow.worker_attempts(workspace_id,project_id,task_id,physical_attempt_id,recovery_epoch,execution_generation,attempt_number,lease_epoch,owner,issued_at,expires_at,fence_token,state) VALUES($1,$2,$3,$4,2,3,1,4,'worker',$5,$6,$7,'active')`, []any{scope.WorkspaceID, scope.ProjectID, taskID, attemptID, now, now.Add(time.Minute), schedulerFence(suffix)}},
 	}
 	for _, statement := range statements {
@@ -683,16 +683,16 @@ func assertModelEvidence(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 	contextRecorder, _ := contextpg.New(pool)
 	contextPolicy := contextcompiler.PolicyReference{PolicyID: "policy", Version: "v1", Digest: binding}
 	compiler := contextcompiler.New([]string{"registered-secret"})
-	compiled, err := compiler.CompileAndRecord(ctx, contextcompiler.Request{TenantID: "tenant", WorkspaceID: "workspace-model", ProjectID: "project-model", RunID: "run-model", Policy: contextPolicy, RedactionPolicy: contextPolicy, TotalTokens: 8, CompiledAt: time.Unix(400, 0), Sources: []contextcompiler.Source{{ID: "system", Trust: contextcompiler.System, Classification: contextcompiler.Internal, Content: "policy", TenantID: "tenant", TokenBudget: 2}, {ID: "user", Trust: contextcompiler.User, Classification: contextcompiler.Internal, Content: "registered-secret", TenantID: "tenant", TokenBudget: 4}}}, contextRecorder)
+	compiled, err := compiler.CompileAndRecord(ctx, contextcompiler.Request{WorkspaceID: "workspace-model", ProjectID: "project-model", RunID: "run-model", Policy: contextPolicy, RedactionPolicy: contextPolicy, TotalTokens: 8, CompiledAt: time.Unix(400, 0), Sources: []contextcompiler.Source{{ID: "system", Trust: contextcompiler.System, Classification: contextcompiler.Internal, Content: "policy", WorkspaceID: "workspace-model", TokenBudget: 2}, {ID: "user", Trust: contextcompiler.User, Classification: contextcompiler.Internal, Content: "registered-secret", WorkspaceID: "workspace-model", TokenBudget: 4}}}, contextRecorder)
 	if err != nil || bytes.Contains([]byte(compiled.Disclosure[1].Content), []byte("registered-secret")) {
 		t.Fatalf("compiled context=%#v err=%v", compiled, err)
 	}
 
 	toolRecorder, _ := toolpg.New(pool)
 	toolPolicy := tools.PolicyReference{PolicyID: "policy", Version: "v1", Digest: binding}
-	schema := tools.SchemaReference{ComponentName: "anvilkit.contract.schema.synthetic.v1", Version: "1.0.0", Digest: binding}
+	schema := tools.SchemaReference{ComponentName: "anvilkit.contract.schema.synthetic", Digest: binding}
 	definition := func(id, capability string) tools.Definition {
-		return tools.Definition{APIVersion: "anvilkit.io/contracts/v1", Kind: "ToolDefinition", Capability: capability, CapabilityVersion: capability + "/v1", InputSchema: schema, OutputSchema: schema, SideEffectClass: "none", RiskClass: "low", ApprovalPolicy: toolPolicy, TimeoutPolicy: tools.TimeoutPolicy{TimeoutMilliseconds: 1000}, RetryPolicy: tools.RetryPolicy{MaximumAttempts: 1, Retryability: []string{}}, AcceptedDataClasses: []string{"internal"}, ToolID: id}
+		return tools.Definition{Kind: "ToolDefinition", Capability: capability, InputSchema: schema, OutputSchema: schema, SideEffectClass: "none", RiskClass: "low", ApprovalPolicy: toolPolicy, TimeoutPolicy: tools.TimeoutPolicy{TimeoutMilliseconds: 1000}, RetryPolicy: tools.RetryPolicy{MaximumAttempts: 1, Retryability: []string{}}, AcceptedDataClasses: []string{"internal"}, ToolID: id}
 	}
 	profile, _ := tools.NewProfile("manager", "v1", toolPolicy, []tools.Definition{definition("fake.execute", "fake.execute"), definition("contract.validate", "contract.validate"), definition("artifact.scan", "artifact.scan")})
 	profileStore, _ := toolpg.NewProfileStore(pool)
@@ -725,7 +725,7 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	runService := runs.NewService(runStore, noOpStarter{}, runID("control-run"), testClock{time.Unix(300, 0)}, journal.NewMemoryStore())
 	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-control"}}`)
 	digest, _ := canonical.Digest(raw)
-	scope := runs.Scope{TenantID: "tenant", WorkspaceID: "workspace-control", ProjectID: "project-control", ActorID: "actor"}
+	scope := runs.Scope{WorkspaceID: "workspace-control", ProjectID: "project-control", ActorID: "actor"}
 	trace := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
 	created, err := runService.Create(ctx, runs.CreateInput{Scope: scope, Key: "create", ClaimedDigest: digest, Traceparent: trace, Raw: raw, Authority: durableAuthority()})
 	if err != nil {
@@ -957,7 +957,7 @@ func assertDurableCreateLatency(t *testing.T, ctx context.Context, pool *pgxpool
 		t.Fatal(err)
 	}
 	service := runs.NewService(runpg.New(pool, idempotencyStore), noOpStarter{}, &sequentialRunIDs{}, testClock{time.Now().UTC()}, journal.NewMemoryStore())
-	scope := runs.Scope{TenantID: "tenant", WorkspaceID: "workspace-durable-load", ProjectID: "project-durable-load", ActorID: "actor"}
+	scope := runs.Scope{WorkspaceID: "workspace-durable-load", ProjectID: "project-durable-load", ActorID: "actor"}
 	authority := durableAuthority()
 	latencies := make([]time.Duration, requests)
 	errorsByRequest := make(chan error, requests)
@@ -1051,7 +1051,7 @@ func assertDurableRunCore(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	service := runs.NewService(store, starter, runID("durable-run"), testClock{time.Unix(200, 0)}, journal.NewMemoryStore())
 	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-durable"}}`)
 	digest, _ := canonical.Digest(raw)
-	scope := runs.Scope{TenantID: "tenant", WorkspaceID: "workspace-durable", ProjectID: "project-durable", ActorID: "actor"}
+	scope := runs.Scope{WorkspaceID: "workspace-durable", ProjectID: "project-durable", ActorID: "actor"}
 	input := runs.CreateInput{Scope: scope, Key: "durable-key", ClaimedDigest: digest, Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", Raw: raw, Authority: durableAuthority()}
 	var wait sync.WaitGroup
 	outcomes := make(chan runs.CreateOutcome, 8)
@@ -1090,7 +1090,7 @@ func assertDurableRunCore(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	if replayed != 7 || starter.Count() != 1 {
 		t.Fatalf("replayed=%d workflowStarts=%d", replayed, starter.Count())
 	}
-	missing, err := service.Get(ctx, runs.Scope{TenantID: "tenant", WorkspaceID: "other", ProjectID: "project-durable", ActorID: "actor"}, "durable-run")
+	missing, err := service.Get(ctx, runs.Scope{WorkspaceID: "other", ProjectID: "project-durable", ActorID: "actor"}, "durable-run")
 	_ = missing
 	assertProblemCode(t, err, problem.CodeResourceNotFound)
 	_, err = service.Get(ctx, scope, "absent")
@@ -1152,7 +1152,7 @@ func assertDurableRunCore(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 		t.Fatalf("strictly-after replay=%#v err=%v", replay, err)
 	}
 	for _, event := range allEvents.Events {
-		findings := guard.Validate(ctx, contractguard.EventIn, "anvilkit://schema/agent-event.v1@1.0.0?digest=sha256:f19775b8dfdd34cac0318fce8067460988671840987a2b9aaeaa3c85710591ab", event.Bytes)
+		findings := guard.Validate(ctx, contractguard.EventIn, "anvilkit://schema/agent-event?digest=sha256:2fdd8937381427507e721675ebbd66144595a193b53ba460534e9712df9b774a", event.Bytes)
 		if len(findings) != 0 {
 			t.Fatalf("persisted event is not contract-valid: %#v raw=%s", findings, event.Bytes)
 		}
@@ -1164,7 +1164,7 @@ func assertDurableRunCore(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	if err != nil || projection.Cursor != "durable-run:2" || len(projection.Run) == 0 {
 		t.Fatalf("snapshot=%#v err=%v", projection, err)
 	}
-	if findings := guard.Validate(ctx, contractguard.APIIn, "anvilkit://schema/agent-run.v1@1.0.0?digest=sha256:68949242c9b4557a8b5ff965f76de8f2de49c11523a7cc1e64cfd1b4af824233", projection.Run); len(findings) != 0 {
+	if findings := guard.Validate(ctx, contractguard.APIIn, "anvilkit://schema/agent-run?digest=sha256:e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564", projection.Run); len(findings) != 0 {
 		t.Fatalf("snapshot run is not contract-valid: %#v raw=%s", findings, projection.Run)
 	}
 	afterSnapshot, err := reader.Replay(ctx, events.ReplayRequest{Scope: eventScope, RunID: "durable-run", AfterEventID: projection.Cursor, Limit: 100})
@@ -1201,7 +1201,7 @@ func assertDurableRunStoreAtomicity(t *testing.T, ctx context.Context, pool *pgx
 	traceparent := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
 	for index, point := range points {
 		runID := runs.ID(fmt.Sprintf("durable-atomic-create-%d", index))
-		scope := runs.Scope{TenantID: "tenant", WorkspaceID: "workspace-durable-atomic", ProjectID: "project-durable-atomic", ActorID: "actor"}
+		scope := runs.Scope{WorkspaceID: "workspace-durable-atomic", ProjectID: "project-durable-atomic", ActorID: "actor"}
 		raw := []byte(fmt.Sprintf(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"atomic-create-%d"}}`, index))
 		digest, _ := canonical.Digest(raw)
 		store := runpg.NewConfigured(pool, idempotencyStore, events.DefaultBounds(), func(actual runpg.FailurePoint) error {
@@ -1258,7 +1258,7 @@ func durableAuthority() runs.Authority {
 	return runs.Authority{
 		ContractBOM: []byte(`{"repository":"anvilkit/contracts","bomDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ociManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidenceManifestDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}`),
 		Policy:      policy,
-		Budget:      []byte(`{"apiVersion":"anvilkit.io/contracts/v1","kind":"AgentBudget","modelLimits":{"maximumCalls":10,"maximumConcurrentCalls":2},"tokenLimits":{"inputTokens":4096,"outputTokens":2048,"totalTokens":6144},"workerLimits":{"maximumAttempts":4,"maximumDurationMilliseconds":60000},"gpuLimits":{"maximumGpuMilliseconds":0},"currencyLimits":{"maximumCost":{"amount":"1000","currency":"USD"},"reservedCost":{"amount":"500","currency":"USD"}},"reservationId":"reservation.synthetic.001","exceedBehavior":"refuse","policy":` + string(policy) + `}`),
+		Budget:      []byte(`{"kind":"AgentBudget","modelLimits":{"maximumCalls":10,"maximumConcurrentCalls":2},"tokenLimits":{"inputTokens":4096,"outputTokens":2048,"totalTokens":6144},"workerLimits":{"maximumAttempts":4,"maximumDurationMilliseconds":60000},"gpuLimits":{"maximumGpuMilliseconds":0},"currencyLimits":{"maximumCost":{"amount":"1000","currency":"USD"},"reservedCost":{"amount":"500","currency":"USD"}},"reservationId":"reservation.synthetic.001","exceedBehavior":"refuse","policy":` + string(policy) + `}`),
 	}
 }
 
@@ -1398,7 +1398,6 @@ func assertAtomicEventsAndInbox(t *testing.T, ctx context.Context, pool *pgxpool
 
 func validEventBytes(eventID, runID string, sequence uint64, eventType string) []byte {
 	value := map[string]any{
-		"apiVersion": "anvilkit.io/contracts/v1",
 		"kind":       "AgentEvent",
 		"eventId":    eventID,
 		"runId":      runID,

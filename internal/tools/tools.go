@@ -25,7 +25,6 @@ type PolicyReference struct {
 }
 type SchemaReference struct {
 	ComponentName string `json:"componentName"`
-	Version       string `json:"version"`
 	Digest        string `json:"digest"`
 }
 type TimeoutPolicy struct {
@@ -37,10 +36,8 @@ type RetryPolicy struct {
 	Retryability        []string `json:"retryability"`
 }
 type Definition struct {
-	APIVersion          string          `json:"apiVersion"`
 	Kind                string          `json:"kind"`
 	Capability          string          `json:"capability"`
-	CapabilityVersion   string          `json:"capabilityVersion"`
 	InputSchema         SchemaReference `json:"inputSchema"`
 	OutputSchema        SchemaReference `json:"outputSchema"`
 	SideEffectClass     string          `json:"sideEffectClass"`
@@ -84,8 +81,8 @@ func NewProfile(id ProfileID, version string, policy PolicyReference, definition
 	return Profile{id, version, "sha256:" + hex.EncodeToString(sum[:]), policy, copyDefs}, nil
 }
 func validateDefinition(d Definition) error {
-	if d.APIVersion != "anvilkit.io/contracts/v1" || d.Kind != "ToolDefinition" || !opaque(d.ToolID) || !oneOf(d.Capability, "provider.invoke", "contract.validate", "artifact.scan", "fake.execute") || d.CapabilityVersion != d.Capability+"/v1" || !validSchema(d.InputSchema) || !validSchema(d.OutputSchema) || !validPolicy(d.ApprovalPolicy) || !oneOf(d.SideEffectClass, "none", "read", "artifact-write", "domain-effect") || !oneOf(d.RiskClass, "low", "medium", "high", "critical") || d.TimeoutPolicy.TimeoutMilliseconds < 1 || d.TimeoutPolicy.TimeoutMilliseconds > 86400000 || d.RetryPolicy.MaximumAttempts < 1 || d.RetryPolicy.MaximumAttempts > 100 || d.RetryPolicy.BackoffMilliseconds < 0 || d.RetryPolicy.BackoffMilliseconds > 3600000 || d.RetryPolicy.Retryability == nil || len(d.RetryPolicy.Retryability) > 3 || len(d.AcceptedDataClasses) < 1 || len(d.AcceptedDataClasses) > 4 || !uniqueAllowed(d.AcceptedDataClasses, []string{"public", "internal", "confidential", "restricted"}) || !uniqueAllowed(d.RetryPolicy.Retryability, []string{"safe-immediate", "safe-after-backoff", "operator-action"}) {
-		return fmt.Errorf("invalid ToolDefinitionV1 %s", d.ToolID)
+	if d.Kind != "ToolDefinition" || !opaque(d.ToolID) || !oneOf(d.Capability, "provider.invoke", "contract.validate", "artifact.scan", "fake.execute") || !validSchema(d.InputSchema) || !validSchema(d.OutputSchema) || !validPolicy(d.ApprovalPolicy) || !oneOf(d.SideEffectClass, "none", "read", "artifact-write", "domain-effect") || !oneOf(d.RiskClass, "low", "medium", "high", "critical") || d.TimeoutPolicy.TimeoutMilliseconds < 1 || d.TimeoutPolicy.TimeoutMilliseconds > 86400000 || d.RetryPolicy.MaximumAttempts < 1 || d.RetryPolicy.MaximumAttempts > 100 || d.RetryPolicy.BackoffMilliseconds < 0 || d.RetryPolicy.BackoffMilliseconds > 3600000 || d.RetryPolicy.Retryability == nil || len(d.RetryPolicy.Retryability) > 3 || len(d.AcceptedDataClasses) < 1 || len(d.AcceptedDataClasses) > 4 || !uniqueAllowed(d.AcceptedDataClasses, []string{"public", "internal", "confidential", "restricted"}) || !uniqueAllowed(d.RetryPolicy.Retryability, []string{"safe-immediate", "safe-after-backoff", "operator-action"}) {
+		return fmt.Errorf("invalid ToolDefinition %s", d.ToolID)
 	}
 	return nil
 }
@@ -242,7 +239,7 @@ func risk(value string) int {
 	}
 }
 func validSchema(value SchemaReference) bool {
-	return regexp.MustCompile(`^anvilkit\.[a-z0-9][a-z0-9.-]*\.v[1-9][0-9]*$`).MatchString(value.ComponentName) && regexp.MustCompile(`^[1-9][0-9]*\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`).MatchString(value.Version) && validDigest(value.Digest)
+	return regexp.MustCompile(`^anvilkit\.[a-z0-9][a-z0-9.-]*$`).MatchString(value.ComponentName) && !regexp.MustCompile(`\.v[0-9]+$`).MatchString(value.ComponentName) && validDigest(value.Digest)
 }
 func validPolicy(value PolicyReference) bool {
 	return opaque(value.PolicyID) && opaque(value.Version) && validDigest(value.Digest)

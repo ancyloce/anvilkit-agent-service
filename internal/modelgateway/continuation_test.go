@@ -45,9 +45,9 @@ func TestContinuationEncryptedOptionalAndLossRestartsSafely(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const schema = "anvilkit://schema/provider-continuation.v1@1.0.0?digest=sha256:68810769703a8bb093f06deec27b822877a655ffef7770d06144a4c5c10143fb"
+	const schema = "anvilkit://schema/provider-continuation?digest=sha256:5b0e3545a8cf95d40c0b23960d79780419e70857ad00b4fee9c58be8cb7de54d"
 	if findings := validator.Validate(schema, raw); len(findings) != 0 {
-		t.Fatalf("ProviderContinuationV1 findings: %#v", findings)
+		t.Fatalf("ProviderContinuation findings: %#v", findings)
 	}
 	resumed, err := service.Resume(context.Background(), "run:stage", digest, "planning:checkpoint")
 	if err != nil || !bytes.Equal(resumed.Continuation, plain) || resumed.Restarted {

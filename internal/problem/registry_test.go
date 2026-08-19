@@ -21,9 +21,9 @@ func TestProblemDetailsUsesClosedCandidateContractShape(t *testing.T) {
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"apiVersion", "kind", "code", "retryability", "message", "fieldErrors", "traceId"}
+	want := []string{"kind", "code", "retryability", "message", "fieldErrors", "traceId"}
 	if len(payload) != len(want) {
-		t.Fatalf("unexpected ProblemDetailsV1 fields: %s", raw)
+		t.Fatalf("unexpected ProblemDetails fields: %s", raw)
 	}
 	for _, field := range want {
 		if _, ok := payload[field]; !ok {
@@ -37,9 +37,9 @@ func TestProblemDetailsUsesClosedCandidateContractShape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	findings := guard.Validate(context.Background(), contractguard.APIIn, "anvilkit://schema/problem-details.v1@1.0.0?digest=sha256:6cfe1db66717fb64fd1ec18920ec64b16c191c2ba6a4009350ba4a19163b7647", raw)
+	findings := guard.Validate(context.Background(), contractguard.APIIn, "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087", raw)
 	if len(findings) != 0 {
-		t.Fatalf("ProblemDetailsV1 validation failed: %#v raw=%s", findings, raw)
+		t.Fatalf("ProblemDetails validation failed: %#v raw=%s", findings, raw)
 	}
 }
 

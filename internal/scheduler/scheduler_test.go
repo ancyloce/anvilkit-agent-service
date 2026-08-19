@@ -29,7 +29,7 @@ func (i *ids) FenceToken() (string, error) {
 }
 func (i *ids) DLQID() (string, error) { i.dlq++; return fmt.Sprintf("dlq-%d", i.dlq), nil }
 func create() Create {
-	return Create{Scope: Scope{"workspace", "project"}, TaskID: "task", RunID: "run", RootRunID: "root", RecoveryEpoch: 2, ExecutionGeneration: 3, Capability: "fake.execute", CapabilityVersion: "fake.execute/v1", ReservationID: "reservation", ReservationCurrent: true, PolicyAllowed: true, InputDigest: "sha256:" + strings.Repeat("a", 64), InputObjectKey: "inputs/task", CreatedAt: now}
+	return Create{Scope: Scope{"workspace", "project"}, TaskID: "task", RunID: "run", RootRunID: "root", RecoveryEpoch: 2, ExecutionGeneration: 3, Capability: "fake.execute", ReservationID: "reservation", ReservationCurrent: true, PolicyAllowed: true, InputDigest: "sha256:" + strings.Repeat("a", 64), InputObjectKey: "inputs/task", CreatedAt: now}
 }
 func service(t *testing.T, inject FailureInjector) (*Service, *clock, *MemoryEffects) {
 	t.Helper()

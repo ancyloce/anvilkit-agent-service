@@ -29,14 +29,14 @@ const (
 
 type Scope struct{ WorkspaceID, ProjectID string }
 type Create struct {
-	Scope                                        Scope
-	TaskID                                       TaskID
-	RunID, RootRunID                             string
-	RecoveryEpoch, ExecutionGeneration           uint64
-	Capability, CapabilityVersion, ReservationID string
-	ReservationCurrent, PolicyAllowed            bool
-	InputDigest, InputObjectKey                  string
-	CreatedAt                                    time.Time
+	Scope                              Scope
+	TaskID                             TaskID
+	RunID, RootRunID                   string
+	RecoveryEpoch, ExecutionGeneration uint64
+	Capability, ReservationID          string
+	ReservationCurrent, PolicyAllowed  bool
+	InputDigest, InputObjectKey        string
+	CreatedAt                          time.Time
 }
 type Task struct {
 	Create
@@ -156,7 +156,7 @@ func key(scope Scope, id TaskID) string {
 	return scope.WorkspaceID + "\x00" + scope.ProjectID + "\x00" + string(id)
 }
 func (s *Service) Create(ctx context.Context, input Create) (Task, error) {
-	if !opaque(input.Scope.WorkspaceID) || !opaque(input.Scope.ProjectID) || !opaque(string(input.TaskID)) || !opaque(input.RunID) || !opaque(input.RootRunID) || input.ExecutionGeneration == 0 || !opaque(input.Capability) || input.CapabilityVersion != input.Capability+"/v1" || !opaque(input.ReservationID) || !digest(input.InputDigest) || !safeObjectKey(input.InputObjectKey) || input.CreatedAt.IsZero() {
+	if !opaque(input.Scope.WorkspaceID) || !opaque(input.Scope.ProjectID) || !opaque(string(input.TaskID)) || !opaque(input.RunID) || !opaque(input.RootRunID) || input.ExecutionGeneration == 0 || !opaque(input.Capability) || !opaque(input.ReservationID) || !digest(input.InputDigest) || !safeObjectKey(input.InputObjectKey) || input.CreatedAt.IsZero() {
 		return Task{}, problem.New(problem.CodeTaskDispatchDenied, "")
 	}
 	if err := s.prerequisites.AuthorizeTask(ctx, input); err != nil {

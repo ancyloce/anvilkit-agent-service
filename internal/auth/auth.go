@@ -58,12 +58,12 @@ const (
 )
 
 type Claims struct {
-	Verified                                                                             bool
-	Source                                                                               Source
-	Issuer, Audience, Subject, ActorID, TenantID, WorkspaceID, ProjectID, Purpose, KeyID string
-	Scopes                                                                               []string
-	ExpiresAt                                                                            time.Time
-	NotBefore                                                                            time.Time
+	Verified                                                                   bool
+	Source                                                                     Source
+	Issuer, Audience, Subject, ActorID, WorkspaceID, ProjectID, Purpose, KeyID string
+	Scopes                                                                     []string
+	ExpiresAt                                                                  time.Time
+	NotBefore                                                                  time.Time
 }
 type Trust interface {
 	KeyActive(context.Context, string) (bool, error)
@@ -96,7 +96,7 @@ func (v *Validator) Authorize(ctx context.Context, claims Claims, operation Oper
 	if !contains(v.config.Issuers, claims.Issuer) || claims.Audience != v.config.Audience || !boundedClaim(claims.Issuer) || !boundedClaim(claims.Audience) || !boundedClaim(claims.Subject) || !boundedClaim(claims.Purpose) || !boundedClaim(claims.KeyID) || len(claims.Scopes) > 64 {
 		return runs.Scope{}, authProblem(problem.CodeAuthenticationInvalid)
 	}
-	scope := runs.Scope{TenantID: claims.TenantID, WorkspaceID: claims.WorkspaceID, ProjectID: claims.ProjectID, ActorID: claims.ActorID}
+	scope := runs.Scope{WorkspaceID: claims.WorkspaceID, ProjectID: claims.ProjectID, ActorID: claims.ActorID}
 	if err := scope.Validate(); err != nil {
 		return runs.Scope{}, authProblem(problem.CodeAuthenticationInvalid)
 	}

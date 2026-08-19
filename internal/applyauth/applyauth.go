@@ -25,7 +25,7 @@ import (
 const (
 	Issuer   = "urn:anvilkit:issuer:agent-service"
 	Audience = "urn:anvilkit:audience:pagix"
-	Type     = "application/vnd.anvilkit.apply-authorization.v1+json"
+	Type     = "anvilkit-apply-authorization+jws"
 )
 
 type AuthorizationID string
@@ -40,6 +40,7 @@ type Target struct {
 	Type        string `json:"targetType"`
 	ID          string `json:"targetId"`
 	WorkspaceID string `json:"workspaceId"`
+	ProjectID   string `json:"projectId"`
 }
 
 // Binding is the full approval/apply binding. Authority returns both the
@@ -49,7 +50,7 @@ type Binding struct {
 	Target                                            Target
 	ActorID, WorkspaceID                              string
 	ApprovalVersion                                   uint64
-	ContractBOMDigest, PolicyDigest                   string
+	ContractBOMDigest, PolicyDigest, DefinitionDigest string
 }
 
 type Proof struct {
@@ -103,7 +104,6 @@ type Authorization struct {
 }
 
 type Payload struct {
-	APIVersion        string          `json:"apiVersion"`
 	Kind              string          `json:"kind"`
 	AuthorizationID   AuthorizationID `json:"authorizationId"`
 	KeyID             string          `json:"keyId"`
@@ -122,6 +122,7 @@ type Payload struct {
 	ApprovalVersion   uint64          `json:"approvalVersion"`
 	ContractBOMDigest string          `json:"contractBomDigest"`
 	PolicyDigest      string          `json:"policyDigest"`
+	DefinitionDigest  string          `json:"definitionDigest"`
 }
 
 type protectedHeader struct {
@@ -231,14 +232,14 @@ func (s *IssuerService) Issue(ctx context.Context, command Command) (Authorizati
 	return authorization, nil
 }
 
-const applyAuthorizationSchema = "anvilkit://schema/apply-authorization.v1@1.0.0?digest=sha256:67ce757f4792deccb1fc6c442611bfed2fff76aa1cac39ad1aa5ff70eddf97a3"
+const applyAuthorizationSchema = "anvilkit://schema/apply-authorization?digest=sha256:ad07f9d74ca750dac5b682247ee8109501c4d165aea4d1024f1fa316b92e3e1b"
 
 func payloadFor(id AuthorizationID, keyID string, binding Binding, issued, expires time.Time) Payload {
-	return Payload{APIVersion: "anvilkit.io/contracts/v1", Kind: "ApplyAuthorization", AuthorizationID: id, KeyID: keyID, Issuer: Issuer, Audience: Audience, IssuedAt: timestamp(issued), NotBefore: timestamp(issued), ExpiresAt: timestamp(expires), RunID: binding.RunID, ActionDigest: binding.ActionDigest, ArtifactDigest: binding.ArtifactDigest, Target: binding.Target, BaseRevision: binding.BaseRevision, ActorID: binding.ActorID, WorkspaceID: binding.WorkspaceID, ApprovalVersion: binding.ApprovalVersion, ContractBOMDigest: binding.ContractBOMDigest, PolicyDigest: binding.PolicyDigest}
+	return Payload{Kind: "ApplyAuthorization", AuthorizationID: id, KeyID: keyID, Issuer: Issuer, Audience: Audience, IssuedAt: timestamp(issued), NotBefore: timestamp(issued), ExpiresAt: timestamp(expires), RunID: binding.RunID, ActionDigest: binding.ActionDigest, ArtifactDigest: binding.ArtifactDigest, Target: binding.Target, BaseRevision: binding.BaseRevision, ActorID: binding.ActorID, WorkspaceID: binding.WorkspaceID, ApprovalVersion: binding.ApprovalVersion, ContractBOMDigest: binding.ContractBOMDigest, PolicyDigest: binding.PolicyDigest, DefinitionDigest: binding.DefinitionDigest}
 }
 
 func validBinding(value Binding) bool {
-	return opaque(value.RunID) && validDigest(value.ActionDigest) && validDigest(value.ArtifactDigest) && targetType(value.Target.Type) && opaque(value.Target.ID) && value.Target.WorkspaceID == value.WorkspaceID && opaque(value.BaseRevision) && opaque(value.ActorID) && opaque(value.WorkspaceID) && value.ApprovalVersion > 0 && validDigest(value.ContractBOMDigest) && validDigest(value.PolicyDigest)
+	return opaque(value.RunID) && validDigest(value.ActionDigest) && validDigest(value.ArtifactDigest) && targetType(value.Target.Type) && opaque(value.Target.ID) && value.Target.WorkspaceID == value.WorkspaceID && opaque(value.Target.ProjectID) && opaque(value.BaseRevision) && opaque(value.ActorID) && opaque(value.WorkspaceID) && value.ApprovalVersion > 0 && validDigest(value.ContractBOMDigest) && validDigest(value.PolicyDigest) && validDigest(value.DefinitionDigest)
 }
 
 func opaque(value string) bool {
@@ -349,13 +350,13 @@ func Verify(ctx context.Context, compact string, keys SigningPort, now time.Time
 		return Payload{}, denied("authorization signature is invalid")
 	}
 	var payload Payload
-	if err := strict(payloadBytes, &payload); err != nil || !opaque(string(payload.AuthorizationID)) || payload.KeyID != header.KeyID || payload.Issuer != Issuer || payload.Audience != Audience || payload.APIVersion != "anvilkit.io/contracts/v1" || payload.Kind != "ApplyAuthorization" {
+	if err := strict(payloadBytes, &payload); err != nil || !opaque(string(payload.AuthorizationID)) || payload.KeyID != header.KeyID || payload.Issuer != Issuer || payload.Audience != Audience || payload.Kind != "ApplyAuthorization" {
 		return Payload{}, denied("authorization claims are invalid")
 	}
 	nbf, nbfErr := time.Parse(time.RFC3339Nano, payload.NotBefore)
 	iat, iatErr := time.Parse(time.RFC3339Nano, payload.IssuedAt)
 	exp, expErr := time.Parse(time.RFC3339Nano, payload.ExpiresAt)
-	if nbfErr != nil || iatErr != nil || expErr != nil || payload.NotBefore != timestamp(nbf) || payload.IssuedAt != timestamp(iat) || payload.ExpiresAt != timestamp(exp) || !iat.Equal(nbf) || now.IsZero() || now.Before(nbf) || !now.Before(exp) || exp.Sub(nbf) > 5*time.Minute || !validBinding(Binding{RunID: payload.RunID, ActionDigest: payload.ActionDigest, ArtifactDigest: payload.ArtifactDigest, Target: payload.Target, BaseRevision: payload.BaseRevision, ActorID: payload.ActorID, WorkspaceID: payload.WorkspaceID, ApprovalVersion: payload.ApprovalVersion, ContractBOMDigest: payload.ContractBOMDigest, PolicyDigest: payload.PolicyDigest}) {
+	if nbfErr != nil || iatErr != nil || expErr != nil || payload.NotBefore != timestamp(nbf) || payload.IssuedAt != timestamp(iat) || payload.ExpiresAt != timestamp(exp) || !iat.Equal(nbf) || now.IsZero() || now.Before(nbf) || !now.Before(exp) || exp.Sub(nbf) > 5*time.Minute || !validBinding(Binding{RunID: payload.RunID, ActionDigest: payload.ActionDigest, ArtifactDigest: payload.ArtifactDigest, Target: payload.Target, BaseRevision: payload.BaseRevision, ActorID: payload.ActorID, WorkspaceID: payload.WorkspaceID, ApprovalVersion: payload.ApprovalVersion, ContractBOMDigest: payload.ContractBOMDigest, PolicyDigest: payload.PolicyDigest, DefinitionDigest: payload.DefinitionDigest}) {
 		return Payload{}, denied("authorization is expired, premature, or incompletely bound")
 	}
 	return payload, nil

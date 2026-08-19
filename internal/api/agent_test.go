@@ -81,7 +81,7 @@ func TestCandidateReadRoutesRequireVerifiedBearerAndEmitStrongETag(t *testing.T)
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent"}, appTrust{}, appClock{now})
 	service := runs.NewService(appStore{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 2}}, appStarter{}, appIDs{}, appClock{now}, journal.NewMemoryStore())
 	core := runapp.New(validator, service, appEvents{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.Bounds{MaximumBytes: 100}}, appAuthority{})
-	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Hour)}
+	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Hour)}
 	handler := New(nil, WithAgentCore(core, verifier{claims: claims}))
 	request := httptest.NewRequest(http.MethodGet, "/v1/workspaces/workspace/agent-runs/run", nil)
 	request.Header.Set("Authorization", "Bearer verified")
@@ -117,7 +117,7 @@ func TestNonSuccessResponsesHaveStableClosedProblemShapeAndDoNotDiscloseScope(t 
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent"}, appTrust{}, appClock{now})
 	service := runs.NewService(appStore{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 2}}, appStarter{}, appIDs{}, appClock{now}, journal.NewMemoryStore())
 	core := runapp.New(validator, service, appEvents{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.DefaultBounds()}, appAuthority{})
-	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Hour)}
+	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Hour)}
 	handler := New(nil, WithAgentCore(core, verifier{claims: claims}))
 
 	request := httptest.NewRequest(http.MethodGet, "/v1/workspaces/workspace/agent-runs/missing", nil)
@@ -160,7 +160,7 @@ func assertClosedProblem(t *testing.T, response *httptest.ResponseRecorder, code
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	wantFields := []string{"apiVersion", "kind", "code", "retryability", "message", "fieldErrors", "traceId"}
+	wantFields := []string{"kind", "code", "retryability", "message", "fieldErrors", "traceId"}
 	if len(payload) != len(wantFields) {
 		t.Fatalf("problem fields=%v", payload)
 	}

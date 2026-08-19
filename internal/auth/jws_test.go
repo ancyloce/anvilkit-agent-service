@@ -26,7 +26,7 @@ func TestJWSVerifierProjectsOnlySignedClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifier, _ := NewJWSVerifier(keys{"key": public})
-	payload := tokenClaims{Issuer: "issuer", Audience: "agent", Subject: "workload", ActorID: "actor", TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", Source: SourceDelegated, Scopes: []string{ScopeRead}, ExpiresAt: 2000, NotBefore: 1000}
+	payload := tokenClaims{Issuer: "issuer", Audience: "agent", Subject: "workload", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", Source: SourceDelegated, Scopes: []string{ScopeRead}, ExpiresAt: 2000, NotBefore: 1000}
 	token := signToken(t, private, protectedHeader{Algorithm: "EdDSA", KeyID: "key", Type: "JWT"}, payload)
 	claims, err := verifier.Verify(context.Background(), token)
 	if err != nil || !claims.Verified || claims.WorkspaceID != "workspace" || claims.ActorID != "actor" {

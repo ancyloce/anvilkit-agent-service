@@ -15,10 +15,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-const agentEventSchema = "anvilkit://schema/agent-event.v1@1.0.0?digest=sha256:f19775b8dfdd34cac0318fce8067460988671840987a2b9aaeaa3c85710591ab"
+const agentEventSchema = "anvilkit://schema/agent-event?digest=sha256:2fdd8937381427507e721675ebbd66144595a193b53ba460534e9712df9b774a"
 
 func TestMarshalEventProducesReplayableContractEnvelope(t *testing.T) {
 	write := interrupts.Write{
+		Scope:       runs.Scope{WorkspaceID: "workspace.synthetic.001", ProjectID: "project.synthetic.001", ActorID: "actor.synthetic.001"},
 		RunID:       "child-run",
 		Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
 	}
@@ -39,14 +40,14 @@ func TestMarshalEventProducesReplayableContractEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := guard.Require(context.Background(), contractguard.EventIn, agentEventSchema, raw); err != nil {
-		t.Fatalf("event violates AgentEventV1: %v\n%s", err, raw)
+		t.Fatalf("event violates AgentEvent: %v\n%s", err, raw)
 	}
 }
 
 func TestMarshalEventRejectsUnknownEventType(t *testing.T) {
 	_, err := marshalEvent(interrupts.Write{RunID: "run"}, runs.Snapshot{}, 1, "event", "run.stuck", nil, time.Now())
 	if err == nil {
-		t.Fatal("unknown AgentEventV1 event type was accepted")
+		t.Fatal("unknown AgentEvent event type was accepted")
 	}
 }
 

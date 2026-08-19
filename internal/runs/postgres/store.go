@@ -57,7 +57,7 @@ func (s *Store) Create(ctx context.Context, record runs.CreateRecord) (runs.Crea
 		if err := s.fail(AfterRunWrite); err != nil {
 			return idempotency.Response{}, err
 		}
-		eventBytes, err := json.Marshal(map[string]any{"apiVersion": "anvilkit.io/contracts/v1", "kind": "AgentEvent", "eventId": record.Snapshot.LatestEventID, "runId": record.Snapshot.RunID, "sequence": 1, "eventType": "run.created", "occurredAt": contractTimestamp(record.Snapshot.CreatedAt), "traceContext": map[string]string{"traceparent": record.Traceparent}, "contractBomReference": record.Snapshot.ContractBOM, "payload": map[string]string{"state": string(runs.Created)}})
+		eventBytes, err := json.Marshal(map[string]any{"kind": "AgentEvent", "eventId": record.Snapshot.LatestEventID, "runId": record.Snapshot.RunID, "workspaceId": record.Snapshot.WorkspaceID, "projectId": record.Snapshot.Target.ProjectID, "sequence": 1, "eventType": "run.created", "occurredAt": contractTimestamp(record.Snapshot.CreatedAt), "subject": map[string]string{"subjectType": "user", "subjectId": record.Snapshot.ActorID}, "traceContext": map[string]string{"traceparent": record.Traceparent}, "contractBomReference": record.Snapshot.ContractBOM, "payload": map[string]string{"state": string(runs.Created)}})
 		if err != nil {
 			return idempotency.Response{}, fmt.Errorf("marshal created event: %w", err)
 		}
@@ -70,7 +70,7 @@ func (s *Store) Create(ctx context.Context, record runs.CreateRecord) (runs.Crea
 		if err := s.fail(AfterEventWrite); err != nil {
 			return idempotency.Response{}, err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,1,'agent.events.v1',$5,$6)`, record.Scope.WorkspaceID, record.Scope.ProjectID, record.Snapshot.LatestEventID, record.Snapshot.RunID, eventBytes, record.Snapshot.CreatedAt); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,1,'agent.public-events',$5,$6)`, record.Scope.WorkspaceID, record.Scope.ProjectID, record.Snapshot.LatestEventID, record.Snapshot.RunID, eventBytes, record.Snapshot.CreatedAt); err != nil {
 			return idempotency.Response{}, fmt.Errorf("persist created outbox: %w", err)
 		}
 		if err := s.fail(AfterOutboxWrite); err != nil {
@@ -205,7 +205,7 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 	if err := s.fail(AfterRunWrite); err != nil {
 		return runs.Snapshot{}, err
 	}
-	eventBytes, err := json.Marshal(map[string]any{"apiVersion": "anvilkit.io/contracts/v1", "kind": "AgentEvent", "eventId": snapshot.LatestEventID, "runId": id, "sequence": sequence, "eventType": "run.state-changed", "occurredAt": contractTimestamp(snapshot.UpdatedAt), "traceContext": map[string]string{"traceparent": traceparent}, "contractBomReference": snapshot.ContractBOM, "payload": map[string]string{"previousState": string(transition.Previous), "state": string(transition.Current)}})
+	eventBytes, err := json.Marshal(map[string]any{"kind": "AgentEvent", "eventId": snapshot.LatestEventID, "runId": id, "workspaceId": snapshot.WorkspaceID, "projectId": snapshot.Target.ProjectID, "sequence": sequence, "eventType": "run.state-changed", "occurredAt": contractTimestamp(snapshot.UpdatedAt), "subject": map[string]string{"subjectType": "system", "subjectId": "agent-service"}, "traceContext": map[string]string{"traceparent": traceparent}, "contractBomReference": snapshot.ContractBOM, "payload": map[string]string{"previousState": string(transition.Previous), "state": string(transition.Current)}})
 	if err != nil {
 		return runs.Snapshot{}, fmt.Errorf("marshal run transition event: %w", err)
 	}
@@ -218,7 +218,7 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 	if err := s.fail(AfterEventWrite); err != nil {
 		return runs.Snapshot{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,$5,'agent.events.v1',$6,$7)`, scope.WorkspaceID, scope.ProjectID, snapshot.LatestEventID, id, sequence, eventBytes, snapshot.UpdatedAt); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,$5,'agent.public-events',$6,$7)`, scope.WorkspaceID, scope.ProjectID, snapshot.LatestEventID, id, sequence, eventBytes, snapshot.UpdatedAt); err != nil {
 		return runs.Snapshot{}, err
 	}
 	if err := s.fail(AfterOutboxWrite); err != nil {

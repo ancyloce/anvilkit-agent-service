@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS agent_workflow.agent_tasks (
  workspace_id text NOT NULL, project_id text NOT NULL, task_id text NOT NULL, run_id text NOT NULL, root_run_id text NOT NULL,
  recovery_epoch bigint NOT NULL CHECK(recovery_epoch>=0), execution_generation bigint NOT NULL CHECK(execution_generation>0),
- capability text NOT NULL, capability_version text NOT NULL, reservation_id text NOT NULL,
+ capability text NOT NULL, reservation_id text NOT NULL,
  input_digest text NOT NULL CHECK(input_digest ~ '^sha256:[0-9a-f]{64}$'), input_object_key text NOT NULL,
  state text NOT NULL CHECK(state IN('queued','leased','completed','failed','dead-lettered','cancelled')),
  lease_epoch bigint NOT NULL DEFAULT 0 CHECK(lease_epoch>=0), physical_attempts bigint NOT NULL DEFAULT 0 CHECK(physical_attempts>=0),

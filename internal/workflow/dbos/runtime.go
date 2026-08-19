@@ -35,7 +35,7 @@ func New(parent context.Context, cfg Config, executor workflow.Executor) (*Runti
 		return runtime.run(ctx, request), nil
 	}
 	runtime.workflowFunc = durable
-	sdk.RegisterWorkflow(engine, durable, sdk.WithWorkflowName("AgentServiceWorkflowV1"))
+	sdk.RegisterWorkflow(engine, durable, sdk.WithWorkflowName("AgentRunWorkflow"))
 	return runtime, nil
 }
 

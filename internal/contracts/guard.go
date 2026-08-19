@@ -36,7 +36,7 @@ type Guard struct {
 }
 
 func NewGuard(repositoryRoot string) (*Guard, error) {
-	if err := VerifyPinnedMaterial(repositoryRoot, false); err != nil {
+	if err := VerifyPinnedMaterial(repositoryRoot); err != nil {
 		return nil, fmt.Errorf("verify pinned contract material: %w", err)
 	}
 	adapter, err := validator.New(repositoryRoot)

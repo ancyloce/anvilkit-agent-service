@@ -80,7 +80,7 @@ func TestServerScopeComesOnlyFromVerifiedClaimsAndCrossWorkspaceIs404(t *testing
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent", MaximumClockSkew: time.Second}, trust{}, clock{now})
 	runStore := &store{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 3}}
 	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore()), eventReader{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.Bounds{MaximumBytes: 1000, MaximumFields: 10, MaximumFieldBytes: 100}}, authority{})
-	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead, auth.ScopeWrite}, ExpiresAt: now.Add(time.Hour)}
+	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead, auth.ScopeWrite}, ExpiresAt: now.Add(time.Hour)}
 	result, err := app.Get(context.Background(), claims, "workspace", "run")
 	if err != nil || result.ETag != `"run:v3"` {
 		t.Fatalf("result=%#v err=%v", result, err)
@@ -98,7 +98,7 @@ func TestStrongETagPreconditionAllowsOneMutation(t *testing.T) {
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent"}, trust{}, clock{now})
 	runStore := &store{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 3}}
 	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore()), eventReader{}, events.StreamConfig{}, authority{})
-	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", TenantID: "tenant", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeWrite}, ExpiresAt: now.Add(time.Hour)}
+	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeWrite}, ExpiresAt: now.Add(time.Hour)}
 	first, err := app.Transition(context.Background(), claims, auth.OpCancel, "workspace", "run", `"run:v3"`, runs.Command{Kind: runs.RequestCancellation, Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"})
 	if err != nil || first.ETag != `"run:v4"` {
 		t.Fatalf("first=%#v err=%v", first, err)
