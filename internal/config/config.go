@@ -86,6 +86,11 @@ type Config struct {
 	QueueName               string
 	DLQName                 string
 	WorkerImplementation    string
+	ModelImplementation     string
+	ToolImplementation      string
+	DomainImplementation    string
+	InputRequestTTL         time.Duration
+	ApprovalRequestTTL      time.Duration
 	ProviderEnabled         bool
 	ProviderPriority        []string
 	PolicySnapshot          string
@@ -139,6 +144,9 @@ func Load() (Config, error) {
 		QueueName:            env("ANVILKIT_QUEUE_NAME", "agent-tasks"),
 		DLQName:              env("ANVILKIT_DLQ_NAME", "agent-tasks-dlq"),
 		WorkerImplementation: env("ANVILKIT_WORKER_IMPLEMENTATION", "external"),
+		ModelImplementation:  os.Getenv("ANVILKIT_MODEL_IMPLEMENTATION"),
+		ToolImplementation:   os.Getenv("ANVILKIT_TOOL_IMPLEMENTATION"),
+		DomainImplementation: os.Getenv("ANVILKIT_DOMAIN_IMPLEMENTATION"),
 		ProviderPriority:     csv(os.Getenv("ANVILKIT_PROVIDER_PRIORITY")),
 		PolicySnapshot:       os.Getenv("ANVILKIT_POLICY_SNAPSHOT"),
 		CapabilitySnapshot:   os.Getenv("ANVILKIT_CAPABILITY_SNAPSHOT"),
@@ -194,6 +202,12 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.DwellDeadline, err = duration("ANVILKIT_DWELL_DEADLINE", 15*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.InputRequestTTL, err = duration("ANVILKIT_INPUT_REQUEST_TTL", 15*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.ApprovalRequestTTL, err = duration("ANVILKIT_APPROVAL_REQUEST_TTL", 15*time.Minute); err != nil {
 		return Config{}, err
 	}
 	if cfg.MaximumClockSkew, err = duration("ANVILKIT_MAXIMUM_CLOCK_SKEW", 5*time.Second); err != nil {
@@ -252,6 +266,12 @@ func (c Config) Validate() error {
 		if strings.Contains(strings.ToLower(c.WorkerImplementation), "fake") || strings.Contains(strings.ToLower(c.WorkerImplementation), "mock") {
 			return problem.InvalidConfiguration("ANVILKIT_WORKER_IMPLEMENTATION", "fake and mock workers are forbidden in production")
 		}
+		for name, value := range map[string]string{"ANVILKIT_MODEL_IMPLEMENTATION": c.ModelImplementation, "ANVILKIT_TOOL_IMPLEMENTATION": c.ToolImplementation, "ANVILKIT_DOMAIN_IMPLEMENTATION": c.DomainImplementation} {
+			lowered := strings.ToLower(value)
+			if strings.Contains(lowered, "fake") || strings.Contains(lowered, "mock") || strings.Contains(lowered, "controlled") {
+				return problem.InvalidConfiguration(name, "controlled, fake, and mock implementations are forbidden in production")
+			}
+		}
 		for _, provider := range c.ProviderPriority {
 			if strings.Contains(strings.ToLower(provider), "fake") || strings.Contains(strings.ToLower(provider), "mock") {
 				return problem.InvalidConfiguration("ANVILKIT_PROVIDER_PRIORITY", "fake and mock providers are forbidden in production")
@@ -281,6 +301,9 @@ func (c Config) Validate() error {
 	}
 	if c.Limits.Tools < 3 || c.Limits.Tools > 7 {
 		return problem.InvalidConfiguration("ANVILKIT_TOOL_LIMIT", "must be between 3 and 7")
+	}
+	if c.InputRequestTTL <= 0 || c.ApprovalRequestTTL <= 0 {
+		return problem.InvalidConfiguration("ANVILKIT_INPUT_REQUEST_TTL", "interrupt deadlines must be positive")
 	}
 	if c.RunTimeout <= 0 || c.DwellDeadline <= 0 || c.MaximumClockSkew < 0 || c.AuthRevalidation <= 0 {
 		return problem.InvalidConfiguration("duration", "timeouts must be positive and clock skew must not be negative")
