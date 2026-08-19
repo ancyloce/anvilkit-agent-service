@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -18,9 +17,15 @@ type RuntimeStarter struct{ runtime workflow.Runtime }
 func NewRuntimeStarter(runtime workflow.Runtime) *RuntimeStarter {
 	return &RuntimeStarter{runtime: runtime}
 }
+
+// Ensure starts the canonical AgentRunWorkflow for the run's execution
+// generation without awaiting its outcome. Repeating a start is idempotent.
 func (s *RuntimeStarter) Ensure(ctx context.Context, start runs.Start) error {
-	_, err := s.runtime.Execute(ctx, workflow.Request{WorkflowID: workflow.ID(start.WorkflowID), Version: start.Version, Scope: workflow.Scope{WorkspaceID: start.Scope.WorkspaceID, ProjectID: start.Scope.ProjectID}, State: json.RawMessage(fmt.Sprintf(`{"runId":%q,"version":%d}`, start.RunID, start.Version))})
-	return err
+	return s.runtime.StartRun(ctx, workflow.RunInput{
+		Key:         workflow.RunKey{RunID: string(start.RunID), Generation: start.Generation},
+		Scope:       workflow.Scope{WorkspaceID: start.Scope.WorkspaceID, ProjectID: start.Scope.ProjectID, ActorID: start.Scope.ActorID},
+		Traceparent: start.Traceparent,
+	})
 }
 
 type RandomIDs struct{}
