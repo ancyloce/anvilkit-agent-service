@@ -7,144 +7,137 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
+	"github.com/ancyloce/anvilkit-agent-service/internal/workflow/workflowtest"
 )
 
-type proofExecutor struct{ counts sync.Map }
+// Integration proofs against a disposable Postgres DBOS system database.
+// They skip unless DBOS_TEST_URL points at a disposable instance.
 
-func (e *proofExecutor) Execute(_ context.Context, _ workflow.ID, step workflow.Step) (json.RawMessage, error) {
-	value, _ := e.counts.LoadOrStore(step.Name, &atomic.Int64{})
-	value.(*atomic.Int64).Add(1)
-	return json.RawMessage(`{"accepted":true}`), nil
-}
-
-func TestDBOSAdapterDurableStepsWaitAndCancellation(t *testing.T) {
+func integrationConfig(t *testing.T, schemaSuffix, executorID string) Config {
+	t.Helper()
 	databaseURL := os.Getenv("DBOS_TEST_URL")
 	if databaseURL == "" {
 		t.Skip("DBOS_TEST_URL is not set")
 	}
-	random := make([]byte, 6)
-	if _, err := rand.Read(random); err != nil {
+	return Config{
+		DatabaseURL:        databaseURL,
+		Schema:             "agent_dbos_" + schemaSuffix,
+		ExecutorID:         executorID,
+		ApplicationVersion: "wp2-integration",
+		Logger:             slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
+	}
+}
+
+func randomSuffix(t *testing.T) string {
+	t.Helper()
+	raw := make([]byte, 6)
+	if _, err := rand.Read(raw); err != nil {
 		t.Fatal(err)
 	}
-	suffix := hex.EncodeToString(random)
-	executor := &proofExecutor{}
-	runtime, err := New(context.Background(), Config{DatabaseURL: databaseURL, Schema: "agent_dbos_" + suffix, ExecutorID: "executor-" + suffix, ApplicationVersion: "workflow-proof", Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))}, executor)
+	return hex.EncodeToString(raw)
+}
+
+func TestDBOSPostgresRestartAndReplay(t *testing.T) {
+	suffix := randomSuffix(t)
+	ops := workflowtest.NewProbeOps()
+	ops.NeedInput = true
+	first, err := New(context.Background(), integrationConfig(t, suffix, "wp2-executor"), ops)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.Start(context.Background()); err != nil {
+	if err := first.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.Stop(context.Background())
-	request := workflow.Request{WorkflowID: workflow.ID("steps-" + suffix), Version: 1, Scope: workflow.Scope{WorkspaceID: "w", ProjectID: "p"}, Steps: []workflow.Step{{Name: "one", Kind: workflow.StepAction}, {Name: "two", Kind: workflow.StepAction}}}
-	first, err := runtime.Execute(context.Background(), request)
-	if err != nil || len(first.Steps) != 2 {
-		t.Fatalf("first run %#v %v", first, err)
+	input := workflow.RunInput{
+		Key:         workflow.RunKey{RunID: "run.pg-" + suffix, Generation: 1},
+		Scope:       workflow.Scope{WorkspaceID: "workspace.pg", ProjectID: "project.pg", ActorID: "actor.pg"},
+		Traceparent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
 	}
-	second, err := runtime.Execute(context.Background(), request)
-	if err != nil || len(second.Steps) != 2 {
-		t.Fatalf("replay %#v %v", second, err)
+	if err := first.StartRun(context.Background(), input); err != nil {
+		t.Fatal(err)
 	}
-	for _, step := range request.Steps {
-		value, _ := executor.counts.Load(step.Name)
-		if count := value.(*atomic.Int64).Load(); count != 1 {
-			t.Fatalf("step %s executed %d times", step.Name, count)
-		}
+	deadline := time.Now().Add(20 * time.Second)
+	for ops.CallCount("open-input-0000") == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if ops.CallCount("open-input-0000") != 1 {
+		t.Fatal("durable input wait never opened")
+	}
+	if err := first.Stop(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 
-	waitRequest := workflow.Request{WorkflowID: workflow.ID("wait-" + suffix), Version: 1, Scope: request.Scope, Steps: []workflow.Step{{Name: "wait", Kind: workflow.StepWait, Topic: "resume", Duration: 5 * time.Second}}}
-	done := make(chan error, 1)
-	go func() {
-		result, executeErr := runtime.Execute(context.Background(), waitRequest)
-		if executeErr == nil && (len(result.Steps) != 1 || string(result.Steps[0].Output) != `{"resume":true}`) {
-			executeErr = context.Canceled
-		}
-		done <- executeErr
-	}()
-	time.Sleep(100 * time.Millisecond)
-	if err := runtime.Signal(context.Background(), waitRequest.WorkflowID, "resume", json.RawMessage(`{"resume":true}`), "resume-1"); err != nil {
+	second, err := New(context.Background(), integrationConfig(t, suffix, "wp2-executor"), ops)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := <-done; err != nil {
+	if err := second.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	detachedWait := workflow.Request{WorkflowID: workflow.ID("detached-wait-" + suffix), Version: 1, Scope: request.Scope, Steps: []workflow.Step{{Name: "wait", Kind: workflow.StepWait, Topic: "resume", Duration: 5 * time.Second}}}
-	if err := runtime.StartWait(context.Background(), detachedWait); err != nil {
+	defer second.Stop(context.Background())
+	ops.Accept(json.RawMessage(`{"answer":"pg"}`))
+	if err := second.Signal(context.Background(), input.Key, workflow.InputTopic("request.probe"), json.RawMessage(`{}`), "pg-signal"); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond)
-	if err := runtime.Signal(context.Background(), detachedWait.WorkflowID, "resume", json.RawMessage(`{"detached":true}`), "detached-1"); err != nil {
-		t.Fatal(err)
+	outcome, err := second.ExecuteRun(context.Background(), input)
+	if err != nil || outcome.Terminal != workflow.TerminalCompleted {
+		t.Fatalf("outcome = %+v err = %v", outcome, err)
 	}
-	detached, err := runtime.Execute(context.Background(), detachedWait)
-	if err != nil || len(detached.Steps) != 1 || string(detached.Steps[0].Output) != `{"detached":true}` {
-		t.Fatalf("detached wait=%#v err=%v", detached, err)
+	if got := ops.CallCount("prepare"); got != 1 {
+		t.Fatalf("prepare executed %d times across processes, want 1", got)
 	}
-
-	cancelRequest := workflow.Request{WorkflowID: workflow.ID("cancel-" + suffix), Version: 1, Scope: request.Scope, Steps: []workflow.Step{{Name: "sleep", Kind: workflow.StepSleep, Duration: 500 * time.Millisecond}}}
-	cancelled := make(chan error, 1)
-	go func() { _, executeErr := runtime.Execute(context.Background(), cancelRequest); cancelled <- executeErr }()
-	time.Sleep(100 * time.Millisecond)
-	if err := runtime.Cancel(context.Background(), cancelRequest.WorkflowID); err != nil {
-		t.Fatal(err)
+	replayed, err := second.ExecuteRun(context.Background(), input)
+	if err != nil || replayed.Terminal != workflow.TerminalCompleted {
+		t.Fatalf("replay outcome = %+v err = %v", replayed, err)
 	}
-	select {
-	case err := <-cancelled:
-		if err == nil {
-			t.Fatal("cancelled workflow returned success")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("cancellation was not observed")
+	if got := ops.CallCount("prepare"); got != 1 {
+		t.Fatalf("replay re-executed prepare: %d", got)
 	}
 }
 
-func TestDBOSAdapterTwoExecutorsConvergeOnOneCheckpoint(t *testing.T) {
-	databaseURL := os.Getenv("DBOS_TEST_URL")
-	if databaseURL == "" {
-		t.Skip("DBOS_TEST_URL is not set")
-	}
-	random := make([]byte, 6)
-	if _, err := rand.Read(random); err != nil {
+func TestDBOSPostgresMultiReplicaContentionStaysExactlyOnce(t *testing.T) {
+	suffix := randomSuffix(t)
+	ops := workflowtest.NewProbeOps()
+	left, err := New(context.Background(), integrationConfig(t, suffix, "replica-left"), ops)
+	if err != nil {
 		t.Fatal(err)
 	}
-	suffix := hex.EncodeToString(random)
-	executor := &proofExecutor{}
-	newRuntime := func(executorID string) *Runtime {
-		runtime, err := New(context.Background(), Config{DatabaseURL: databaseURL, Schema: "agent_dbos_replica_" + suffix, ExecutorID: executorID, ApplicationVersion: "workflow-replica-proof", Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))}, executor)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := runtime.Start(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		return runtime
+	if err := left.Start(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	first := newRuntime("first-" + suffix)
-	defer first.Stop(context.Background())
-	second := newRuntime("second-" + suffix)
-	defer second.Stop(context.Background())
-	request := workflow.Request{WorkflowID: workflow.ID("replica-" + suffix), Version: 1, Scope: workflow.Scope{WorkspaceID: "w", ProjectID: "p"}, Steps: []workflow.Step{{Name: "effect", Kind: workflow.StepAction}}}
-	var wait sync.WaitGroup
-	failures := make(chan error, 2)
-	for _, runtime := range []*Runtime{first, second} {
-		wait.Add(1)
-		go func() { defer wait.Done(); _, err := runtime.Execute(context.Background(), request); failures <- err }()
+	defer left.Stop(context.Background())
+	right, err := New(context.Background(), integrationConfig(t, suffix, "replica-right"), ops)
+	if err != nil {
+		t.Fatal(err)
 	}
-	wait.Wait()
-	close(failures)
-	for err := range failures {
-		if err != nil {
-			t.Fatal(err)
-		}
+	if err := right.Start(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	value, _ := executor.counts.Load("effect")
-	if count := value.(*atomic.Int64).Load(); count != 1 {
-		t.Fatalf("two executors ran effect %d times", count)
+	defer right.Stop(context.Background())
+
+	input := workflow.RunInput{
+		Key:         workflow.RunKey{RunID: "run.replica-" + suffix, Generation: 1},
+		Scope:       workflow.Scope{WorkspaceID: "workspace.pg", ProjectID: "project.pg", ActorID: "actor.pg"},
+		Traceparent: "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01",
+	}
+	if err := left.StartRun(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	if err := right.StartRun(context.Background(), input); err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := left.ExecuteRun(context.Background(), input)
+	if err != nil || outcome.Terminal != workflow.TerminalCompleted {
+		t.Fatalf("outcome = %+v err = %v", outcome, err)
+	}
+	if got := ops.CallCount("prepare"); got != 1 {
+		t.Fatalf("contending replicas executed prepare %d times, want 1", got)
+	}
+	if got := ops.CallCount("turn-0000"); got != 1 {
+		t.Fatalf("contending replicas executed turn %d times, want 1", got)
 	}
 }

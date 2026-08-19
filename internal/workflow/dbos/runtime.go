@@ -1,16 +1,19 @@
-// Package dbos is the only package allowed to depend on the DBOS SDK.
+// Package dbos is the only package allowed to depend on the DBOS SDK. It
+// adapts the repository-owned durable runtime port onto DBOS Go v1.1.0 and
+// lets no DBOS context, handle, option, or error type cross the boundary.
 package dbos
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	sdk "github.com/dbos-inc/dbos-transact-golang/dbos"
+	_ "github.com/dbos-inc/dbos-transact-golang/dbos/driver/sqlite"
 
-	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
 )
 
@@ -19,20 +22,24 @@ type Config struct {
 	Logger                                              *slog.Logger
 }
 
+// Runtime is the DBOS adapter for the canonical AgentRunWorkflow.
 type Runtime struct {
-	engine       sdk.DBOSContext
-	executor     workflow.Executor
-	workflowFunc func(sdk.DBOSContext, workflow.Request) (workflow.Result, error)
+	engine       sdk.Context
+	ops          workflow.Operations
+	workflowFunc sdk.Workflow[workflow.RunInput, workflow.RunOutcome]
 }
 
-func New(parent context.Context, cfg Config, executor workflow.Executor) (*Runtime, error) {
-	engine, err := sdk.NewDBOSContext(parent, sdk.Config{AppName: "anvilkit-agent-service", ApplicationVersion: cfg.ApplicationVersion, DatabaseURL: cfg.DatabaseURL, DatabaseSchema: cfg.Schema, ExecutorID: cfg.ExecutorID, Logger: cfg.Logger})
+func New(parent context.Context, cfg Config, ops workflow.Operations) (*Runtime, error) {
+	if ops == nil {
+		return nil, fmt.Errorf("durable runtime requires the workflow operations pipeline")
+	}
+	engine, err := sdk.NewContext(parent, sdk.Config{AppName: "anvilkit-agent-service", ApplicationVersion: cfg.ApplicationVersion, DatabaseURL: cfg.DatabaseURL, DatabaseSchema: cfg.Schema, ExecutorID: cfg.ExecutorID, Logger: cfg.Logger})
 	if err != nil {
 		return nil, fmt.Errorf("create durable runtime: %w", err)
 	}
-	runtime := &Runtime{engine: engine, executor: executor}
-	durable := func(ctx sdk.DBOSContext, request workflow.Request) (workflow.Result, error) {
-		return runtime.run(ctx, request), nil
+	runtime := &Runtime{engine: engine, ops: ops}
+	durable := func(ctx sdk.Context, input workflow.RunInput) (workflow.RunOutcome, error) {
+		return workflow.AgentRunWorkflow(&host{ctx: ctx}, runtime.ops, input)
 	}
 	runtime.workflowFunc = durable
 	sdk.RegisterWorkflow(engine, durable, sdk.WithWorkflowName("AgentRunWorkflow"))
@@ -45,94 +52,84 @@ func (r *Runtime) Start(context.Context) error {
 	}
 	return nil
 }
-func (r *Runtime) Stop(context.Context) error { sdk.Shutdown(r.engine, 20*time.Second); return nil }
 
-func (r *Runtime) Execute(_ context.Context, request workflow.Request) (workflow.Result, error) {
-	if err := workflow.Validate(request); err != nil {
-		return workflow.Result{}, err
+func (r *Runtime) Stop(context.Context) error {
+	if err := sdk.Shutdown(r.engine, 20*time.Second); err != nil {
+		return fmt.Errorf("shutdown durable runtime: %w", err)
 	}
-	handle, err := sdk.RunWorkflow(r.engine, r.workflowFunc, request, sdk.WithWorkflowID(string(request.WorkflowID)))
+	return nil
+}
+
+// StartRun ensures the durable workflow exists without awaiting its result.
+// Starting the same run key again attaches to the existing execution.
+func (r *Runtime) StartRun(_ context.Context, input workflow.RunInput) error {
+	if err := input.Validate(); err != nil {
+		return err
+	}
+	if _, err := sdk.RunWorkflow(r.engine, r.workflowFunc, input, sdk.WithWorkflowID(input.Key.WorkflowID())); err != nil {
+		return fmt.Errorf("start agent run workflow: %w", err)
+	}
+	return nil
+}
+
+func (r *Runtime) ExecuteRun(_ context.Context, input workflow.RunInput) (workflow.RunOutcome, error) {
+	if err := input.Validate(); err != nil {
+		return workflow.RunOutcome{}, err
+	}
+	handle, err := sdk.RunWorkflow(r.engine, r.workflowFunc, input, sdk.WithWorkflowID(input.Key.WorkflowID()))
 	if err != nil {
-		return workflow.Result{}, fmt.Errorf("start workflow: %w", err)
+		return workflow.RunOutcome{}, fmt.Errorf("start agent run workflow: %w", err)
 	}
 	result, err := handle.GetResult()
 	if err != nil {
-		return workflow.Result{}, fmt.Errorf("await workflow: %w", err)
+		if errors.Is(err, sdk.ErrWorkflowCancelled) || errors.Is(err, sdk.ErrAwaitedWorkflowCancelled) {
+			return workflow.RunOutcome{Key: input.Key, Terminal: workflow.TerminalCancelled}, nil
+		}
+		return workflow.RunOutcome{}, fmt.Errorf("await agent run workflow: %w", err)
 	}
 	return result, nil
 }
-func (r *Runtime) StartWait(_ context.Context, request workflow.Request) error {
-	if err := workflow.Validate(request); err != nil {
-		return err
-	}
-	if len(request.Steps) != 1 || request.Steps[0].Kind != workflow.StepWait {
-		return fmt.Errorf("start wait requires exactly one durable wait step")
-	}
-	if _, err := sdk.RunWorkflow(r.engine, r.workflowFunc, request, sdk.WithWorkflowID(string(request.WorkflowID))); err != nil {
-		return fmt.Errorf("start durable wait: %w", err)
+
+func (r *Runtime) Signal(_ context.Context, key workflow.RunKey, topic string, payload json.RawMessage, idempotencyKey string) error {
+	if err := sdk.Send(r.engine, key.WorkflowID(), payload, topic, sdk.WithIdempotencyKey(idempotencyKey)); err != nil {
+		return fmt.Errorf("signal agent run workflow: %w", err)
 	}
 	return nil
 }
 
-func (r *Runtime) Signal(_ context.Context, id workflow.ID, topic string, payload json.RawMessage, idempotencyKey string) error {
-	if err := sdk.Send(r.engine, string(id), payload, topic, sdk.WithIdempotencyKey(idempotencyKey)); err != nil {
-		return fmt.Errorf("signal workflow: %w", err)
-	}
-	return nil
-}
-func (r *Runtime) Cancel(_ context.Context, id workflow.ID) error {
-	if err := sdk.CancelWorkflow(r.engine, string(id)); err != nil {
-		return fmt.Errorf("cancel workflow: %w", err)
+func (r *Runtime) CancelRun(_ context.Context, key workflow.RunKey) error {
+	if err := sdk.CancelWorkflow(r.engine, key.WorkflowID()); err != nil {
+		return fmt.Errorf("cancel agent run workflow: %w", err)
 	}
 	return nil
 }
 
-func (r *Runtime) run(ctx sdk.DBOSContext, request workflow.Request) workflow.Result {
-	result := workflow.Result{WorkflowID: request.WorkflowID}
-	for _, step := range request.Steps {
-		stepResult := workflow.StepResult{Name: step.Name}
-		switch step.Kind {
-		case workflow.StepAction:
-			value, err := sdk.RunAsStep(ctx, func(stepContext context.Context) (workflow.StepResult, error) {
-				output, executeErr := r.executor.Execute(stepContext, request.WorkflowID, step)
-				boundary := workflow.StepResult{Name: step.Name, Output: output}
-				if executeErr != nil {
-					details := problem.Internal("")
-					details.Detail = "durable step failed"
-					boundary.Problem = &details
-					boundary.Output = nil
-				}
-				return boundary, nil
-			}, sdk.WithStepName(step.Name))
-			if err != nil {
-				details := problem.Internal("")
-				details.Detail = "workflow engine step failure"
-				stepResult.Problem = &details
-			} else {
-				stepResult = value
-			}
-		case workflow.StepSleep:
-			if _, err := sdk.Sleep(ctx, step.Duration); err != nil {
-				details := problem.Internal("")
-				details.Detail = "durable sleep failed"
-				stepResult.Problem = &details
-			}
-		case workflow.StepWait:
-			value, err := sdk.Recv[json.RawMessage](ctx, step.Topic, step.Duration)
-			if err != nil {
-				details := problem.Internal("")
-				details.Detail = "durable wait failed"
-				stepResult.Problem = &details
-			} else {
-				stepResult.Output = value
-			}
-		}
-		result.Steps = append(result.Steps, stepResult)
-		if stepResult.Problem != nil {
-			break
-		}
+// host maps the workflow Host primitives onto DBOS durable operations.
+type host struct{ ctx sdk.Context }
+
+func (h *host) WorkflowID() string {
+	id, err := sdk.GetWorkflowID(h.ctx)
+	if err != nil {
+		return ""
 	}
-	return result
+	return id
+}
+
+func (h *host) Step(name string, fn func(context.Context) ([]byte, error)) ([]byte, error) {
+	return sdk.RunAsStep(h.ctx, func(stepContext context.Context) ([]byte, error) {
+		return fn(stepContext)
+	}, sdk.WithStepName(name))
+}
+
+func (h *host) AwaitSignal(topic string, timeout time.Duration) ([]byte, bool, error) {
+	payload, err := sdk.Recv[json.RawMessage](h.ctx, topic, timeout)
+	if err != nil {
+		if errors.Is(err, sdk.ErrTimeout) {
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+	return payload, false, nil
 }
 
 var _ workflow.Runtime = (*Runtime)(nil)
