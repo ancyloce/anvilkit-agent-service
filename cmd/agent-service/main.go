@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,18 +13,24 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
+	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
+	"github.com/ancyloce/anvilkit-agent-service/internal/agent/runner"
 	"github.com/ancyloce/anvilkit-agent-service/internal/api"
 	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
 	"github.com/ancyloce/anvilkit-agent-service/internal/config"
+	"github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler"
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	eventpg "github.com/ancyloce/anvilkit-agent-service/internal/events/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/execution"
 	"github.com/ancyloce/anvilkit-agent-service/internal/idempotency"
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	interruptpg "github.com/ancyloce/anvilkit-agent-service/internal/interrupts/postgres"
@@ -38,15 +46,11 @@ import (
 	runpg "github.com/ancyloce/anvilkit-agent-service/internal/runs/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/securityaudit"
 	"github.com/ancyloce/anvilkit-agent-service/internal/telemetry"
+	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
+	toolspg "github.com/ancyloce/anvilkit-agent-service/internal/tools/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
 	workflowdbos "github.com/ancyloce/anvilkit-agent-service/internal/workflow/dbos"
 )
-
-type noOpExecutor struct{}
-
-func (noOpExecutor) Execute(context.Context, workflow.ID, workflow.Step) (json.RawMessage, error) {
-	return json.RawMessage(`{}`), nil
-}
 
 func main() {
 	cfg, err := config.Load()
@@ -111,20 +115,6 @@ func main() {
 		})
 	}
 
-	if cfg.WorkflowDatabase == "" {
-		logger.Error("workflow runtime initialization failed", "error", "workflow database unavailable; the production command never embeds the in-memory proof engine")
-		os.Exit(1)
-	}
-	workflowRuntime, err := workflowdbos.New(ctx, workflowdbos.Config{DatabaseURL: cfg.WorkflowDatabase, Schema: "agent_dbos", ExecutorID: cfg.ExecutorID, ApplicationVersion: cfg.ServiceVersion, Logger: logger}, noOpExecutor{})
-	if err != nil {
-		logger.Error("workflow runtime initialization failed", "error", err)
-		os.Exit(1)
-	}
-	if err := workflowRuntime.Start(ctx); err != nil {
-		logger.Error("workflow runtime start failed", "error", err)
-		os.Exit(1)
-	}
-
 	var journalStore journal.Store
 	var journalPool *pgxpool.Pool
 	if cfg.ReceiptJournal.URL == "" {
@@ -146,13 +136,38 @@ func main() {
 		defer journalPool.Close()
 	}
 
+	clock, err := applicationClock(cfg)
+	if err != nil {
+		logger.Error("application clock initialization failed", "error", err)
+		os.Exit(1)
+	}
+
+	if cfg.WorkflowDatabase == "" {
+		logger.Error("workflow runtime initialization failed", "error", "workflow database unavailable; the production command never embeds the in-memory proof engine")
+		os.Exit(1)
+	}
+	if pools.Authority == nil || pools.Control == nil {
+		logger.Error("workflow runtime initialization failed", "error", "the durable agent runtime requires the control and authority databases")
+		os.Exit(1)
+	}
+	handle := &runtimeHandle{}
+	core, err := buildRuntimeCore(ctx, cfg, pools, guard, journalStore, clock, handle)
+	if err != nil {
+		logger.Error("agent runtime pipeline initialization failed", "error", err)
+		os.Exit(1)
+	}
+	workflowRuntime, err := workflowdbos.New(ctx, workflowdbos.Config{DatabaseURL: cfg.WorkflowDatabase, Schema: "agent_dbos", ExecutorID: cfg.ExecutorID, ApplicationVersion: cfg.ServiceVersion, Logger: logger}, core.executor)
+	if err != nil {
+		logger.Error("workflow runtime initialization failed", "error", err)
+		os.Exit(1)
+	}
+	handle.set(workflowRuntime)
+	if err := workflowRuntime.Start(ctx); err != nil {
+		logger.Error("workflow runtime start failed", "error", err)
+		os.Exit(1)
+	}
+
 	workflowCheck := lifecycle.CheckFunc(func(checkContext context.Context) error {
-		if cfg.WorkflowDatabase == "" && cfg.Environment == config.EnvironmentProduction {
-			return errors.New("workflow database unavailable")
-		}
-		if cfg.WorkflowDatabase == "" {
-			return nil
-		}
 		connection, err := pgx.Connect(checkContext, cfg.WorkflowDatabase)
 		if err != nil {
 			return err
@@ -194,9 +209,7 @@ func main() {
 			}
 			return nil
 		})},
-		lifecycle.Dependency{Name: "migration-compatibility", Check: migrationCheck},
-		lifecycle.Dependency{Name: "recovery-register", Check: endpointOrDevelopment(cfg.RecoveryRegister.URL, cfg.Environment)},
-		lifecycle.Dependency{Name: "rpo0-journal", Check: journalStore},
+		lifecycle.Dependency{Name: "migration", Check: migrationCheck},
 		lifecycle.Dependency{Name: "authoritative-time", Check: endpointOrDevelopment(cfg.AuthoritativeTime.URL, cfg.Environment)},
 		lifecycle.Dependency{Name: "signing", Check: signingCheck},
 		lifecycle.Dependency{Name: "contract-material", Check: contractCheck},
@@ -204,7 +217,7 @@ func main() {
 		lifecycle.Dependency{Name: "protected-audit", Check: endpointOrDevelopment(cfg.ProtectedAudit.URL, cfg.Environment)},
 	)
 
-	apiOptions, err := agentAPIOptions(ctx, cfg, pools, workflowRuntime, journalStore, observability, guard)
+	apiOptions, err := agentAPIOptions(ctx, cfg, pools, handle, core, observability)
 	if err != nil {
 		logger.Error("agent API initialization failed", "error", err)
 		os.Exit(1)
@@ -251,6 +264,261 @@ func main() {
 		}
 	}
 }
+
+// runtimeCore holds the shared pipeline components constructed once and
+// consumed by both the durable runtime and the API layer.
+type runtimeCore struct {
+	executor         *execution.Executor
+	runStore         runs.Store
+	interruptStore   *interruptpg.Store
+	interruptService *interrupts.Service
+	idempotency      *idempotency.Store
+	authority        runapp.AuthorityProvider
+	receipts         journal.Store
+	guard            *contractguard.Guard
+	clock            applicationTime
+	eventBounds      events.Bounds
+}
+
+// buildRuntimeCore wires the real Agent execution pipeline. Every
+// implementation is explicitly selected; nothing falls back to a controlled
+// fake implicitly, and production configuration rejects controlled values.
+func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.Pools, guard *contractguard.Guard, receipts journal.Store, clock applicationTime, handle *runtimeHandle) (*runtimeCore, error) {
+	idempotencyStore, err := idempotency.New(pools.Authority, idempotency.Config{Retention: 30 * 24 * time.Hour, MinimumLifetime: 30 * 24 * time.Hour})
+	if err != nil {
+		return nil, err
+	}
+	eventBounds := events.Bounds{MaximumBytes: cfg.Limits.EventBytes, MaximumFields: 32, MaximumFieldBytes: 512}
+	runStore := runpg.NewConfigured(pools.Authority, idempotencyStore, eventBounds, nil)
+	var authority runapp.AuthorityProvider = runapp.StaticAuthority{}
+	if cfg.RunAuthorityFile != "" {
+		authority, err = newFileRunAuthority(cfg.RunAuthorityFile, guard)
+		if err != nil {
+			return nil, err
+		}
+	}
+	interruptStore, err := interruptpg.New(pools.Authority, idempotencyStore)
+	if err != nil {
+		return nil, err
+	}
+	interruptAuthority, err := interrupts.NewCurrentAuthority(interruptStore, authority)
+	if err != nil {
+		return nil, err
+	}
+	childBudget, err := interruptpg.NewChildBudgetReservation(pools.Control, cfg.BudgetUnits, cfg.BudgetHeadroomMicros, cfg.RunTimeout)
+	if err != nil {
+		return nil, err
+	}
+	interruptService, err := interrupts.NewService(interruptStore, interrupts.BoundSchemaValidator{}, interruptAuthority, runtimeSignals{handle}, workflowLeaseRevoker{pools.Workflow}, safeCancellationReconciler{}, childBudget, receipts, clock, runapp.RandomIDs{}, interrupts.Limits{ChildDepth: cfg.Limits.ChildDepth, ChildFanout: cfg.Limits.ChildFanout})
+	if err != nil {
+		return nil, err
+	}
+
+	definitionSchema, err := os.ReadFile(filepath.Join(cfg.ContractRoot, "contracts", "agent", "schemas", "agent-definition.schema.json"))
+	if err != nil {
+		return nil, fmt.Errorf("read pinned agent definition schema: %w", err)
+	}
+	toolSchema, err := os.ReadFile(filepath.Join(cfg.ContractRoot, "contracts", "agent", "schemas", "tool-definition.schema.json"))
+	if err != nil {
+		return nil, fmt.Errorf("read pinned tool definition schema: %w", err)
+	}
+	lockBytes, err := os.ReadFile(filepath.Join(cfg.ContractRoot, "contracts", "agent", "lock", "contracts.lock.json"))
+	if err != nil {
+		return nil, fmt.Errorf("read pinned canonical lock: %w", err)
+	}
+	schemaValidator, err := contractvalidator.New(cfg.ContractRoot)
+	if err != nil {
+		return nil, fmt.Errorf("load pinned runtime validator: %w", err)
+	}
+	registry, err := agent.NewRegistry(ctx, agent.RegistryConfig{Source: agent.EmbeddedCatalog{}, Validator: schemaValidator, DefinitionSchemaURI: agent.DefinitionSchemaURI(definitionSchema)})
+	if err != nil {
+		return nil, err
+	}
+	pinnedValidator, err := execution.NewPinnedSchemaValidator(cfg.ContractRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	modelStack, err := selectModelImplementation(cfg, clock)
+	if err != nil {
+		return nil, err
+	}
+	toolExecutor, authorityView, err := selectToolImplementation(cfg)
+	if err != nil {
+		return nil, err
+	}
+	domainPort, commitAuthority, err := selectDomainImplementation(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	toolProfile, err := execution.NewControlledToolProfile(digestOfBytes(toolSchema))
+	if err != nil {
+		return nil, err
+	}
+	var toolRecorder tools.Recorder = &execution.MemoryToolRecorder{}
+	if pools.Control != nil {
+		toolRecorder, err = toolspg.New(pools.Control)
+		if err != nil {
+			return nil, err
+		}
+	}
+	toolGuard, err := tools.NewGuard(toolProfile, toolRecorder, clockOf{clock}, tools.JSONArgumentValidator{})
+	if err != nil {
+		return nil, err
+	}
+
+	agentRunner, err := runner.New(runner.Config{
+		Registry:  registry,
+		Compiler:  contextcompiler.New([]string{cfg.SigningKey.RedactionValue(), cfg.EncryptionKey.RedactionValue()}),
+		Selector:  modelStack,
+		Invoker:   modelStack,
+		Guard:     toolGuard,
+		Authority: authorityView,
+		Validator: pinnedValidator,
+		Clock:     clockOf{clock},
+		Limits: runner.Limits{
+			MaximumOutputBytes:  cfg.Limits.EventBytes,
+			MaximumInputTokens:  int64(cfg.Limits.ContextTokens),
+			MaximumOutputTokens: int64(cfg.Limits.ContextTokens),
+			Timeout:             cfg.RunTimeout,
+			MaximumAttempts:     cfg.Limits.RetryAttempts,
+			RetryBudget:         cfg.RunTimeout,
+			ContextTokens:       cfg.Limits.ContextTokens,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	executor, err := execution.New(execution.Config{
+		Registry:          registry,
+		Runner:            agentRunner,
+		Runs:              runStore,
+		InterruptWriter:   interruptService,
+		InterruptReader:   interruptStore,
+		Authority:         authority,
+		Tools:             toolExecutor,
+		Domain:            domainPort,
+		CommitAuthority:   commitAuthority,
+		Decisions:         receipts,
+		Clock:             clockOf{clock},
+		InputTTL:          cfg.InputRequestTTL,
+		ApprovalTTL:       cfg.ApprovalRequestTTL,
+		TurnLimit:         cfg.TurnLimit,
+		ValidatorIdentity: digestOfBytes(lockBytes),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &runtimeCore{executor: executor, runStore: runStore, interruptStore: interruptStore, interruptService: interruptService, idempotency: idempotencyStore, authority: authority, receipts: receipts, guard: guard, clock: clock, eventBounds: eventBounds}, nil
+}
+
+// selectModelImplementation returns the explicitly configured model stack.
+// No implementation is ever selected implicitly, and production
+// configuration rejects the controlled value before this point.
+func selectModelImplementation(cfg config.Config, clock applicationTime) (*execution.ControlledModelStack, error) {
+	switch cfg.ModelImplementation {
+	case execution.ControlledImplementation:
+		adapter := execution.NewScriptedAdapter(execution.PlanStep("agent.final", map[string]json.RawMessage{"candidate": execution.ControlledCandidate(), "summary": json.RawMessage(`"controlled candidate"`)}))
+		return execution.NewControlledModelStack(adapter, clockOf{clock})
+	case "":
+		return nil, fmt.Errorf("ANVILKIT_MODEL_IMPLEMENTATION must be explicitly selected; no model integration is assumed")
+	default:
+		return nil, fmt.Errorf("model implementation %q is not available", cfg.ModelImplementation)
+	}
+}
+
+func selectToolImplementation(cfg config.Config) (execution.ToolExecutor, runner.AuthorityView, error) {
+	switch cfg.ToolImplementation {
+	case execution.ControlledImplementation:
+		view := execution.ControlledAuthorityView{AllowedTools: []string{"anvilkit.tool.context-echo", "anvilkit.tool.contract-validate", "anvilkit.tool.artifact-scan"}}
+		return execution.NewControlledToolExecutor(), view, nil
+	case "":
+		return nil, nil, fmt.Errorf("ANVILKIT_TOOL_IMPLEMENTATION must be explicitly selected; no tool integration is assumed")
+	default:
+		return nil, nil, fmt.Errorf("tool implementation %q is not available", cfg.ToolImplementation)
+	}
+}
+
+func selectDomainImplementation(cfg config.Config) (execution.DomainPort, execution.CommitAuthority, error) {
+	switch cfg.DomainImplementation {
+	case execution.ControlledImplementation:
+		return execution.NewControlledDomainPort(execution.DomainConfirmed), &execution.ControlledCommitAuthority{}, nil
+	case "":
+		return nil, nil, fmt.Errorf("ANVILKIT_DOMAIN_IMPLEMENTATION must be explicitly selected; no domain integration is assumed")
+	default:
+		return nil, nil, fmt.Errorf("domain implementation %q is not available", cfg.DomainImplementation)
+	}
+}
+
+func digestOfBytes(raw []byte) string {
+	digest := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+// clockOf adapts the application clock to narrow clock ports.
+type clockOf struct{ inner applicationTime }
+
+func (c clockOf) Now() time.Time { return c.inner.Now() }
+
+// runtimeHandle defers durable runtime resolution so services constructed
+// before the engine can signal it after startup. Using it before the engine
+// exists fails closed.
+type runtimeHandle struct{ inner workflow.Runtime }
+
+func (h *runtimeHandle) set(runtime workflow.Runtime) { h.inner = runtime }
+
+func (h *runtimeHandle) resolved() (workflow.Runtime, error) {
+	if h.inner == nil {
+		return nil, fmt.Errorf("durable runtime is not started")
+	}
+	return h.inner, nil
+}
+
+func (h *runtimeHandle) Start(ctx context.Context) error {
+	runtime, err := h.resolved()
+	if err != nil {
+		return err
+	}
+	return runtime.Start(ctx)
+}
+func (h *runtimeHandle) Stop(ctx context.Context) error {
+	runtime, err := h.resolved()
+	if err != nil {
+		return err
+	}
+	return runtime.Stop(ctx)
+}
+func (h *runtimeHandle) StartRun(ctx context.Context, input workflow.RunInput) error {
+	runtime, err := h.resolved()
+	if err != nil {
+		return err
+	}
+	return runtime.StartRun(ctx, input)
+}
+func (h *runtimeHandle) ExecuteRun(ctx context.Context, input workflow.RunInput) (workflow.RunOutcome, error) {
+	runtime, err := h.resolved()
+	if err != nil {
+		return workflow.RunOutcome{}, err
+	}
+	return runtime.ExecuteRun(ctx, input)
+}
+func (h *runtimeHandle) Signal(ctx context.Context, key workflow.RunKey, topic string, payload json.RawMessage, idempotencyKey string) error {
+	runtime, err := h.resolved()
+	if err != nil {
+		return err
+	}
+	return runtime.Signal(ctx, key, topic, payload, idempotencyKey)
+}
+func (h *runtimeHandle) CancelRun(ctx context.Context, key workflow.RunKey) error {
+	runtime, err := h.resolved()
+	if err != nil {
+		return err
+	}
+	return runtime.CancelRun(ctx, key)
+}
+
+var _ workflow.Runtime = (*runtimeHandle)(nil)
 
 func endpointOrDevelopment(url string, environment config.Environment) lifecycle.Check {
 	if url != "" {
@@ -340,7 +608,7 @@ func (p eventQueuePublisher) Publish(ctx context.Context, message events.OutboxM
 
 var _ events.Publisher = eventQueuePublisher{}
 
-func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.Pools, runtime workflow.Runtime, receipts journal.Store, observability *telemetry.Telemetry, guard *contractguard.Guard) ([]api.Option, error) {
+func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.Pools, runtime workflow.Runtime, core *runtimeCore, observability *telemetry.Telemetry) ([]api.Option, error) {
 	if pools.Authority == nil || cfg.AuthTrustSnapshot == "" {
 		return nil, nil
 	}
@@ -352,52 +620,19 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	if err != nil {
 		return nil, err
 	}
-	clock, err := applicationClock(cfg)
+	validator, err := auth.NewValidator(auth.Config{Issuers: cfg.AuthIssuers, Audience: cfg.AuthAudience, MaximumClockSkew: cfg.MaximumClockSkew}, registry, core.clock)
 	if err != nil {
 		return nil, err
 	}
-	validator, err := auth.NewValidator(auth.Config{Issuers: cfg.AuthIssuers, Audience: cfg.AuthAudience, MaximumClockSkew: cfg.MaximumClockSkew}, registry, clock)
-	if err != nil {
-		return nil, err
-	}
-	idempotencyStore, err := idempotency.New(pools.Authority, idempotency.Config{Retention: 30 * 24 * time.Hour, MinimumLifetime: 30 * 24 * time.Hour})
-	if err != nil {
-		return nil, err
-	}
-	eventBounds := events.Bounds{MaximumBytes: cfg.Limits.EventBytes, MaximumFields: 32, MaximumFieldBytes: 512}
-	runStore := runpg.NewConfigured(pools.Authority, idempotencyStore, eventBounds, nil)
-	runService := runs.NewService(runStore, runapp.NewRuntimeStarter(runtime), runapp.RandomIDs{}, clock, receipts)
-	var authority runapp.AuthorityProvider = runapp.StaticAuthority{}
-	if cfg.RunAuthorityFile != "" {
-		authority, err = newFileRunAuthority(cfg.RunAuthorityFile, guard)
-		if err != nil {
-			return nil, err
-		}
-	}
-	reader := eventpg.NewReader(pools.Authority, guard, eventBounds)
-	application := runapp.New(validator, runService, reader, events.StreamConfig{Heartbeat: cfg.Limits.SSEHeartbeat, Revalidation: cfg.AuthRevalidation, ReplayLimit: 100, Bounds: eventBounds, Observer: observability}, authority)
-	interruptStore, err := interruptpg.New(pools.Authority, idempotencyStore)
-	if err != nil {
-		return nil, err
-	}
-	interruptAuthority, err := interrupts.NewCurrentAuthority(interruptStore, authority)
-	if err != nil {
-		return nil, err
-	}
-	childBudget, err := interruptpg.NewChildBudgetReservation(pools.Control, cfg.BudgetUnits, cfg.BudgetHeadroomMicros, cfg.RunTimeout)
-	if err != nil {
-		return nil, err
-	}
-	interruptService, err := interrupts.NewService(interruptStore, interrupts.BoundSchemaValidator{}, interruptAuthority, runtimeSignals{runtime}, workflowLeaseRevoker{pools.Workflow}, safeCancellationReconciler{}, childBudget, receipts, clock, runapp.RandomIDs{}, interrupts.Limits{ChildDepth: cfg.Limits.ChildDepth, ChildFanout: cfg.Limits.ChildFanout})
-	if err != nil {
-		return nil, err
-	}
-	application.WithInterrupts(interruptService)
+	runService := runs.NewService(core.runStore, runapp.NewRuntimeStarter(runtime), runapp.RandomIDs{}, core.clock, core.receipts)
+	reader := eventpg.NewReader(pools.Authority, core.guard, core.eventBounds)
+	application := runapp.New(validator, runService, reader, events.StreamConfig{Heartbeat: cfg.Limits.SSEHeartbeat, Revalidation: cfg.AuthRevalidation, ReplayLimit: 100, Bounds: core.eventBounds, Observer: observability}, core.authority)
+	application.WithInterrupts(core.interruptService)
 	policies := make(map[runs.State]interrupts.DwellPolicy)
 	for _, state := range []runs.State{runs.Created, runs.Preparing, runs.Planning, runs.AwaitingInput, runs.Executing, runs.Validating, runs.AwaitingReview, runs.AwaitingApproval, runs.Committing, runs.AwaitingDomainConfirmation, runs.Conflict, runs.Cancelling, runs.Failed} {
 		policies[state] = interrupts.DwellPolicy{Deadline: cfg.DwellDeadline, Owner: "agent-service-oncall"}
 	}
-	monitor, err := interrupts.NewMonitor(interruptStore, operatorAlert{}, clock, policies)
+	monitor, err := interrupts.NewMonitor(core.interruptStore, operatorAlert{}, core.clock, policies)
 	if err != nil {
 		return nil, err
 	}
@@ -436,36 +671,31 @@ func applicationClock(cfg config.Config) (applicationTime, error) {
 	return securityaudit.FailClosedClock{Authority: authority}, nil
 }
 
+// runtimeSignals bridges the interrupts control surface onto the canonical
+// durable runtime port.
 type runtimeSignals struct{ runtime workflow.Runtime }
 
 func (r runtimeSignals) Signal(ctx context.Context, id, topic string, payload json.RawMessage, key string) error {
-	return r.runtime.Signal(ctx, workflow.ID(id), topic, payload, key)
-}
-func (r runtimeSignals) StartChild(ctx context.Context, child interrupts.Child) error {
-	state, _ := json.Marshal(map[string]any{"runId": child.RunID, "rootRunId": child.RootRunID, "parentRunId": child.ParentRunID, "version": 1})
-	_, err := r.runtime.Execute(ctx, workflow.Request{WorkflowID: workflow.ID(string(child.RunID) + ":v1"), Version: 1, Scope: workflow.Scope{WorkspaceID: child.WorkspaceID, ProjectID: child.ProjectID}, State: state})
-	return err
-}
-func (r runtimeSignals) OpenWait(ctx context.Context, scope runs.Scope, id, topic string, duration time.Duration) error {
-	if duration <= 0 {
-		duration = time.Nanosecond
-	}
-	return r.runtime.StartWait(ctx, workflow.Request{WorkflowID: workflow.ID(id), Version: 1, Scope: workflow.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID}, Steps: []workflow.Step{{Name: "wait", Kind: workflow.StepWait, Topic: topic, Duration: duration}}})
-}
-func (r runtimeSignals) StopRun(ctx context.Context, _ runs.Scope, id runs.ID, generation uint64) error {
-	return r.runtime.Cancel(ctx, workflow.ID(fmt.Sprintf("%s:v%d", id, generation)))
-}
-func (r runtimeSignals) ResumeRun(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot, checkpoint, resumeKey string) error {
-	state, err := json.Marshal(map[string]any{"runId": snapshot.RunID, "executionGeneration": snapshot.ExecutionGeneration, "resumeCheckpoint": checkpoint, "resumeKey": resumeKey})
+	runKey, err := workflow.ParseWorkflowID(id)
 	if err != nil {
 		return err
 	}
-	workflowID := fmt.Sprintf("%s:v%d", snapshot.RunID, snapshot.ExecutionGeneration)
-	if resumeKey != "" {
-		workflowID += ":resume:" + resumeKey
-	}
-	_, err = r.runtime.Execute(ctx, workflow.Request{WorkflowID: workflow.ID(workflowID), Version: int(snapshot.ExecutionGeneration), Scope: workflow.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID}, State: state})
-	return err
+	return r.runtime.Signal(ctx, runKey, topic, payload, key)
+}
+func (r runtimeSignals) StartChild(ctx context.Context, child interrupts.Child) error {
+	return r.runtime.StartRun(ctx, workflow.RunInput{
+		Key:   workflow.RunKey{RunID: string(child.RunID), Generation: 1},
+		Scope: workflow.Scope{WorkspaceID: child.WorkspaceID, ProjectID: child.ProjectID, ActorID: child.ActorID},
+	})
+}
+func (r runtimeSignals) StopRun(ctx context.Context, _ runs.Scope, id runs.ID, generation uint64) error {
+	return r.runtime.CancelRun(ctx, workflow.RunKey{RunID: string(id), Generation: generation})
+}
+func (r runtimeSignals) ResumeRun(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot, _ string, _ string) error {
+	return r.runtime.StartRun(ctx, workflow.RunInput{
+		Key:   workflow.RunKey{RunID: string(snapshot.RunID), Generation: snapshot.ExecutionGeneration},
+		Scope: workflow.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID, ActorID: scope.ActorID},
+	})
 }
 
 type workflowLeaseRevoker struct{ pool *pgxpool.Pool }
@@ -474,7 +704,7 @@ func (r workflowLeaseRevoker) RevokeRun(ctx context.Context, scope runs.Scope, i
 	if r.pool == nil {
 		return nil
 	}
-	_, err := r.pool.Exec(ctx, `DELETE FROM agent_workflow.executor_leases WHERE workspace_id=$1 AND project_id=$2 AND workflow_id=$3`, scope.WorkspaceID, scope.ProjectID, string(id)+":v1")
+	_, err := r.pool.Exec(ctx, `DELETE FROM agent_workflow.executor_leases WHERE workspace_id=$1 AND project_id=$2 AND workflow_id LIKE $3`, scope.WorkspaceID, scope.ProjectID, string(id)+":g%")
 	return err
 }
 
