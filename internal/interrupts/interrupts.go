@@ -32,6 +32,10 @@ type InputRequest struct {
 	ResumeCheckpoint string          `json:"resumeState"`
 	CreatedAt        time.Time       `json:"createdAt"`
 	Response         *InputResponse  `json:"response,omitempty"`
+	// ExpiredAt is the durable expiry marker. It is server-internal state,
+	// never part of the closed request contract, and once set no response
+	// can revive the request.
+	ExpiredAt *time.Time `json:"-"`
 }
 
 type InputResponse struct {
@@ -59,6 +63,8 @@ type ApprovalRequest struct {
 	ResumeCheckpoint string          `json:"resumeState"`
 	CreatedAt        time.Time       `json:"createdAt"`
 	Decision         *Decision       `json:"decision,omitempty"`
+	// ExpiredAt is the durable expiry marker; see InputRequest.ExpiredAt.
+	ExpiredAt *time.Time `json:"-"`
 }
 
 type DecisionKind string
@@ -184,15 +190,34 @@ func (r *RetryOutcome) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// Expiry is the atomic outcome of one durable interrupt deadline. Exactly
+// one of the three states holds: the response or decision won the race, the
+// expiry committed and the run is failed, or another authority owns the run.
+type Expiry struct {
+	// Raced reports that an accepted response or decision won against the
+	// deadline. Nothing was expired and the caller must re-read.
+	Raced bool
+	// Superseded reports that another authority moved the run first.
+	Superseded bool
+	Snapshot   runs.Snapshot
+}
+
 // Repository is the durable atomic authority seam. Each accepted method must
 // persist its control fact, run transition, event, and checkpoint together.
 type Repository interface {
 	Input(context.Context, runs.Scope, runs.ID, RequestID) (InputRequest, error)
 	OpenInput(context.Context, Write, InputRequest, string) (InputRequest, OperationResult, error)
 	AcceptInput(context.Context, Write, InputResponseCommand, string, time.Time) (OperationResult, error)
+	// ExpireInput atomically settles the input deadline: in one critical
+	// section it observes any accepted response, marks the request expired,
+	// and fails the run. It exists so acceptance and expiry can never both
+	// win and leave the run without a driving workflow.
+	ExpireInput(context.Context, Write, RequestID, problem.Details, time.Time) (Expiry, error)
 	Approval(context.Context, runs.Scope, runs.ID, RequestID) (ApprovalRequest, error)
 	OpenApproval(context.Context, Write, ApprovalRequest, string) (ApprovalRequest, OperationResult, error)
 	DecideApproval(context.Context, Write, ApprovalDecisionCommand, string, time.Time) (OperationResult, error)
+	// ExpireApproval is the approval counterpart of ExpireInput.
+	ExpireApproval(context.Context, Write, RequestID, problem.Details, time.Time) (Expiry, error)
 	RequestCancellation(context.Context, Write, string, time.Time) (Cancellation, OperationResult, error)
 	RecordCancellation(context.Context, Write, Cancellation) error
 	FinishCancellation(context.Context, Write, Cancellation) (OperationResult, error)

@@ -165,11 +165,14 @@ func (r *MemoryRepository) AcceptInput(_ context.Context, write Write, command I
 	if request.Response != nil {
 		return OperationResult{}, stable(problem.CodeInputAlreadyResponded, "input request already has an immutable response")
 	}
+	if request.ExpiredAt != nil {
+		return OperationResult{}, stable(problem.CodeInputRequestExpired, "the input request is durably expired and cannot be revived")
+	}
 	if entry.snapshot.Version != write.ExpectedVersion {
 		return OperationResult{}, problem.New(problem.CodeVersionConflict, "")
 	}
 	if !now.Before(request.ExpiresAt) {
-		return OperationResult{}, stable(problem.CodeInputRequestExpired, "expired input remains awaiting input until the timeout policy is finalized")
+		return OperationResult{}, stable(problem.CodeInputRequestExpired, "the input deadline elapsed before the response was accepted")
 	}
 	snapshot, err := transition(entry.snapshot, runs.Command{Kind: runs.AcceptInput, Traceparent: write.Traceparent})
 	if err != nil {
@@ -181,6 +184,41 @@ func (r *MemoryRepository) AcceptInput(_ context.Context, write Write, command I
 	result := OperationResult{Snapshot: cloneSnapshot(snapshot)}
 	r.record(write, "respond-input", digest, result)
 	return result, nil
+}
+
+// ExpireInput settles the input deadline atomically. Acceptance and expiry
+// contend for the same lock, so exactly one of them wins and the run can
+// never be left expired-and-answered or answered-and-abandoned.
+func (r *MemoryRepository) ExpireInput(_ context.Context, write Write, id RequestID, failure problem.Details, now time.Time) (Expiry, error) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	entry, err := r.scoped(write.Scope, write.RunID)
+	if err != nil {
+		return Expiry{}, err
+	}
+	request, ok := entry.inputs[id]
+	if !ok {
+		return Expiry{}, problem.New(problem.CodeResourceNotFound, "")
+	}
+	if request.Response != nil {
+		return Expiry{Raced: true, Snapshot: cloneSnapshot(entry.snapshot)}, nil
+	}
+	if request.ExpiredAt != nil {
+		// Recovery re-executed the already-committed expiry.
+		return Expiry{Snapshot: cloneSnapshot(entry.snapshot)}, nil
+	}
+	if entry.snapshot.Version != write.ExpectedVersion {
+		return Expiry{Superseded: true, Snapshot: cloneSnapshot(entry.snapshot)}, nil
+	}
+	snapshot, err := transition(entry.snapshot, runs.Command{Kind: runs.RecordFailure, Failure: &failure, Traceparent: write.Traceparent})
+	if err != nil {
+		return Expiry{Superseded: true, Snapshot: cloneSnapshot(entry.snapshot)}, nil
+	}
+	expired := now
+	request.ExpiredAt = &expired
+	entry.inputs[id] = request
+	r.advance(entry, snapshot, now)
+	return Expiry{Snapshot: cloneSnapshot(entry.snapshot)}, nil
 }
 
 func (r *MemoryRepository) Approval(_ context.Context, scope runs.Scope, runID runs.ID, id RequestID) (ApprovalRequest, error) {
@@ -257,11 +295,14 @@ func (r *MemoryRepository) DecideApproval(_ context.Context, write Write, comman
 	if request.Decision != nil {
 		return OperationResult{}, stable(problem.CodeApprovalAlreadyDecided, "approval decision is immutable")
 	}
+	if request.ExpiredAt != nil {
+		return OperationResult{}, stable(problem.CodeApprovalRequestExpired, "the approval request is durably expired and cannot be revived")
+	}
 	if entry.snapshot.Version != write.ExpectedVersion {
 		return OperationResult{}, problem.New(problem.CodeVersionConflict, "")
 	}
 	if !now.Before(request.ExpiresAt) {
-		return OperationResult{}, stable(problem.CodeApprovalRequestExpired, "expired approval remains awaiting approval until the timeout policy is finalized")
+		return OperationResult{}, stable(problem.CodeApprovalRequestExpired, "the approval deadline elapsed before the decision was accepted")
 	}
 	request.Decision = &Decision{RequestVersion: command.RequestVersion, Kind: command.Decision, ReviewerID: write.Scope.ActorID, Reason: command.Reason, AcceptedAt: now}
 	entry.approvals[command.RequestID] = request
@@ -280,6 +321,38 @@ func (r *MemoryRepository) DecideApproval(_ context.Context, write Write, comman
 	result := OperationResult{Snapshot: cloneSnapshot(snapshot)}
 	r.record(write, "decide-approval", digest, result)
 	return result, nil
+}
+
+// ExpireApproval is the approval counterpart of ExpireInput.
+func (r *MemoryRepository) ExpireApproval(_ context.Context, write Write, id RequestID, failure problem.Details, now time.Time) (Expiry, error) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	entry, err := r.scoped(write.Scope, write.RunID)
+	if err != nil {
+		return Expiry{}, err
+	}
+	request, ok := entry.approvals[id]
+	if !ok {
+		return Expiry{}, problem.New(problem.CodeResourceNotFound, "")
+	}
+	if request.Decision != nil {
+		return Expiry{Raced: true, Snapshot: cloneSnapshot(entry.snapshot)}, nil
+	}
+	if request.ExpiredAt != nil {
+		return Expiry{Snapshot: cloneSnapshot(entry.snapshot)}, nil
+	}
+	if entry.snapshot.Version != write.ExpectedVersion {
+		return Expiry{Superseded: true, Snapshot: cloneSnapshot(entry.snapshot)}, nil
+	}
+	snapshot, err := transition(entry.snapshot, runs.Command{Kind: runs.RecordFailure, Failure: &failure, Traceparent: write.Traceparent})
+	if err != nil {
+		return Expiry{Superseded: true, Snapshot: cloneSnapshot(entry.snapshot)}, nil
+	}
+	expired := now
+	request.ExpiredAt = &expired
+	entry.approvals[id] = request
+	r.advance(entry, snapshot, now)
+	return Expiry{Snapshot: cloneSnapshot(entry.snapshot)}, nil
 }
 
 func (r *MemoryRepository) RequestCancellation(_ context.Context, write Write, digest string, now time.Time) (Cancellation, OperationResult, error) {
@@ -637,12 +710,22 @@ func cloneInput(value InputRequest) InputRequest {
 	raw, _ := json.Marshal(value)
 	var result InputRequest
 	_ = json.Unmarshal(raw, &result)
+	// ExpiredAt is deliberately absent from the closed wire contract, so the
+	// JSON clone cannot carry it.
+	if value.ExpiredAt != nil {
+		expired := *value.ExpiredAt
+		result.ExpiredAt = &expired
+	}
 	return result
 }
 func cloneApproval(value ApprovalRequest) ApprovalRequest {
 	raw, _ := json.Marshal(value)
 	var result ApprovalRequest
 	_ = json.Unmarshal(raw, &result)
+	if value.ExpiredAt != nil {
+		expired := *value.ExpiredAt
+		result.ExpiredAt = &expired
+	}
 	return result
 }
 func cloneChild(value Child) Child {

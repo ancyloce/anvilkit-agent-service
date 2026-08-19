@@ -4,6 +4,8 @@ package postgres
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,12 +51,13 @@ func (s *Store) Input(ctx context.Context, scope runs.Scope, runID runs.ID, id i
 	var schema, response []byte
 	var responseVersion *uint64
 	var actor *string
-	var accepted *time.Time
-	err := s.database.QueryRow(ctx, `SELECT request_id,run_id,request_version,question,response_schema,expires_at,resume_checkpoint,created_at,response_bytes,response_actor_id,responded_at FROM agent_control.input_requests WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4`, scope.WorkspaceID, scope.ProjectID, runID, id).Scan(&request.ID, &request.RunID, &request.Version, &request.Question, &schema, &request.ExpiresAt, &request.ResumeCheckpoint, &request.CreatedAt, &response, &actor, &accepted)
+	var accepted, expired *time.Time
+	err := s.database.QueryRow(ctx, `SELECT request_id,run_id,request_version,question,response_schema,expires_at,resume_checkpoint,created_at,response_bytes,response_actor_id,responded_at,expired_at FROM agent_control.input_requests WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4`, scope.WorkspaceID, scope.ProjectID, runID, id).Scan(&request.ID, &request.RunID, &request.Version, &request.Question, &schema, &request.ExpiresAt, &request.ResumeCheckpoint, &request.CreatedAt, &response, &actor, &accepted, &expired)
 	if err != nil {
 		return interrupts.InputRequest{}, translate(err)
 	}
 	request.ResponseSchema = clone(schema)
+	request.ExpiredAt = expired
 	if accepted != nil {
 		v := request.Version
 		responseVersion = &v
@@ -92,8 +95,8 @@ func (s *Store) AcceptInput(ctx context.Context, write interrupts.Write, command
 	replay, err := s.execute(ctx, write, "respond-input", digest, func(ctx context.Context, tx pgx.Tx) (any, error) {
 		var version uint64
 		var expires time.Time
-		var responded *time.Time
-		err := tx.QueryRow(ctx, `SELECT request_version,expires_at,responded_at FROM agent_control.input_requests WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 FOR UPDATE`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, command.RequestID).Scan(&version, &expires, &responded)
+		var responded, expired *time.Time
+		err := tx.QueryRow(ctx, `SELECT request_version,expires_at,responded_at,expired_at FROM agent_control.input_requests WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 FOR UPDATE`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, command.RequestID).Scan(&version, &expires, &responded, &expired)
 		if err != nil {
 			return nil, err
 		}
@@ -103,8 +106,11 @@ func (s *Store) AcceptInput(ctx context.Context, write interrupts.Write, command
 		if responded != nil {
 			return nil, interruptsProblem(problem.CodeInputAlreadyResponded, "input response is immutable")
 		}
+		if expired != nil {
+			return nil, interruptsProblem(problem.CodeInputRequestExpired, "the input request is durably expired and cannot be revived")
+		}
 		if !now.Before(expires) {
-			return nil, interruptsProblem(problem.CodeInputRequestExpired, "expired input remains awaiting input until the timeout policy is finalized")
+			return nil, interruptsProblem(problem.CodeInputRequestExpired, "the input deadline elapsed before the response was accepted")
 		}
 		if _, err := tx.Exec(ctx, `UPDATE agent_control.input_requests SET response_bytes=$5,response_digest=$6,response_actor_id=$7,responded_at=$8 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 AND responded_at IS NULL`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, command.RequestID, command.Value, digest, write.Scope.ActorID, now); err != nil {
 			return nil, err
@@ -127,12 +133,13 @@ func (s *Store) Approval(ctx context.Context, scope runs.Scope, runID runs.ID, i
 	var effects, cost, policy []byte
 	var decision *string
 	var reason, reviewer *string
-	var decided *time.Time
-	err := s.database.QueryRow(ctx, `SELECT request_id,run_id,decision_version,action_digest,effects,expected_cost,reviewer_policy,expires_at,resume_checkpoint,created_at,decision,decision_reason,reviewer_id,decided_at FROM agent_control.approval_requests WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4`, scope.WorkspaceID, scope.ProjectID, runID, id).Scan(&request.ID, &request.RunID, &request.Version, &request.ActionDigest, &effects, &cost, &policy, &request.ExpiresAt, &request.ResumeCheckpoint, &request.CreatedAt, &decision, &reason, &reviewer, &decided)
+	var decided, expired *time.Time
+	err := s.database.QueryRow(ctx, `SELECT request_id,run_id,decision_version,action_digest,effects,expected_cost,reviewer_policy,expires_at,resume_checkpoint,created_at,decision,decision_reason,reviewer_id,decided_at,expired_at FROM agent_control.approval_requests WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4`, scope.WorkspaceID, scope.ProjectID, runID, id).Scan(&request.ID, &request.RunID, &request.Version, &request.ActionDigest, &effects, &cost, &policy, &request.ExpiresAt, &request.ResumeCheckpoint, &request.CreatedAt, &decision, &reason, &reviewer, &decided, &expired)
 	if err != nil {
 		return interrupts.ApprovalRequest{}, translate(err)
 	}
 	request.Effects, request.ExpectedCost, request.ReviewerPolicy = clone(effects), clone(cost), clone(policy)
+	request.ExpiredAt = expired
 	if decision != nil {
 		request.Decision = &interrupts.Decision{RequestVersion: request.Version, Kind: interrupts.DecisionKind(*decision), ReviewerID: *reviewer, AcceptedAt: *decided}
 		if reason != nil {
@@ -171,8 +178,8 @@ func (s *Store) DecideApproval(ctx context.Context, write interrupts.Write, comm
 	replay, err := s.execute(ctx, write, "decide-approval", digest, func(ctx context.Context, tx pgx.Tx) (any, error) {
 		var version uint64
 		var expires time.Time
-		var decided *time.Time
-		err := tx.QueryRow(ctx, `SELECT decision_version,expires_at,decided_at FROM agent_control.approval_requests WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 FOR UPDATE`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, command.RequestID).Scan(&version, &expires, &decided)
+		var decided, expired *time.Time
+		err := tx.QueryRow(ctx, `SELECT decision_version,expires_at,decided_at,expired_at FROM agent_control.approval_requests WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 FOR UPDATE`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, command.RequestID).Scan(&version, &expires, &decided, &expired)
 		if err != nil {
 			return nil, err
 		}
@@ -182,8 +189,11 @@ func (s *Store) DecideApproval(ctx context.Context, write interrupts.Write, comm
 		if decided != nil {
 			return nil, interruptsProblem(problem.CodeApprovalAlreadyDecided, "approval decision is immutable")
 		}
+		if expired != nil {
+			return nil, interruptsProblem(problem.CodeApprovalRequestExpired, "the approval request is durably expired and cannot be revived")
+		}
 		if !now.Before(expires) {
-			return nil, interruptsProblem(problem.CodeApprovalRequestExpired, "expired approval remains awaiting approval until the timeout policy is finalized")
+			return nil, interruptsProblem(problem.CodeApprovalRequestExpired, "the approval deadline elapsed before the decision was accepted")
 		}
 		if _, err := tx.Exec(ctx, `UPDATE agent_control.approval_requests SET decision=$5,decision_reason=$6,reviewer_id=$7,decided_at=$8 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 AND decided_at IS NULL`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, command.RequestID, command.Decision, command.Reason, write.Scope.ActorID, now); err != nil {
 			return nil, err
@@ -207,6 +217,94 @@ func (s *Store) DecideApproval(ctx context.Context, write interrupts.Write, comm
 	}
 	result.Replayed = replay
 	return result, nil
+}
+
+// errExpirySuperseded rolls the expiry transaction back when another
+// authority already moved the run; the caller reports it as superseded.
+var errExpirySuperseded = errors.New("interrupt expiry superseded")
+
+type expiryEnvelope struct {
+	Raced      bool          `json:"raced"`
+	Superseded bool          `json:"superseded"`
+	Snapshot   runs.Snapshot `json:"snapshot"`
+	Version    uint64        `json:"version"`
+}
+
+// ExpireInput settles the durable input deadline in one transaction. It locks
+// the request row before touching the run, so an accepted response and an
+// elapsed deadline can never both commit.
+func (s *Store) ExpireInput(ctx context.Context, write interrupts.Write, id interrupts.RequestID, failure problem.Details, now time.Time) (interrupts.Expiry, error) {
+	return s.expire(ctx, write, "expire-input", `SELECT responded_at,expired_at FROM agent_control.input_requests WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 FOR UPDATE`,
+		`UPDATE agent_control.input_requests SET expired_at=$5 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 AND responded_at IS NULL AND expired_at IS NULL`, id, failure, now)
+}
+
+// ExpireApproval is the approval counterpart of ExpireInput.
+func (s *Store) ExpireApproval(ctx context.Context, write interrupts.Write, id interrupts.RequestID, failure problem.Details, now time.Time) (interrupts.Expiry, error) {
+	return s.expire(ctx, write, "expire-approval", `SELECT decided_at,expired_at FROM agent_control.approval_requests WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 FOR UPDATE`,
+		`UPDATE agent_control.approval_requests SET expired_at=$5 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 AND decided_at IS NULL AND expired_at IS NULL`, id, failure, now)
+}
+
+func (s *Store) expire(ctx context.Context, write interrupts.Write, operation, lockQuery, markQuery string, id interrupts.RequestID, failure problem.Details, now time.Time) (interrupts.Expiry, error) {
+	digest, err := expiryDigest(write, operation, id, failure)
+	if err != nil {
+		return interrupts.Expiry{}, err
+	}
+	var value expiryEnvelope
+	_, err = s.execute(ctx, write, operation, digest, func(ctx context.Context, tx pgx.Tx) (any, error) {
+		var settled, expired *time.Time
+		if err := tx.QueryRow(ctx, lockQuery, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, id).Scan(&settled, &expired); err != nil {
+			return nil, translate(err)
+		}
+		if settled != nil {
+			snapshot, err := s.load(ctx, tx, write.Scope, write.RunID)
+			if err != nil {
+				return nil, err
+			}
+			return expiryEnvelope{Raced: true, Snapshot: snapshot, Version: snapshot.Version}, nil
+		}
+		if expired != nil {
+			snapshot, err := s.load(ctx, tx, write.Scope, write.RunID)
+			if err != nil {
+				return nil, err
+			}
+			return expiryEnvelope{Snapshot: snapshot, Version: snapshot.Version}, nil
+		}
+		snapshot, err := s.transition(ctx, tx, write, runs.Command{Kind: runs.RecordFailure, Failure: &failure, Traceparent: write.Traceparent}, now)
+		if err != nil {
+			return nil, errExpirySuperseded
+		}
+		tag, err := tx.Exec(ctx, markQuery, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, id, now)
+		if err != nil {
+			return nil, err
+		}
+		if tag.RowsAffected() != 1 {
+			return nil, errExpirySuperseded
+		}
+		return expiryEnvelope{Snapshot: snapshot, Version: snapshot.Version}, nil
+	}, &value)
+	if errors.Is(err, errExpirySuperseded) {
+		return interrupts.Expiry{Superseded: true}, nil
+	}
+	if err != nil {
+		return interrupts.Expiry{}, err
+	}
+	value.Snapshot.Version = value.Version
+	return interrupts.Expiry{Raced: value.Raced, Superseded: value.Superseded, Snapshot: value.Snapshot}, nil
+}
+
+func expiryDigest(write interrupts.Write, operation string, id interrupts.RequestID, failure problem.Details) (string, error) {
+	raw, err := json.Marshal(struct {
+		Operation string               `json:"operation"`
+		RunID     runs.ID              `json:"runId"`
+		RequestID interrupts.RequestID `json:"requestId"`
+		Version   uint64               `json:"version"`
+		Failure   problem.Details      `json:"failure"`
+	}{operation, write.RunID, id, write.ExpectedVersion, failure})
+	if err != nil {
+		return "", fmt.Errorf("canonicalize interrupt expiry: %w", err)
+	}
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 func (s *Store) RequestCancellation(ctx context.Context, write interrupts.Write, digest string, now time.Time) (interrupts.Cancellation, interrupts.OperationResult, error) {
