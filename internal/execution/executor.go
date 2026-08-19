@@ -45,6 +45,15 @@ type InterruptReader interface {
 	Approval(context.Context, runs.Scope, runs.ID, interrupts.RequestID) (interrupts.ApprovalRequest, error)
 }
 
+// InterruptExpirer settles a durable interrupt deadline atomically. The
+// interrupts repository satisfies it. Expiry must never be a read followed
+// by a separate compare-and-set: an accepted response arriving between the
+// two would leave the run neither expired nor driven by any workflow.
+type InterruptExpirer interface {
+	ExpireInput(context.Context, interrupts.Write, interrupts.RequestID, problem.Details, time.Time) (interrupts.Expiry, error)
+	ExpireApproval(context.Context, interrupts.Write, interrupts.RequestID, problem.Details, time.Time) (interrupts.Expiry, error)
+}
+
 // AuthorityProvider re-reads current run authority during preparation.
 type AuthorityProvider interface {
 	Current(context.Context, runs.Scope) (runs.Authority, error)
@@ -124,6 +133,7 @@ type Config struct {
 	Runs              RunStore
 	InterruptWriter   InterruptWriter
 	InterruptReader   InterruptReader
+	InterruptExpirer  InterruptExpirer
 	Authority         AuthorityProvider
 	Tools             ToolExecutor
 	Domain            DomainPort
@@ -150,7 +160,7 @@ func traceparentOf(input workflow.RunInput) string {
 }
 
 func New(cfg Config) (*Executor, error) {
-	if cfg.Registry == nil || cfg.Runner == nil || cfg.Runs == nil || cfg.InterruptWriter == nil || cfg.InterruptReader == nil || cfg.Authority == nil || cfg.Tools == nil || cfg.Domain == nil || cfg.CommitAuthority == nil || cfg.Decisions == nil || cfg.Clock == nil {
+	if cfg.Registry == nil || cfg.Runner == nil || cfg.Runs == nil || cfg.InterruptWriter == nil || cfg.InterruptReader == nil || cfg.InterruptExpirer == nil || cfg.Authority == nil || cfg.Tools == nil || cfg.Domain == nil || cfg.CommitAuthority == nil || cfg.Decisions == nil || cfg.Clock == nil {
 		return nil, fmt.Errorf("agent execution: every pipeline dependency is required")
 	}
 	if cfg.InputTTL <= 0 || cfg.ApprovalTTL <= 0 || cfg.TurnLimit < 1 {
