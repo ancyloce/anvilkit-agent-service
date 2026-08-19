@@ -65,7 +65,7 @@ func main() {
 		logger.Error("telemetry initialization failed", "error", err)
 		os.Exit(1)
 	}
-	if err := contractguard.VerifyPinnedMaterial(cfg.ContractRoot, cfg.Environment == config.EnvironmentProduction); err != nil {
+	if err := contractguard.VerifyPinnedMaterial(cfg.ContractRoot); err != nil {
 		logger.Error("contract material verification failed", "error", err)
 		os.Exit(1)
 	}
@@ -176,7 +176,7 @@ func main() {
 		return nil
 	})
 	contractCheck := lifecycle.CheckFunc(func(context.Context) error {
-		return contractguard.VerifyPinnedMaterial(cfg.ContractRoot, cfg.Environment == config.EnvironmentProduction)
+		return contractguard.VerifyPinnedMaterial(cfg.ContractRoot)
 	})
 	policyCheck := lifecycle.FileCheck(cfg.PolicySnapshot)
 	if cfg.Environment != config.EnvironmentProduction && cfg.PolicySnapshot == "" {
@@ -497,6 +497,7 @@ func loadRunAuthority(path string, guard *contractguard.Guard) (runs.Authority, 
 		return runs.Authority{}, fmt.Errorf("read run authority: %w", err)
 	}
 	var payload struct {
+		Definition  json.RawMessage `json:"definition"`
 		ContractBOM json.RawMessage `json:"contractBomReference"`
 		Policy      json.RawMessage `json:"policy"`
 		Budget      json.RawMessage `json:"budget"`
@@ -510,18 +511,18 @@ func loadRunAuthority(path string, guard *contractguard.Guard) (runs.Authority, 
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return runs.Authority{}, fmt.Errorf("decode run authority: trailing JSON")
 	}
-	if len(payload.ContractBOM) == 0 || len(payload.Policy) == 0 || len(payload.Budget) == 0 {
+	if len(payload.Definition) == 0 || len(payload.ContractBOM) == 0 || len(payload.Policy) == 0 || len(payload.Budget) == 0 {
 		return runs.Authority{}, fmt.Errorf("run authority is incomplete")
 	}
-	authority := runs.Authority{ContractBOM: payload.ContractBOM, Policy: payload.Policy, Budget: payload.Budget}
-	probe := runs.Snapshot{APIVersion: "anvilkit.io/contracts/v1", Kind: "AgentRun", RunID: "run.authority-validation", RootRunID: "run.authority-validation", TenantID: "tenant.authority-validation", WorkspaceID: "workspace.authority-validation", ActorID: "actor.authority-validation", Domain: "platform-agent", Operation: "artifact-validation", Target: runs.Target{Type: "page", ID: "page.authority-validation", WorkspaceID: "workspace.authority-validation"}, ContractBOM: authority.ContractBOM, Policy: authority.Policy, Budget: authority.Budget, Idempotency: runs.IdempotencyProjection{Scope: "workspace.authority-validation:create-run", Key: "authority-validation", CanonicalRequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Status: runs.Created, Version: 1, ExecutionGeneration: 1, CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0)}
+	authority := runs.Authority{Definition: payload.Definition, ContractBOM: payload.ContractBOM, Policy: payload.Policy, Budget: payload.Budget}
+	probe := runs.Snapshot{Kind: "AgentRun", RunID: "run.authority-validation", RootRunID: "run.authority-validation", WorkspaceID: "workspace.authority-validation", ActorID: "actor.authority-validation", Domain: "platform-agent", Operation: "artifact-validation", Target: runs.Target{Type: "page", ID: "page.authority-validation", WorkspaceID: "workspace.authority-validation", ProjectID: "project.authority-validation"}, Definition: authority.Definition, ContractBOM: authority.ContractBOM, Policy: authority.Policy, Budget: authority.Budget, Idempotency: runs.IdempotencyProjection{Scope: "workspace.authority-validation:create-run", Key: "authority-validation", CanonicalRequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Status: runs.Created, Version: 1, ExecutionGeneration: 1, CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0)}
 	probeBytes, err := json.Marshal(probe)
 	if err != nil {
 		return runs.Authority{}, fmt.Errorf("marshal run authority probe: %w", err)
 	}
-	findings := guard.Validate(context.Background(), contractguard.APIIn, "anvilkit://schema/agent-run.v1@1.0.0?digest=sha256:68949242c9b4557a8b5ff965f76de8f2de49c11523a7cc1e64cfd1b4af824233", probeBytes)
+	findings := guard.Validate(context.Background(), contractguard.APIIn, "anvilkit://schema/agent-run?digest=sha256:e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564", probeBytes)
 	if len(findings) != 0 {
-		return runs.Authority{}, fmt.Errorf("run authority violates pinned AgentRunV1 references: %v", findings)
+		return runs.Authority{}, fmt.Errorf("run authority violates pinned AgentRun references: %v", findings)
 	}
 	return authority, nil
 }

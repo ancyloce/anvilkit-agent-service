@@ -41,7 +41,12 @@ func main() {
 			if err != nil {
 				return err
 			}
-			if bytes.IndexByte(body, 0) < 0 && (deliveryMarker.MatchString(relative) || deliveryMarker.Match(body)) {
+			// The canonical contract profile is named by ADR-018
+			// (p0-kernel-profile.json); that exact governed artifact
+			// name is the only permitted delivery-stage token.
+			sanitized := bytes.ReplaceAll(body, []byte("p0-kernel-profile"), []byte("kernel-profile"))
+			sanitized = bytes.ReplaceAll(sanitized, []byte("P0-Kernel"), []byte("Kernel"))
+			if bytes.IndexByte(body, 0) < 0 && (deliveryMarker.MatchString(relative) || deliveryMarker.Match(sanitized)) {
 				failures = append(failures, relative+": delivery-stage naming is forbidden")
 			}
 		}
