@@ -230,6 +230,54 @@ func (p Details) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wire{Kind: p.Kind, Code: p.Code, Retryability: p.Retryability, Message: message, FieldErrors: fieldErrors, Stage: p.Stage, RunID: p.RunID, TraceID: NormalizeTraceID(p.TraceID)})
 }
 
+// UnmarshalJSON reconstructs the structured details from the closed wire
+// contract. The registry supplies the fields the wire shape deliberately
+// omits (type, title, status), so a Details value that crosses a durable
+// boundary and is replayed later keeps the diagnostic detail its producer
+// recorded and re-marshals byte-identically.
+func (p *Details) UnmarshalJSON(raw []byte) error {
+	var wire struct {
+		Kind         string       `json:"kind"`
+		Code         string       `json:"code"`
+		Retryability string       `json:"retryability"`
+		Message      string       `json:"message"`
+		FieldErrors  []FieldError `json:"fieldErrors"`
+		Stage        string       `json:"stage"`
+		RunID        string       `json:"runId"`
+		TraceID      string       `json:"traceId"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return err
+	}
+	restored := Details{
+		Kind:         wire.Kind,
+		Code:         wire.Code,
+		Retryability: wire.Retryability,
+		Message:      wire.Message,
+		FieldErrors:  wire.FieldErrors,
+		Stage:        wire.Stage,
+		RunID:        wire.RunID,
+		TraceID:      wire.TraceID,
+	}
+	if restored.FieldErrors == nil {
+		restored.FieldErrors = []FieldError{}
+	}
+	if definition, known := Lookup(Code(wire.Code)); known {
+		restored.Type, restored.Title, restored.Status = definition.Type, definition.Title, definition.Status
+		if restored.Retryability == "" {
+			restored.Retryability = definition.Retryability
+		}
+	}
+	// MarshalJSON projects Detail onto message and falls back to the
+	// registry title; restoring Detail only when the message carries more
+	// than the title keeps that projection idempotent.
+	if wire.Message != "" && wire.Message != restored.Title {
+		restored.Detail = wire.Message
+	}
+	*p = restored
+	return nil
+}
+
 func NormalizeTraceID(value string) string {
 	parts := strings.Split(value, "-")
 	if len(parts) == 4 && len(parts[1]) == 32 {
