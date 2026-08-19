@@ -1,0 +1,152 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/agent-evidence.schema.json",
+  "title": "AgentEvidence contract",
+  "description": "Bounded internal AgentEvidence wire contract governed by ADR-020. Evidence is internal, separately sequenced, access-controlled execution fact and is never a public AgentEvent.",
+  "type": "object",
+  "minProperties": 13,
+  "maxProperties": 19,
+  "required": [
+    "kind",
+    "evidenceId",
+    "runId",
+    "workspaceId",
+    "projectId",
+    "evidenceType",
+    "evidenceSequence",
+    "recordedAt",
+    "occurredAt",
+    "producer",
+    "dataClassification",
+    "retentionCategory",
+    "traceContext"
+  ],
+  "properties": {
+    "kind": {
+      "const": "AgentEvidence"
+    },
+    "evidenceId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "runId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
+    },
+    "workspaceId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/WorkspaceId"
+    },
+    "projectId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ProjectId"
+    },
+    "evidenceType": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 128,
+      "pattern": "^(agent|model|tool|validation|artifact|approval|commit|domain|recovery)\\.[a-z0-9][a-z0-9.-]*$"
+    },
+    "evidenceSequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "recordedAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    },
+    "occurredAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    },
+    "producer": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 4,
+      "required": [
+        "component",
+        "policyDigest",
+        "contractBomDigest"
+      ],
+      "properties": {
+        "component": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+        },
+        "definitionDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "policyDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "contractBomDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false,
+      "x-anvilkit-omittedSemantics": {
+        "definitionDigest": "omitted for evidence recorded before an Agent definition is resolved"
+      }
+    },
+    "dataClassification": {
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ]
+    },
+    "retentionCategory": {
+      "enum": [
+        "operational",
+        "audit",
+        "security"
+      ]
+    },
+    "traceContext": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TraceContext"
+    },
+    "causedByEvidenceId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "publicEventId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "turnId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "workflowId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "payload": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+    },
+    "artifactReference": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "causedByEvidenceId": "omitted for evidence with no recorded internal cause",
+    "publicEventId": "omitted when the evidence produced no public event projection",
+    "turnId": "omitted for evidence outside an AgentRunner turn",
+    "workflowId": "omitted when no durable workflow execution is associated",
+    "payload": "omitted when the evidence body is carried by artifact reference",
+    "artifactReference": "omitted when the bounded inline payload is present"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "AgentEvidence",
+    "componentName": "anvilkit.contract.schema.agent-evidence",
+    "owner": "Agent Service Events owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/evidenceId",
+      "/runId",
+      "/workspaceId",
+      "/projectId",
+      "/evidenceType",
+      "/evidenceSequence",
+      "/recordedAt",
+      "/occurredAt",
+      "/producer",
+      "/dataClassification",
+      "/retentionCategory"
+    ],
+    "maximumSerializedBytes": 65536,
+    "descriptions": []
+  }
+}

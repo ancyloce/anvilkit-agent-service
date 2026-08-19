@@ -1,0 +1,119 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/image-operation-plan.schema.json",
+  "title": "ImageOperationPlan contract",
+  "description": "Bounded ImageOperationPlan wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 6,
+  "maxProperties": 6,
+  "required": [
+    "kind",
+    "operations",
+    "inputs",
+    "outputs",
+    "limits",
+    "validationPolicy"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ImageOperationPlan"
+    },
+    "operations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "operationId",
+          "operationType",
+          "parameters"
+        ],
+        "properties": {
+          "operationId": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+          },
+          "operationType": {
+            "enum": [
+              "crop",
+              "resize",
+              "composite",
+              "encode"
+            ]
+          },
+          "parameters": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "name",
+          "mediaType",
+          "maximumBytes"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9._-]*$"
+          },
+          "mediaType": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 128,
+            "pattern": "^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+$"
+          },
+          "maximumBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1073741824
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "limits": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ResourceLimits"
+    },
+    "validationPolicy": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PolicyReference"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ImageOperationPlan",
+    "componentName": "anvilkit.contract.schema.image-operation-plan",
+    "owner": "Platform Plan owner",
+    "stability": "experimental",
+    "identityFields": [
+      "/operations",
+      "/inputs",
+      "/outputs",
+      "/limits",
+      "/validationPolicy"
+    ],
+    "maximumSerializedBytes": 262144,
+    "descriptions": []
+  }
+}

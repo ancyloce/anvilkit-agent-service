@@ -17,22 +17,21 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
-// AgentArtifactV1 Bounded AgentArtifactV1 wire contract governed by PRD 0012.
-type AgentArtifactV1 struct {
-	ApiVersion   interface{}                           `json:"apiVersion"`
-	ArtifactId   SharedPrimitivesV1ArtifactId          `json:"artifactId"`
-	ContractType interface{}                           `json:"contractType"`
-	CreatedAt    SharedPrimitivesV1Timestamp           `json:"createdAt"`
-	Digest       SharedPrimitivesV1Digest              `json:"digest"`
-	Kind         interface{}                           `json:"kind"`
-	Lifecycle    interface{}                           `json:"lifecycle"`
-	Lineage      []SharedPrimitivesV1ArtifactReference `json:"lineage"`
+// AgentArtifact Bounded AgentArtifact wire contract governed by PRD 0012.
+type AgentArtifact struct {
+	ArtifactId   SharedPrimitivesArtifactId          `json:"artifactId"`
+	ContractType interface{}                         `json:"contractType"`
+	CreatedAt    SharedPrimitivesTimestamp           `json:"createdAt"`
+	Digest       SharedPrimitivesDigest              `json:"digest"`
+	Kind         interface{}                         `json:"kind"`
+	Lifecycle    interface{}                         `json:"lifecycle"`
+	Lineage      []SharedPrimitivesArtifactReference `json:"lineage"`
 	Producer     struct {
-		ExecutionGeneration int                                 `json:"executionGeneration"`
-		LeaseEpoch          int                                 `json:"leaseEpoch"`
-		PhysicalAttemptId   SharedPrimitivesV1PhysicalAttemptId `json:"physicalAttemptId"`
-		RecoveryEpoch       int                                 `json:"recoveryEpoch"`
-		TaskId              SharedPrimitivesV1TaskId            `json:"taskId"`
+		ExecutionGeneration int                               `json:"executionGeneration"`
+		LeaseEpoch          int                               `json:"leaseEpoch"`
+		PhysicalAttemptId   SharedPrimitivesPhysicalAttemptId `json:"physicalAttemptId"`
+		RecoveryEpoch       int                               `json:"recoveryEpoch"`
+		TaskId              SharedPrimitivesTaskId            `json:"taskId"`
 	} `json:"producer"`
 	Reference struct {
 		Bucket    string `json:"bucket"`
@@ -40,23 +39,22 @@ type AgentArtifactV1 struct {
 		ObjectKey string `json:"objectKey"`
 		SizeBytes int    `json:"sizeBytes"`
 	} `json:"reference"`
-	Schema     SharedPrimitivesV1SchemaReference `json:"schema"`
+	Schema     SharedPrimitivesSchemaReference `json:"schema"`
 	Validation struct {
 		Checks []struct {
-			EvidenceDigest SharedPrimitivesV1Digest `json:"evidenceDigest"`
-			Name           string                   `json:"name"`
-			Result         interface{}              `json:"result"`
+			EvidenceDigest SharedPrimitivesDigest `json:"evidenceDigest"`
+			Name           string                 `json:"name"`
+			Result         interface{}            `json:"result"`
 		} `json:"checks"`
-		ValidatedAt SharedPrimitivesV1Timestamp `json:"validatedAt"`
+		ValidatedAt SharedPrimitivesTimestamp `json:"validatedAt"`
 	} `json:"validation"`
 }
 
-// AgentBudgetV1 Bounded AgentBudgetV1 wire contract governed by PRD 0012.
-type AgentBudgetV1 struct {
-	ApiVersion     interface{} `json:"apiVersion"`
+// AgentBudget Bounded AgentBudget wire contract governed by PRD 0012.
+type AgentBudget struct {
 	CurrencyLimits struct {
-		MaximumCost  SharedPrimitivesV1Cost `json:"maximumCost"`
-		ReservedCost SharedPrimitivesV1Cost `json:"reservedCost"`
+		MaximumCost  SharedPrimitivesCost `json:"maximumCost"`
+		ReservedCost SharedPrimitivesCost `json:"reservedCost"`
 	} `json:"currencyLimits"`
 	ExceedBehavior interface{} `json:"exceedBehavior"`
 	GpuLimits      struct {
@@ -67,8 +65,8 @@ type AgentBudgetV1 struct {
 		MaximumCalls           int `json:"maximumCalls"`
 		MaximumConcurrentCalls int `json:"maximumConcurrentCalls"`
 	} `json:"modelLimits"`
-	Policy        SharedPrimitivesV1PolicyReference `json:"policy"`
-	ReservationId SharedPrimitivesV1ReservationId   `json:"reservationId"`
+	Policy        SharedPrimitivesPolicyReference `json:"policy"`
+	ReservationId SharedPrimitivesReservationId   `json:"reservationId"`
 	TokenLimits   struct {
 		InputTokens  int `json:"inputTokens"`
 		OutputTokens int `json:"outputTokens"`
@@ -80,170 +78,178 @@ type AgentBudgetV1 struct {
 	} `json:"workerLimits"`
 }
 
-// ApplyAuthorizationV1 Bounded ApplyAuthorizationV1 wire contract governed by PRD 0012.
-type ApplyAuthorizationV1 struct {
-	ActionDigest      SharedPrimitivesV1Digest          `json:"actionDigest"`
-	ActorId           SharedPrimitivesV1ActorId         `json:"actorId"`
-	ApiVersion        interface{}                       `json:"apiVersion"`
-	ApprovalVersion   int                               `json:"approvalVersion"`
-	ArtifactDigest    SharedPrimitivesV1Digest          `json:"artifactDigest"`
-	Audience          interface{}                       `json:"audience"`
-	AuthorizationId   SharedPrimitivesV1AuthorizationId `json:"authorizationId"`
-	BaseRevision      SharedPrimitivesV1OpaqueId        `json:"baseRevision"`
-	ContractBomDigest SharedPrimitivesV1Digest          `json:"contractBomDigest"`
-	ExpiresAt         SharedPrimitivesV1Timestamp       `json:"expiresAt"`
-	IssuedAt          SharedPrimitivesV1Timestamp       `json:"issuedAt"`
-	Issuer            interface{}                       `json:"issuer"`
-	KeyId             string                            `json:"keyId"`
-	Kind              interface{}                       `json:"kind"`
-	NotBefore         SharedPrimitivesV1Timestamp       `json:"notBefore"`
-	PolicyDigest      SharedPrimitivesV1Digest          `json:"policyDigest"`
-	RunId             SharedPrimitivesV1RunId           `json:"runId"`
-	Target            SharedPrimitivesV1TargetReference `json:"target"`
-	WorkspaceId       SharedPrimitivesV1WorkspaceId     `json:"workspaceId"`
+// ApplyAuthorization Bounded ApplyAuthorization wire contract governed by PRD 0012.
+type ApplyAuthorization struct {
+	ActionDigest      SharedPrimitivesDigest          `json:"actionDigest"`
+	ActorId           SharedPrimitivesActorId         `json:"actorId"`
+	ApprovalVersion   int                             `json:"approvalVersion"`
+	ArtifactDigest    SharedPrimitivesDigest          `json:"artifactDigest"`
+	Audience          interface{}                     `json:"audience"`
+	AuthorizationId   SharedPrimitivesAuthorizationId `json:"authorizationId"`
+	BaseRevision      SharedPrimitivesOpaqueId        `json:"baseRevision"`
+	ContractBomDigest SharedPrimitivesDigest          `json:"contractBomDigest"`
+	DefinitionDigest  SharedPrimitivesDigest          `json:"definitionDigest"`
+	ExpiresAt         SharedPrimitivesTimestamp       `json:"expiresAt"`
+	IssuedAt          SharedPrimitivesTimestamp       `json:"issuedAt"`
+	Issuer            interface{}                     `json:"issuer"`
+	KeyId             string                          `json:"keyId"`
+	Kind              interface{}                     `json:"kind"`
+	NotBefore         SharedPrimitivesTimestamp       `json:"notBefore"`
+	PolicyDigest      SharedPrimitivesDigest          `json:"policyDigest"`
+	RunId             SharedPrimitivesRunId           `json:"runId"`
+	Target            SharedPrimitivesTargetReference `json:"target"`
+	WorkspaceId       SharedPrimitivesWorkspaceId     `json:"workspaceId"`
 }
 
-// ProblemDetailsV1 Bounded ProblemDetailsV1 wire contract governed by PRD 0012.
-type ProblemDetailsV1 struct {
-	ApiVersion  interface{} `json:"apiVersion"`
-	Code        string      `json:"code"`
+// IssuedApplyAuthorization Issued Apply Authorization response governed by ADR-021: the canonical ApplyAuthorization document plus its compact JWS carrier. The document must be byte-equivalent to the decoded JWS payload after canonicalization.
+type IssuedApplyAuthorization struct {
+	// Authorization Bounded ApplyAuthorization wire contract governed by PRD 0012.
+	Authorization ApplyAuthorization `json:"authorization"`
+	CompactJws    string             `json:"compactJws"`
+	Kind          interface{}        `json:"kind"`
+}
+
+// ProblemDetails Bounded ProblemDetails wire contract governed by PRD 0012.
+type ProblemDetails struct {
+	Code        string `json:"code"`
 	FieldErrors []struct {
 		Code         string `json:"code"`
 		InstancePath string `json:"instancePath"`
 		Message      string `json:"message"`
 		SchemaPath   string `json:"schemaPath"`
 	} `json:"fieldErrors"`
-	Kind         interface{}              `json:"kind"`
-	Message      string                   `json:"message"`
-	Retryability interface{}              `json:"retryability"`
-	RunId        *SharedPrimitivesV1RunId `json:"runId,omitempty"`
-	Stage        *string                  `json:"stage,omitempty"`
-	TraceId      *string                  `json:"traceId,omitempty"`
+	Kind         interface{}            `json:"kind"`
+	Message      string                 `json:"message"`
+	Retryability interface{}            `json:"retryability"`
+	RunId        *SharedPrimitivesRunId `json:"runId,omitempty"`
+	Stage        *string                `json:"stage,omitempty"`
+	TraceId      *string                `json:"traceId,omitempty"`
 }
 
-// SharedPrimitivesV1ActorId defines model for SharedPrimitivesV1ActorId.
-type SharedPrimitivesV1ActorId = SharedPrimitivesV1OpaqueId
+// SharedPrimitivesActorId defines model for SharedPrimitivesActorId.
+type SharedPrimitivesActorId = SharedPrimitivesOpaqueId
 
-// SharedPrimitivesV1ArtifactId defines model for SharedPrimitivesV1ArtifactId.
-type SharedPrimitivesV1ArtifactId = SharedPrimitivesV1OpaqueId
+// SharedPrimitivesArtifactId defines model for SharedPrimitivesArtifactId.
+type SharedPrimitivesArtifactId = SharedPrimitivesOpaqueId
 
-// SharedPrimitivesV1ArtifactReference defines model for SharedPrimitivesV1ArtifactReference.
-type SharedPrimitivesV1ArtifactReference struct {
-	ArtifactId SharedPrimitivesV1ArtifactId `json:"artifactId"`
-	Digest     SharedPrimitivesV1Digest     `json:"digest"`
-	MediaType  string                       `json:"mediaType"`
-	SizeBytes  int                          `json:"sizeBytes"`
+// SharedPrimitivesArtifactReference defines model for SharedPrimitivesArtifactReference.
+type SharedPrimitivesArtifactReference struct {
+	ArtifactId SharedPrimitivesArtifactId `json:"artifactId"`
+	Digest     SharedPrimitivesDigest     `json:"digest"`
+	MediaType  string                     `json:"mediaType"`
+	SizeBytes  int                        `json:"sizeBytes"`
 }
 
-// SharedPrimitivesV1AuthorizationId defines model for SharedPrimitivesV1AuthorizationId.
-type SharedPrimitivesV1AuthorizationId = SharedPrimitivesV1OpaqueId
+// SharedPrimitivesAuthorizationId defines model for SharedPrimitivesAuthorizationId.
+type SharedPrimitivesAuthorizationId = SharedPrimitivesOpaqueId
 
-// SharedPrimitivesV1BoundedStringMap defines model for SharedPrimitivesV1BoundedStringMap.
-type SharedPrimitivesV1BoundedStringMap map[string]string
+// SharedPrimitivesBoundedStringMap defines model for SharedPrimitivesBoundedStringMap.
+type SharedPrimitivesBoundedStringMap map[string]string
 
-// SharedPrimitivesV1BuildId defines model for SharedPrimitivesV1BuildId.
-type SharedPrimitivesV1BuildId = SharedPrimitivesV1OpaqueId
+// SharedPrimitivesBuildId defines model for SharedPrimitivesBuildId.
+type SharedPrimitivesBuildId = SharedPrimitivesOpaqueId
 
-// SharedPrimitivesV1Cost defines model for SharedPrimitivesV1Cost.
-type SharedPrimitivesV1Cost struct {
-	Amount   SharedPrimitivesV1DecimalString `json:"amount"`
-	Currency string                          `json:"currency"`
+// SharedPrimitivesCost defines model for SharedPrimitivesCost.
+type SharedPrimitivesCost struct {
+	Amount   SharedPrimitivesDecimalString `json:"amount"`
+	Currency string                        `json:"currency"`
 }
 
-// SharedPrimitivesV1DecimalString defines model for SharedPrimitivesV1DecimalString.
-type SharedPrimitivesV1DecimalString = string
+// SharedPrimitivesDecimalString defines model for SharedPrimitivesDecimalString.
+type SharedPrimitivesDecimalString = string
 
-// SharedPrimitivesV1Digest defines model for SharedPrimitivesV1Digest.
-type SharedPrimitivesV1Digest = string
+// SharedPrimitivesDigest defines model for SharedPrimitivesDigest.
+type SharedPrimitivesDigest = string
 
-// SharedPrimitivesV1OpaqueId defines model for SharedPrimitivesV1OpaqueId.
-type SharedPrimitivesV1OpaqueId = string
+// SharedPrimitivesOpaqueId defines model for SharedPrimitivesOpaqueId.
+type SharedPrimitivesOpaqueId = string
 
-// SharedPrimitivesV1PhysicalAttemptId defines model for SharedPrimitivesV1PhysicalAttemptId.
-type SharedPrimitivesV1PhysicalAttemptId = SharedPrimitivesV1OpaqueId
+// SharedPrimitivesPhysicalAttemptId defines model for SharedPrimitivesPhysicalAttemptId.
+type SharedPrimitivesPhysicalAttemptId = SharedPrimitivesOpaqueId
 
-// SharedPrimitivesV1PolicyId defines model for SharedPrimitivesV1PolicyId.
-type SharedPrimitivesV1PolicyId = SharedPrimitivesV1OpaqueId
+// SharedPrimitivesPolicyId defines model for SharedPrimitivesPolicyId.
+type SharedPrimitivesPolicyId = SharedPrimitivesOpaqueId
 
-// SharedPrimitivesV1PolicyReference defines model for SharedPrimitivesV1PolicyReference.
-type SharedPrimitivesV1PolicyReference struct {
-	Digest   SharedPrimitivesV1Digest   `json:"digest"`
-	PolicyId SharedPrimitivesV1PolicyId `json:"policyId"`
-	Version  string                     `json:"version"`
+// SharedPrimitivesPolicyReference defines model for SharedPrimitivesPolicyReference.
+type SharedPrimitivesPolicyReference struct {
+	Digest   SharedPrimitivesDigest   `json:"digest"`
+	PolicyId SharedPrimitivesPolicyId `json:"policyId"`
+	Version  string                   `json:"version"`
 }
 
-// SharedPrimitivesV1ReservationId defines model for SharedPrimitivesV1ReservationId.
-type SharedPrimitivesV1ReservationId = SharedPrimitivesV1OpaqueId
+// SharedPrimitivesProjectId defines model for SharedPrimitivesProjectId.
+type SharedPrimitivesProjectId = SharedPrimitivesOpaqueId
 
-// SharedPrimitivesV1RunId defines model for SharedPrimitivesV1RunId.
-type SharedPrimitivesV1RunId = SharedPrimitivesV1OpaqueId
+// SharedPrimitivesReservationId defines model for SharedPrimitivesReservationId.
+type SharedPrimitivesReservationId = SharedPrimitivesOpaqueId
 
-// SharedPrimitivesV1SchemaReference defines model for SharedPrimitivesV1SchemaReference.
-type SharedPrimitivesV1SchemaReference struct {
-	ComponentName string                   `json:"componentName"`
-	Digest        SharedPrimitivesV1Digest `json:"digest"`
-	Version       string                   `json:"version"`
+// SharedPrimitivesRunId defines model for SharedPrimitivesRunId.
+type SharedPrimitivesRunId = SharedPrimitivesOpaqueId
+
+// SharedPrimitivesSchemaReference defines model for SharedPrimitivesSchemaReference.
+type SharedPrimitivesSchemaReference struct {
+	ComponentName string                 `json:"componentName"`
+	Digest        SharedPrimitivesDigest `json:"digest"`
 }
 
-// SharedPrimitivesV1TargetReference defines model for SharedPrimitivesV1TargetReference.
-type SharedPrimitivesV1TargetReference struct {
-	TargetId    SharedPrimitivesV1OpaqueId    `json:"targetId"`
-	TargetType  string                        `json:"targetType"`
-	WorkspaceId SharedPrimitivesV1WorkspaceId `json:"workspaceId"`
+// SharedPrimitivesTargetReference defines model for SharedPrimitivesTargetReference.
+type SharedPrimitivesTargetReference struct {
+	ProjectId   SharedPrimitivesProjectId   `json:"projectId"`
+	TargetId    SharedPrimitivesOpaqueId    `json:"targetId"`
+	TargetType  string                      `json:"targetType"`
+	WorkspaceId SharedPrimitivesWorkspaceId `json:"workspaceId"`
 }
 
-// SharedPrimitivesV1TaskId defines model for SharedPrimitivesV1TaskId.
-type SharedPrimitivesV1TaskId = SharedPrimitivesV1OpaqueId
+// SharedPrimitivesTaskId defines model for SharedPrimitivesTaskId.
+type SharedPrimitivesTaskId = SharedPrimitivesOpaqueId
 
-// SharedPrimitivesV1Timestamp defines model for SharedPrimitivesV1Timestamp.
-type SharedPrimitivesV1Timestamp = time.Time
+// SharedPrimitivesTimestamp defines model for SharedPrimitivesTimestamp.
+type SharedPrimitivesTimestamp = time.Time
 
-// SharedPrimitivesV1TraceContext defines model for SharedPrimitivesV1TraceContext.
-type SharedPrimitivesV1TraceContext struct {
+// SharedPrimitivesTraceContext defines model for SharedPrimitivesTraceContext.
+type SharedPrimitivesTraceContext struct {
 	Traceparent string  `json:"traceparent"`
 	Tracestate  *string `json:"tracestate,omitempty"`
 }
 
-// SharedPrimitivesV1WorkspaceId defines model for SharedPrimitivesV1WorkspaceId.
-type SharedPrimitivesV1WorkspaceId = SharedPrimitivesV1OpaqueId
+// SharedPrimitivesWorkspaceId defines model for SharedPrimitivesWorkspaceId.
+type SharedPrimitivesWorkspaceId = SharedPrimitivesOpaqueId
 
-// TargetSnapshotV1 Bounded TargetSnapshotV1 wire contract governed by PRD 0012.
-type TargetSnapshotV1 struct {
-	ApiVersion        interface{}                         `json:"apiVersion"`
-	BaseRevision      SharedPrimitivesV1OpaqueId          `json:"baseRevision"`
-	CapturedAt        SharedPrimitivesV1Timestamp         `json:"capturedAt"`
-	CatalogDigest     SharedPrimitivesV1Digest            `json:"catalogDigest"`
-	ContractBomDigest SharedPrimitivesV1Digest            `json:"contractBomDigest"`
-	Kind              interface{}                         `json:"kind"`
-	Snapshot          SharedPrimitivesV1ArtifactReference `json:"snapshot"`
-	Target            SharedPrimitivesV1TargetReference   `json:"target"`
+// TargetSnapshot Bounded TargetSnapshot wire contract governed by PRD 0012.
+type TargetSnapshot struct {
+	BaseRevision      SharedPrimitivesOpaqueId          `json:"baseRevision"`
+	CapturedAt        SharedPrimitivesTimestamp         `json:"capturedAt"`
+	CatalogDigest     SharedPrimitivesDigest            `json:"catalogDigest"`
+	ContractBomDigest SharedPrimitivesDigest            `json:"contractBomDigest"`
+	Kind              interface{}                       `json:"kind"`
+	Snapshot          SharedPrimitivesArtifactReference `json:"snapshot"`
+	Target            SharedPrimitivesTargetReference   `json:"target"`
 }
 
-// UsageObservationV1 Bounded UsageObservationV1 wire contract governed by PRD 0012.
-type UsageObservationV1 struct {
-	ApiVersion          interface{}                         `json:"apiVersion"`
-	Cost                SharedPrimitivesV1Cost              `json:"cost"`
-	ExecutionGeneration int                                 `json:"executionGeneration"`
-	Final               bool                                `json:"final"`
-	Kind                interface{}                         `json:"kind"`
-	Meter               interface{}                         `json:"meter"`
-	MeterSequence       int                                 `json:"meterSequence"`
-	ObservationId       SharedPrimitivesV1OpaqueId          `json:"observationId"`
-	ObservedAt          SharedPrimitivesV1Timestamp         `json:"observedAt"`
-	PhysicalAttemptId   SharedPrimitivesV1PhysicalAttemptId `json:"physicalAttemptId"`
-	ProviderEventId     *SharedPrimitivesV1OpaqueId         `json:"providerEventId,omitempty"`
-	Quantity            SharedPrimitivesV1DecimalString     `json:"quantity"`
-	RecoveryEpoch       int                                 `json:"recoveryEpoch"`
-	ReservationId       SharedPrimitivesV1ReservationId     `json:"reservationId"`
-	RootRunId           SharedPrimitivesV1RunId             `json:"rootRunId"`
-	RunId               SharedPrimitivesV1RunId             `json:"runId"`
+// UsageObservation Bounded UsageObservation wire contract governed by PRD 0012.
+type UsageObservation struct {
+	Cost                SharedPrimitivesCost              `json:"cost"`
+	ExecutionGeneration int                               `json:"executionGeneration"`
+	Final               bool                              `json:"final"`
+	Kind                interface{}                       `json:"kind"`
+	Meter               interface{}                       `json:"meter"`
+	MeterSequence       int                               `json:"meterSequence"`
+	ObservationId       SharedPrimitivesOpaqueId          `json:"observationId"`
+	ObservedAt          SharedPrimitivesTimestamp         `json:"observedAt"`
+	PhysicalAttemptId   SharedPrimitivesPhysicalAttemptId `json:"physicalAttemptId"`
+	ProviderEventId     *SharedPrimitivesOpaqueId         `json:"providerEventId,omitempty"`
+	Quantity            SharedPrimitivesDecimalString     `json:"quantity"`
+	RecoveryEpoch       int                               `json:"recoveryEpoch"`
+	ReservationId       SharedPrimitivesReservationId     `json:"reservationId"`
+	RootRunId           SharedPrimitivesRunId             `json:"rootRunId"`
+	RunId               SharedPrimitivesRunId             `json:"runId"`
 	Source              struct {
-		BuildIdentity SharedPrimitivesV1BuildId  `json:"buildIdentity"`
-		Provider      SharedPrimitivesV1OpaqueId `json:"provider"`
+		BuildIdentity SharedPrimitivesBuildId  `json:"buildIdentity"`
+		Provider      SharedPrimitivesOpaqueId `json:"provider"`
 	} `json:"source"`
-	TaskId       SharedPrimitivesV1TaskId       `json:"taskId"`
-	TraceContext SharedPrimitivesV1TraceContext `json:"traceContext"`
-	Unit         interface{}                    `json:"unit"`
+	TaskId       SharedPrimitivesTaskId       `json:"taskId"`
+	TraceContext SharedPrimitivesTraceContext `json:"traceContext"`
+	Unit         interface{}                  `json:"unit"`
 }
 
 // IdempotencyKey defines model for IdempotencyKey.
@@ -312,28 +318,28 @@ type ReserveAgentUsageParams struct {
 }
 
 // FinalizeAgentAssetJSONRequestBody defines body for FinalizeAgentAsset for application/json ContentType.
-type FinalizeAgentAssetJSONRequestBody = AgentArtifactV1
+type FinalizeAgentAssetJSONRequestBody = AgentArtifact
 
 // ReserveAgentAssetJSONRequestBody defines body for ReserveAgentAsset for application/json ContentType.
-type ReserveAgentAssetJSONRequestBody = AgentArtifactV1
+type ReserveAgentAssetJSONRequestBody = SharedPrimitivesBoundedStringMap
 
 // CreateTargetSnapshotJSONRequestBody defines body for CreateTargetSnapshot for application/json ContentType.
-type CreateTargetSnapshotJSONRequestBody = SharedPrimitivesV1BoundedStringMap
+type CreateTargetSnapshotJSONRequestBody = SharedPrimitivesBoundedStringMap
 
 // PersistAuthorizedPageJSONRequestBody defines body for PersistAuthorizedPage for application/json ContentType.
-type PersistAuthorizedPageJSONRequestBody = ApplyAuthorizationV1
+type PersistAuthorizedPageJSONRequestBody = IssuedApplyAuthorization
 
 // CheckAgentEntitlementJSONRequestBody defines body for CheckAgentEntitlement for application/json ContentType.
-type CheckAgentEntitlementJSONRequestBody = SharedPrimitivesV1BoundedStringMap
+type CheckAgentEntitlementJSONRequestBody = SharedPrimitivesBoundedStringMap
 
 // ObserveAgentUsageJSONRequestBody defines body for ObserveAgentUsage for application/json ContentType.
-type ObserveAgentUsageJSONRequestBody = UsageObservationV1
+type ObserveAgentUsageJSONRequestBody = UsageObservation
 
 // ReconcileAgentUsageJSONRequestBody defines body for ReconcileAgentUsage for application/json ContentType.
-type ReconcileAgentUsageJSONRequestBody = AgentBudgetV1
+type ReconcileAgentUsageJSONRequestBody = SharedPrimitivesBoundedStringMap
 
 // ReserveAgentUsageJSONRequestBody defines body for ReserveAgentUsage for application/json ContentType.
-type ReserveAgentUsageJSONRequestBody = AgentBudgetV1
+type ReserveAgentUsageJSONRequestBody = AgentBudget
 
 // RequestEditorFn is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -409,124 +415,124 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 // The interface specification for the client above.
 type ClientInterface interface {
 
-	// FinalizeAgentAssetWithBody Finalize a validated immutable artifact.
+	// FinalizeAgentAssetWithBody Finalize an immutable governed asset.
 	//
 	// Takes any type of body and a specified content type.
 	//
-	// Corresponds with POST /v1/internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
+	// Corresponds with POST /internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
 	FinalizeAgentAssetWithBody(ctx context.Context, params *FinalizeAgentAssetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// FinalizeAgentAsset Finalize a validated immutable artifact.
+	// FinalizeAgentAsset Finalize an immutable governed asset.
 	//
 	// Takes a body of the `application/json` content type.
 	//
-	// Corresponds with POST /v1/internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
+	// Corresponds with POST /internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
 	FinalizeAgentAsset(ctx context.Context, params *FinalizeAgentAssetParams, body FinalizeAgentAssetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ReserveAgentAssetWithBody Reserve bounded artifact storage.
+	// ReserveAgentAssetWithBody Reserve governed asset capacity before finalization.
 	//
 	// Takes any type of body and a specified content type.
 	//
-	// Corresponds with POST /v1/internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
+	// Corresponds with POST /internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
 	ReserveAgentAssetWithBody(ctx context.Context, params *ReserveAgentAssetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ReserveAgentAsset Reserve bounded artifact storage.
+	// ReserveAgentAsset Reserve governed asset capacity before finalization.
 	//
 	// Takes a body of the `application/json` content type.
 	//
-	// Corresponds with POST /v1/internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
+	// Corresponds with POST /internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
 	ReserveAgentAsset(ctx context.Context, params *ReserveAgentAssetParams, body ReserveAgentAssetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// CreateTargetSnapshotWithBody Return an authorized immutable target snapshot.
+	// CreateTargetSnapshotWithBody Capture an immutable authorized target snapshot.
 	//
 	// Takes any type of body and a specified content type.
 	//
-	// Corresponds with POST /v1/internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
+	// Corresponds with POST /internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
 	CreateTargetSnapshotWithBody(ctx context.Context, params *CreateTargetSnapshotParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// CreateTargetSnapshot Return an authorized immutable target snapshot.
+	// CreateTargetSnapshot Capture an immutable authorized target snapshot.
 	//
 	// Takes a body of the `application/json` content type.
 	//
-	// Corresponds with POST /v1/internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
+	// Corresponds with POST /internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
 	CreateTargetSnapshot(ctx context.Context, params *CreateTargetSnapshotParams, body CreateTargetSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// PersistAuthorizedPageWithBody Atomically redeem authorization, persist the effect, idempotency record, and outbox event.
+	// PersistAuthorizedPageWithBody Verify and atomically commit an authorized page mutation with its outbox event.
 	//
 	// Takes any type of body and a specified content type.
 	//
-	// Corresponds with POST /v1/internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
+	// Corresponds with POST /internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
 	PersistAuthorizedPageWithBody(ctx context.Context, params *PersistAuthorizedPageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// PersistAuthorizedPage Atomically redeem authorization, persist the effect, idempotency record, and outbox event.
+	// PersistAuthorizedPage Verify and atomically commit an authorized page mutation with its outbox event.
 	//
 	// Takes a body of the `application/json` content type.
 	//
-	// Corresponds with POST /v1/internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
+	// Corresponds with POST /internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
 	PersistAuthorizedPage(ctx context.Context, params *PersistAuthorizedPageParams, body PersistAuthorizedPageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// CheckAgentEntitlementWithBody Check current permission and entitlement.
+	// CheckAgentEntitlementWithBody Check current Team, Project, permission, and entitlement authority.
 	//
 	// Takes any type of body and a specified content type.
 	//
-	// Corresponds with POST /v1/internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
+	// Corresponds with POST /internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
 	CheckAgentEntitlementWithBody(ctx context.Context, params *CheckAgentEntitlementParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// CheckAgentEntitlement Check current permission and entitlement.
+	// CheckAgentEntitlement Check current Team, Project, permission, and entitlement authority.
 	//
 	// Takes a body of the `application/json` content type.
 	//
-	// Corresponds with POST /v1/internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
+	// Corresponds with POST /internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
 	CheckAgentEntitlement(ctx context.Context, params *CheckAgentEntitlementParams, body CheckAgentEntitlementJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ObserveAgentUsageWithBody Append usage from every physical attempt.
+	// ObserveAgentUsageWithBody Record one additive per-attempt usage observation.
 	//
 	// Takes any type of body and a specified content type.
 	//
-	// Corresponds with POST /v1/internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
+	// Corresponds with POST /internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
 	ObserveAgentUsageWithBody(ctx context.Context, params *ObserveAgentUsageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ObserveAgentUsage Append usage from every physical attempt.
+	// ObserveAgentUsage Record one additive per-attempt usage observation.
 	//
 	// Takes a body of the `application/json` content type.
 	//
-	// Corresponds with POST /v1/internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
+	// Corresponds with POST /internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
 	ObserveAgentUsage(ctx context.Context, params *ObserveAgentUsageParams, body ObserveAgentUsageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ReconcileAgentUsageWithBody Reconcile or release an authorized reservation.
+	// ReconcileAgentUsageWithBody Reconcile reservation and observed usage exactly once.
 	//
 	// Takes any type of body and a specified content type.
 	//
-	// Corresponds with POST /v1/internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
+	// Corresponds with POST /internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
 	ReconcileAgentUsageWithBody(ctx context.Context, params *ReconcileAgentUsageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ReconcileAgentUsage Reconcile or release an authorized reservation.
+	// ReconcileAgentUsage Reconcile reservation and observed usage exactly once.
 	//
 	// Takes a body of the `application/json` content type.
 	//
-	// Corresponds with POST /v1/internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
+	// Corresponds with POST /internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
 	ReconcileAgentUsage(ctx context.Context, params *ReconcileAgentUsageParams, body ReconcileAgentUsageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ReserveAgentUsageWithBody Reserve the pinned upper budget before dispatch.
+	// ReserveAgentUsageWithBody Reserve worst-case budget before expensive dispatch.
 	//
 	// Takes any type of body and a specified content type.
 	//
-	// Corresponds with POST /v1/internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
+	// Corresponds with POST /internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
 	ReserveAgentUsageWithBody(ctx context.Context, params *ReserveAgentUsageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ReserveAgentUsage Reserve the pinned upper budget before dispatch.
+	// ReserveAgentUsage Reserve worst-case budget before expensive dispatch.
 	//
 	// Takes a body of the `application/json` content type.
 	//
-	// Corresponds with POST /v1/internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
+	// Corresponds with POST /internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
 	ReserveAgentUsage(ctx context.Context, params *ReserveAgentUsageParams, body ReserveAgentUsageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
-// FinalizeAgentAssetWithBody Finalize a validated immutable artifact.
+// FinalizeAgentAssetWithBody Finalize an immutable governed asset.
 //
 // Takes any type of body and a specified content type.
 //
-// Corresponds with POST /v1/internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
+// Corresponds with POST /internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
 func (c *Client) FinalizeAgentAssetWithBody(ctx context.Context, params *FinalizeAgentAssetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewFinalizeAgentAssetRequestWithBody(c.Server, params, contentType, body)
 	if err != nil {
@@ -539,11 +545,11 @@ func (c *Client) FinalizeAgentAssetWithBody(ctx context.Context, params *Finaliz
 	return c.Client.Do(req)
 }
 
-// FinalizeAgentAsset Finalize a validated immutable artifact.
+// FinalizeAgentAsset Finalize an immutable governed asset.
 //
 // Takes a body of the `application/json` content type.
 //
-// Corresponds with POST /v1/internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
+// Corresponds with POST /internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
 func (c *Client) FinalizeAgentAsset(ctx context.Context, params *FinalizeAgentAssetParams, body FinalizeAgentAssetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewFinalizeAgentAssetRequest(c.Server, params, body)
 	if err != nil {
@@ -556,11 +562,11 @@ func (c *Client) FinalizeAgentAsset(ctx context.Context, params *FinalizeAgentAs
 	return c.Client.Do(req)
 }
 
-// ReserveAgentAssetWithBody Reserve bounded artifact storage.
+// ReserveAgentAssetWithBody Reserve governed asset capacity before finalization.
 //
 // Takes any type of body and a specified content type.
 //
-// Corresponds with POST /v1/internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
+// Corresponds with POST /internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
 func (c *Client) ReserveAgentAssetWithBody(ctx context.Context, params *ReserveAgentAssetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewReserveAgentAssetRequestWithBody(c.Server, params, contentType, body)
 	if err != nil {
@@ -573,11 +579,11 @@ func (c *Client) ReserveAgentAssetWithBody(ctx context.Context, params *ReserveA
 	return c.Client.Do(req)
 }
 
-// ReserveAgentAsset Reserve bounded artifact storage.
+// ReserveAgentAsset Reserve governed asset capacity before finalization.
 //
 // Takes a body of the `application/json` content type.
 //
-// Corresponds with POST /v1/internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
+// Corresponds with POST /internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
 func (c *Client) ReserveAgentAsset(ctx context.Context, params *ReserveAgentAssetParams, body ReserveAgentAssetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewReserveAgentAssetRequest(c.Server, params, body)
 	if err != nil {
@@ -590,11 +596,11 @@ func (c *Client) ReserveAgentAsset(ctx context.Context, params *ReserveAgentAsse
 	return c.Client.Do(req)
 }
 
-// CreateTargetSnapshotWithBody Return an authorized immutable target snapshot.
+// CreateTargetSnapshotWithBody Capture an immutable authorized target snapshot.
 //
 // Takes any type of body and a specified content type.
 //
-// Corresponds with POST /v1/internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
+// Corresponds with POST /internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
 func (c *Client) CreateTargetSnapshotWithBody(ctx context.Context, params *CreateTargetSnapshotParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateTargetSnapshotRequestWithBody(c.Server, params, contentType, body)
 	if err != nil {
@@ -607,11 +613,11 @@ func (c *Client) CreateTargetSnapshotWithBody(ctx context.Context, params *Creat
 	return c.Client.Do(req)
 }
 
-// CreateTargetSnapshot Return an authorized immutable target snapshot.
+// CreateTargetSnapshot Capture an immutable authorized target snapshot.
 //
 // Takes a body of the `application/json` content type.
 //
-// Corresponds with POST /v1/internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
+// Corresponds with POST /internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
 func (c *Client) CreateTargetSnapshot(ctx context.Context, params *CreateTargetSnapshotParams, body CreateTargetSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateTargetSnapshotRequest(c.Server, params, body)
 	if err != nil {
@@ -624,11 +630,11 @@ func (c *Client) CreateTargetSnapshot(ctx context.Context, params *CreateTargetS
 	return c.Client.Do(req)
 }
 
-// PersistAuthorizedPageWithBody Atomically redeem authorization, persist the effect, idempotency record, and outbox event.
+// PersistAuthorizedPageWithBody Verify and atomically commit an authorized page mutation with its outbox event.
 //
 // Takes any type of body and a specified content type.
 //
-// Corresponds with POST /v1/internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
+// Corresponds with POST /internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
 func (c *Client) PersistAuthorizedPageWithBody(ctx context.Context, params *PersistAuthorizedPageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPersistAuthorizedPageRequestWithBody(c.Server, params, contentType, body)
 	if err != nil {
@@ -641,11 +647,11 @@ func (c *Client) PersistAuthorizedPageWithBody(ctx context.Context, params *Pers
 	return c.Client.Do(req)
 }
 
-// PersistAuthorizedPage Atomically redeem authorization, persist the effect, idempotency record, and outbox event.
+// PersistAuthorizedPage Verify and atomically commit an authorized page mutation with its outbox event.
 //
 // Takes a body of the `application/json` content type.
 //
-// Corresponds with POST /v1/internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
+// Corresponds with POST /internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
 func (c *Client) PersistAuthorizedPage(ctx context.Context, params *PersistAuthorizedPageParams, body PersistAuthorizedPageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPersistAuthorizedPageRequest(c.Server, params, body)
 	if err != nil {
@@ -658,11 +664,11 @@ func (c *Client) PersistAuthorizedPage(ctx context.Context, params *PersistAutho
 	return c.Client.Do(req)
 }
 
-// CheckAgentEntitlementWithBody Check current permission and entitlement.
+// CheckAgentEntitlementWithBody Check current Team, Project, permission, and entitlement authority.
 //
 // Takes any type of body and a specified content type.
 //
-// Corresponds with POST /v1/internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
+// Corresponds with POST /internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
 func (c *Client) CheckAgentEntitlementWithBody(ctx context.Context, params *CheckAgentEntitlementParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCheckAgentEntitlementRequestWithBody(c.Server, params, contentType, body)
 	if err != nil {
@@ -675,11 +681,11 @@ func (c *Client) CheckAgentEntitlementWithBody(ctx context.Context, params *Chec
 	return c.Client.Do(req)
 }
 
-// CheckAgentEntitlement Check current permission and entitlement.
+// CheckAgentEntitlement Check current Team, Project, permission, and entitlement authority.
 //
 // Takes a body of the `application/json` content type.
 //
-// Corresponds with POST /v1/internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
+// Corresponds with POST /internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
 func (c *Client) CheckAgentEntitlement(ctx context.Context, params *CheckAgentEntitlementParams, body CheckAgentEntitlementJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCheckAgentEntitlementRequest(c.Server, params, body)
 	if err != nil {
@@ -692,11 +698,11 @@ func (c *Client) CheckAgentEntitlement(ctx context.Context, params *CheckAgentEn
 	return c.Client.Do(req)
 }
 
-// ObserveAgentUsageWithBody Append usage from every physical attempt.
+// ObserveAgentUsageWithBody Record one additive per-attempt usage observation.
 //
 // Takes any type of body and a specified content type.
 //
-// Corresponds with POST /v1/internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
+// Corresponds with POST /internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
 func (c *Client) ObserveAgentUsageWithBody(ctx context.Context, params *ObserveAgentUsageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewObserveAgentUsageRequestWithBody(c.Server, params, contentType, body)
 	if err != nil {
@@ -709,11 +715,11 @@ func (c *Client) ObserveAgentUsageWithBody(ctx context.Context, params *ObserveA
 	return c.Client.Do(req)
 }
 
-// ObserveAgentUsage Append usage from every physical attempt.
+// ObserveAgentUsage Record one additive per-attempt usage observation.
 //
 // Takes a body of the `application/json` content type.
 //
-// Corresponds with POST /v1/internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
+// Corresponds with POST /internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
 func (c *Client) ObserveAgentUsage(ctx context.Context, params *ObserveAgentUsageParams, body ObserveAgentUsageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewObserveAgentUsageRequest(c.Server, params, body)
 	if err != nil {
@@ -726,11 +732,11 @@ func (c *Client) ObserveAgentUsage(ctx context.Context, params *ObserveAgentUsag
 	return c.Client.Do(req)
 }
 
-// ReconcileAgentUsageWithBody Reconcile or release an authorized reservation.
+// ReconcileAgentUsageWithBody Reconcile reservation and observed usage exactly once.
 //
 // Takes any type of body and a specified content type.
 //
-// Corresponds with POST /v1/internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
+// Corresponds with POST /internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
 func (c *Client) ReconcileAgentUsageWithBody(ctx context.Context, params *ReconcileAgentUsageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewReconcileAgentUsageRequestWithBody(c.Server, params, contentType, body)
 	if err != nil {
@@ -743,11 +749,11 @@ func (c *Client) ReconcileAgentUsageWithBody(ctx context.Context, params *Reconc
 	return c.Client.Do(req)
 }
 
-// ReconcileAgentUsage Reconcile or release an authorized reservation.
+// ReconcileAgentUsage Reconcile reservation and observed usage exactly once.
 //
 // Takes a body of the `application/json` content type.
 //
-// Corresponds with POST /v1/internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
+// Corresponds with POST /internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
 func (c *Client) ReconcileAgentUsage(ctx context.Context, params *ReconcileAgentUsageParams, body ReconcileAgentUsageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewReconcileAgentUsageRequest(c.Server, params, body)
 	if err != nil {
@@ -760,11 +766,11 @@ func (c *Client) ReconcileAgentUsage(ctx context.Context, params *ReconcileAgent
 	return c.Client.Do(req)
 }
 
-// ReserveAgentUsageWithBody Reserve the pinned upper budget before dispatch.
+// ReserveAgentUsageWithBody Reserve worst-case budget before expensive dispatch.
 //
 // Takes any type of body and a specified content type.
 //
-// Corresponds with POST /v1/internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
+// Corresponds with POST /internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
 func (c *Client) ReserveAgentUsageWithBody(ctx context.Context, params *ReserveAgentUsageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewReserveAgentUsageRequestWithBody(c.Server, params, contentType, body)
 	if err != nil {
@@ -777,11 +783,11 @@ func (c *Client) ReserveAgentUsageWithBody(ctx context.Context, params *ReserveA
 	return c.Client.Do(req)
 }
 
-// ReserveAgentUsage Reserve the pinned upper budget before dispatch.
+// ReserveAgentUsage Reserve worst-case budget before expensive dispatch.
 //
 // Takes a body of the `application/json` content type.
 //
-// Corresponds with POST /v1/internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
+// Corresponds with POST /internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
 func (c *Client) ReserveAgentUsage(ctx context.Context, params *ReserveAgentUsageParams, body ReserveAgentUsageJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewReserveAgentUsageRequest(c.Server, params, body)
 	if err != nil {
@@ -814,7 +820,7 @@ func NewFinalizeAgentAssetRequestWithBody(server string, params *FinalizeAgentAs
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/v1/internal/agent/assets/finalization")
+	operationPath := fmt.Sprintf("/internal/agent/assets/finalization")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -885,7 +891,7 @@ func NewReserveAgentAssetRequestWithBody(server string, params *ReserveAgentAsse
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/v1/internal/agent/assets/reservations")
+	operationPath := fmt.Sprintf("/internal/agent/assets/reservations")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -956,7 +962,7 @@ func NewCreateTargetSnapshotRequestWithBody(server string, params *CreateTargetS
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/v1/internal/agent/context-snapshots")
+	operationPath := fmt.Sprintf("/internal/agent/context-snapshots")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1027,7 +1033,7 @@ func NewPersistAuthorizedPageRequestWithBody(server string, params *PersistAutho
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/v1/internal/agent/domain/page-persistence")
+	operationPath := fmt.Sprintf("/internal/agent/domain/page-persistence")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1098,7 +1104,7 @@ func NewCheckAgentEntitlementRequestWithBody(server string, params *CheckAgentEn
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/v1/internal/agent/entitlements/check")
+	operationPath := fmt.Sprintf("/internal/agent/entitlements/check")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1169,7 +1175,7 @@ func NewObserveAgentUsageRequestWithBody(server string, params *ObserveAgentUsag
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/v1/internal/agent/usage/observations")
+	operationPath := fmt.Sprintf("/internal/agent/usage/observations")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1240,7 +1246,7 @@ func NewReconcileAgentUsageRequestWithBody(server string, params *ReconcileAgent
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/v1/internal/agent/usage/reconciliation")
+	operationPath := fmt.Sprintf("/internal/agent/usage/reconciliation")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1311,7 +1317,7 @@ func NewReserveAgentUsageRequestWithBody(server string, params *ReserveAgentUsag
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/v1/internal/agent/usage/reservations")
+	operationPath := fmt.Sprintf("/internal/agent/usage/reservations")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1406,116 +1412,116 @@ func WithBaseURL(baseURL string) ClientOption {
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
 
-	// FinalizeAgentAssetWithBodyWithResponse Finalize a validated immutable artifact.
+	// FinalizeAgentAssetWithBodyWithResponse Finalize an immutable governed asset.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
+	// Corresponds with POST /internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
 	FinalizeAgentAssetWithBodyWithResponse(ctx context.Context, params *FinalizeAgentAssetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinalizeAgentAssetResponse, error)
 
-	// FinalizeAgentAssetWithResponse Finalize a validated immutable artifact.
+	// FinalizeAgentAssetWithResponse Finalize an immutable governed asset.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
+	// Corresponds with POST /internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
 	FinalizeAgentAssetWithResponse(ctx context.Context, params *FinalizeAgentAssetParams, body FinalizeAgentAssetJSONRequestBody, reqEditors ...RequestEditorFn) (*FinalizeAgentAssetResponse, error)
 
-	// ReserveAgentAssetWithBodyWithResponse Reserve bounded artifact storage.
+	// ReserveAgentAssetWithBodyWithResponse Reserve governed asset capacity before finalization.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
+	// Corresponds with POST /internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
 	ReserveAgentAssetWithBodyWithResponse(ctx context.Context, params *ReserveAgentAssetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReserveAgentAssetResponse, error)
 
-	// ReserveAgentAssetWithResponse Reserve bounded artifact storage.
+	// ReserveAgentAssetWithResponse Reserve governed asset capacity before finalization.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
+	// Corresponds with POST /internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
 	ReserveAgentAssetWithResponse(ctx context.Context, params *ReserveAgentAssetParams, body ReserveAgentAssetJSONRequestBody, reqEditors ...RequestEditorFn) (*ReserveAgentAssetResponse, error)
 
-	// CreateTargetSnapshotWithBodyWithResponse Return an authorized immutable target snapshot.
+	// CreateTargetSnapshotWithBodyWithResponse Capture an immutable authorized target snapshot.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
+	// Corresponds with POST /internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
 	CreateTargetSnapshotWithBodyWithResponse(ctx context.Context, params *CreateTargetSnapshotParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateTargetSnapshotResponse, error)
 
-	// CreateTargetSnapshotWithResponse Return an authorized immutable target snapshot.
+	// CreateTargetSnapshotWithResponse Capture an immutable authorized target snapshot.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
+	// Corresponds with POST /internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
 	CreateTargetSnapshotWithResponse(ctx context.Context, params *CreateTargetSnapshotParams, body CreateTargetSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateTargetSnapshotResponse, error)
 
-	// PersistAuthorizedPageWithBodyWithResponse Atomically redeem authorization, persist the effect, idempotency record, and outbox event.
+	// PersistAuthorizedPageWithBodyWithResponse Verify and atomically commit an authorized page mutation with its outbox event.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
+	// Corresponds with POST /internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
 	PersistAuthorizedPageWithBodyWithResponse(ctx context.Context, params *PersistAuthorizedPageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PersistAuthorizedPageResponse, error)
 
-	// PersistAuthorizedPageWithResponse Atomically redeem authorization, persist the effect, idempotency record, and outbox event.
+	// PersistAuthorizedPageWithResponse Verify and atomically commit an authorized page mutation with its outbox event.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
+	// Corresponds with POST /internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
 	PersistAuthorizedPageWithResponse(ctx context.Context, params *PersistAuthorizedPageParams, body PersistAuthorizedPageJSONRequestBody, reqEditors ...RequestEditorFn) (*PersistAuthorizedPageResponse, error)
 
-	// CheckAgentEntitlementWithBodyWithResponse Check current permission and entitlement.
+	// CheckAgentEntitlementWithBodyWithResponse Check current Team, Project, permission, and entitlement authority.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
+	// Corresponds with POST /internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
 	CheckAgentEntitlementWithBodyWithResponse(ctx context.Context, params *CheckAgentEntitlementParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CheckAgentEntitlementResponse, error)
 
-	// CheckAgentEntitlementWithResponse Check current permission and entitlement.
+	// CheckAgentEntitlementWithResponse Check current Team, Project, permission, and entitlement authority.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
+	// Corresponds with POST /internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
 	CheckAgentEntitlementWithResponse(ctx context.Context, params *CheckAgentEntitlementParams, body CheckAgentEntitlementJSONRequestBody, reqEditors ...RequestEditorFn) (*CheckAgentEntitlementResponse, error)
 
-	// ObserveAgentUsageWithBodyWithResponse Append usage from every physical attempt.
+	// ObserveAgentUsageWithBodyWithResponse Record one additive per-attempt usage observation.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
+	// Corresponds with POST /internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
 	ObserveAgentUsageWithBodyWithResponse(ctx context.Context, params *ObserveAgentUsageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ObserveAgentUsageResponse, error)
 
-	// ObserveAgentUsageWithResponse Append usage from every physical attempt.
+	// ObserveAgentUsageWithResponse Record one additive per-attempt usage observation.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
+	// Corresponds with POST /internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
 	ObserveAgentUsageWithResponse(ctx context.Context, params *ObserveAgentUsageParams, body ObserveAgentUsageJSONRequestBody, reqEditors ...RequestEditorFn) (*ObserveAgentUsageResponse, error)
 
-	// ReconcileAgentUsageWithBodyWithResponse Reconcile or release an authorized reservation.
+	// ReconcileAgentUsageWithBodyWithResponse Reconcile reservation and observed usage exactly once.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
+	// Corresponds with POST /internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
 	ReconcileAgentUsageWithBodyWithResponse(ctx context.Context, params *ReconcileAgentUsageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReconcileAgentUsageResponse, error)
 
-	// ReconcileAgentUsageWithResponse Reconcile or release an authorized reservation.
+	// ReconcileAgentUsageWithResponse Reconcile reservation and observed usage exactly once.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
+	// Corresponds with POST /internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
 	ReconcileAgentUsageWithResponse(ctx context.Context, params *ReconcileAgentUsageParams, body ReconcileAgentUsageJSONRequestBody, reqEditors ...RequestEditorFn) (*ReconcileAgentUsageResponse, error)
 
-	// ReserveAgentUsageWithBodyWithResponse Reserve the pinned upper budget before dispatch.
+	// ReserveAgentUsageWithBodyWithResponse Reserve worst-case budget before expensive dispatch.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
+	// Corresponds with POST /internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
 	ReserveAgentUsageWithBodyWithResponse(ctx context.Context, params *ReserveAgentUsageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReserveAgentUsageResponse, error)
 
-	// ReserveAgentUsageWithResponse Reserve the pinned upper budget before dispatch.
+	// ReserveAgentUsageWithResponse Reserve worst-case budget before expensive dispatch.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
-	// Corresponds with POST /v1/internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
+	// Corresponds with POST /internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
 	ReserveAgentUsageWithResponse(ctx context.Context, params *ReserveAgentUsageParams, body ReserveAgentUsageJSONRequestBody, reqEditors ...RequestEditorFn) (*ReserveAgentUsageResponse, error)
 }
 
@@ -1529,35 +1535,63 @@ type FinalizeAgentAssetResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *AgentArtifactV1
+	JSON200 *AgentArtifact
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
-	ApplicationproblemJSON400 *ProblemDetailsV1
+	ApplicationproblemJSON400 *ProblemDetails
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *ProblemDetails
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *ProblemDetails
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *ProblemDetails
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
-	ApplicationproblemJSON409 *ProblemDetailsV1
+	ApplicationproblemJSON409 *ProblemDetails
 	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
-	ApplicationproblemJSON422 *ProblemDetailsV1
+	ApplicationproblemJSON422 *ProblemDetails
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *ProblemDetails
 	// Headers200 the parsed response headers for an HTTP 200 response
 	Headers200 *FinalizeAgentAssetResponse200Headers
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r FinalizeAgentAssetResponse) GetJSON200() *AgentArtifactV1 {
+func (r FinalizeAgentAssetResponse) GetJSON200() *AgentArtifact {
 	return r.JSON200
 }
 
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
-func (r FinalizeAgentAssetResponse) GetApplicationproblemJSON400() *ProblemDetailsV1 {
+func (r FinalizeAgentAssetResponse) GetApplicationproblemJSON400() *ProblemDetails {
 	return r.ApplicationproblemJSON400
 }
 
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r FinalizeAgentAssetResponse) GetApplicationproblemJSON401() *ProblemDetails {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r FinalizeAgentAssetResponse) GetApplicationproblemJSON403() *ProblemDetails {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r FinalizeAgentAssetResponse) GetApplicationproblemJSON404() *ProblemDetails {
+	return r.ApplicationproblemJSON404
+}
+
 // GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
-func (r FinalizeAgentAssetResponse) GetApplicationproblemJSON409() *ProblemDetailsV1 {
+func (r FinalizeAgentAssetResponse) GetApplicationproblemJSON409() *ProblemDetails {
 	return r.ApplicationproblemJSON409
 }
 
 // GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
-func (r FinalizeAgentAssetResponse) GetApplicationproblemJSON422() *ProblemDetailsV1 {
+func (r FinalizeAgentAssetResponse) GetApplicationproblemJSON422() *ProblemDetails {
 	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r FinalizeAgentAssetResponse) GetApplicationproblemJSON500() *ProblemDetails {
+	return r.ApplicationproblemJSON500
 }
 
 // GetBody returns the raw response body bytes
@@ -1589,8 +1623,8 @@ func (r FinalizeAgentAssetResponse) ContentType() string {
 	return ""
 }
 
-// ReserveAgentAssetResponse200Headers the declared response headers of an HTTP 200 response for ReserveAgentAsset
-type ReserveAgentAssetResponse200Headers struct {
+// ReserveAgentAssetResponse201Headers the declared response headers of an HTTP 201 response for ReserveAgentAsset
+type ReserveAgentAssetResponse201Headers struct {
 	IdempotencyReplayed    *bool
 	XAnvilKitRequestDigest *string
 }
@@ -1598,36 +1632,64 @@ type ReserveAgentAssetResponse200Headers struct {
 type ReserveAgentAssetResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *AgentArtifactV1
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *SharedPrimitivesBoundedStringMap
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
-	ApplicationproblemJSON400 *ProblemDetailsV1
+	ApplicationproblemJSON400 *ProblemDetails
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *ProblemDetails
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *ProblemDetails
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *ProblemDetails
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
-	ApplicationproblemJSON409 *ProblemDetailsV1
+	ApplicationproblemJSON409 *ProblemDetails
 	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
-	ApplicationproblemJSON422 *ProblemDetailsV1
-	// Headers200 the parsed response headers for an HTTP 200 response
-	Headers200 *ReserveAgentAssetResponse200Headers
+	ApplicationproblemJSON422 *ProblemDetails
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *ProblemDetails
+	// Headers201 the parsed response headers for an HTTP 201 response
+	Headers201 *ReserveAgentAssetResponse201Headers
 }
 
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r ReserveAgentAssetResponse) GetJSON200() *AgentArtifactV1 {
-	return r.JSON200
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r ReserveAgentAssetResponse) GetJSON201() *SharedPrimitivesBoundedStringMap {
+	return r.JSON201
 }
 
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
-func (r ReserveAgentAssetResponse) GetApplicationproblemJSON400() *ProblemDetailsV1 {
+func (r ReserveAgentAssetResponse) GetApplicationproblemJSON400() *ProblemDetails {
 	return r.ApplicationproblemJSON400
 }
 
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r ReserveAgentAssetResponse) GetApplicationproblemJSON401() *ProblemDetails {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r ReserveAgentAssetResponse) GetApplicationproblemJSON403() *ProblemDetails {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r ReserveAgentAssetResponse) GetApplicationproblemJSON404() *ProblemDetails {
+	return r.ApplicationproblemJSON404
+}
+
 // GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
-func (r ReserveAgentAssetResponse) GetApplicationproblemJSON409() *ProblemDetailsV1 {
+func (r ReserveAgentAssetResponse) GetApplicationproblemJSON409() *ProblemDetails {
 	return r.ApplicationproblemJSON409
 }
 
 // GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
-func (r ReserveAgentAssetResponse) GetApplicationproblemJSON422() *ProblemDetailsV1 {
+func (r ReserveAgentAssetResponse) GetApplicationproblemJSON422() *ProblemDetails {
 	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r ReserveAgentAssetResponse) GetApplicationproblemJSON500() *ProblemDetails {
+	return r.ApplicationproblemJSON500
 }
 
 // GetBody returns the raw response body bytes
@@ -1659,8 +1721,8 @@ func (r ReserveAgentAssetResponse) ContentType() string {
 	return ""
 }
 
-// CreateTargetSnapshotResponse200Headers the declared response headers of an HTTP 200 response for CreateTargetSnapshot
-type CreateTargetSnapshotResponse200Headers struct {
+// CreateTargetSnapshotResponse201Headers the declared response headers of an HTTP 201 response for CreateTargetSnapshot
+type CreateTargetSnapshotResponse201Headers struct {
 	IdempotencyReplayed    *bool
 	XAnvilKitRequestDigest *string
 }
@@ -1668,36 +1730,64 @@ type CreateTargetSnapshotResponse200Headers struct {
 type CreateTargetSnapshotResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *TargetSnapshotV1
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *TargetSnapshot
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
-	ApplicationproblemJSON400 *ProblemDetailsV1
+	ApplicationproblemJSON400 *ProblemDetails
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *ProblemDetails
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *ProblemDetails
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *ProblemDetails
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
-	ApplicationproblemJSON409 *ProblemDetailsV1
+	ApplicationproblemJSON409 *ProblemDetails
 	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
-	ApplicationproblemJSON422 *ProblemDetailsV1
-	// Headers200 the parsed response headers for an HTTP 200 response
-	Headers200 *CreateTargetSnapshotResponse200Headers
+	ApplicationproblemJSON422 *ProblemDetails
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *ProblemDetails
+	// Headers201 the parsed response headers for an HTTP 201 response
+	Headers201 *CreateTargetSnapshotResponse201Headers
 }
 
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r CreateTargetSnapshotResponse) GetJSON200() *TargetSnapshotV1 {
-	return r.JSON200
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r CreateTargetSnapshotResponse) GetJSON201() *TargetSnapshot {
+	return r.JSON201
 }
 
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
-func (r CreateTargetSnapshotResponse) GetApplicationproblemJSON400() *ProblemDetailsV1 {
+func (r CreateTargetSnapshotResponse) GetApplicationproblemJSON400() *ProblemDetails {
 	return r.ApplicationproblemJSON400
 }
 
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r CreateTargetSnapshotResponse) GetApplicationproblemJSON401() *ProblemDetails {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r CreateTargetSnapshotResponse) GetApplicationproblemJSON403() *ProblemDetails {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r CreateTargetSnapshotResponse) GetApplicationproblemJSON404() *ProblemDetails {
+	return r.ApplicationproblemJSON404
+}
+
 // GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
-func (r CreateTargetSnapshotResponse) GetApplicationproblemJSON409() *ProblemDetailsV1 {
+func (r CreateTargetSnapshotResponse) GetApplicationproblemJSON409() *ProblemDetails {
 	return r.ApplicationproblemJSON409
 }
 
 // GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
-func (r CreateTargetSnapshotResponse) GetApplicationproblemJSON422() *ProblemDetailsV1 {
+func (r CreateTargetSnapshotResponse) GetApplicationproblemJSON422() *ProblemDetails {
 	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r CreateTargetSnapshotResponse) GetApplicationproblemJSON500() *ProblemDetails {
+	return r.ApplicationproblemJSON500
 }
 
 // GetBody returns the raw response body bytes
@@ -1739,35 +1829,63 @@ type PersistAuthorizedPageResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *TargetSnapshotV1
+	JSON200 *SharedPrimitivesBoundedStringMap
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
-	ApplicationproblemJSON400 *ProblemDetailsV1
+	ApplicationproblemJSON400 *ProblemDetails
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *ProblemDetails
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *ProblemDetails
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *ProblemDetails
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
-	ApplicationproblemJSON409 *ProblemDetailsV1
+	ApplicationproblemJSON409 *ProblemDetails
 	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
-	ApplicationproblemJSON422 *ProblemDetailsV1
+	ApplicationproblemJSON422 *ProblemDetails
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *ProblemDetails
 	// Headers200 the parsed response headers for an HTTP 200 response
 	Headers200 *PersistAuthorizedPageResponse200Headers
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r PersistAuthorizedPageResponse) GetJSON200() *TargetSnapshotV1 {
+func (r PersistAuthorizedPageResponse) GetJSON200() *SharedPrimitivesBoundedStringMap {
 	return r.JSON200
 }
 
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
-func (r PersistAuthorizedPageResponse) GetApplicationproblemJSON400() *ProblemDetailsV1 {
+func (r PersistAuthorizedPageResponse) GetApplicationproblemJSON400() *ProblemDetails {
 	return r.ApplicationproblemJSON400
 }
 
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r PersistAuthorizedPageResponse) GetApplicationproblemJSON401() *ProblemDetails {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r PersistAuthorizedPageResponse) GetApplicationproblemJSON403() *ProblemDetails {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r PersistAuthorizedPageResponse) GetApplicationproblemJSON404() *ProblemDetails {
+	return r.ApplicationproblemJSON404
+}
+
 // GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
-func (r PersistAuthorizedPageResponse) GetApplicationproblemJSON409() *ProblemDetailsV1 {
+func (r PersistAuthorizedPageResponse) GetApplicationproblemJSON409() *ProblemDetails {
 	return r.ApplicationproblemJSON409
 }
 
 // GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
-func (r PersistAuthorizedPageResponse) GetApplicationproblemJSON422() *ProblemDetailsV1 {
+func (r PersistAuthorizedPageResponse) GetApplicationproblemJSON422() *ProblemDetails {
 	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r PersistAuthorizedPageResponse) GetApplicationproblemJSON500() *ProblemDetails {
+	return r.ApplicationproblemJSON500
 }
 
 // GetBody returns the raw response body bytes
@@ -1809,35 +1927,63 @@ type CheckAgentEntitlementResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *ProblemDetailsV1
+	JSON200 *SharedPrimitivesBoundedStringMap
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
-	ApplicationproblemJSON400 *ProblemDetailsV1
+	ApplicationproblemJSON400 *ProblemDetails
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *ProblemDetails
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *ProblemDetails
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *ProblemDetails
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
-	ApplicationproblemJSON409 *ProblemDetailsV1
+	ApplicationproblemJSON409 *ProblemDetails
 	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
-	ApplicationproblemJSON422 *ProblemDetailsV1
+	ApplicationproblemJSON422 *ProblemDetails
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *ProblemDetails
 	// Headers200 the parsed response headers for an HTTP 200 response
 	Headers200 *CheckAgentEntitlementResponse200Headers
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r CheckAgentEntitlementResponse) GetJSON200() *ProblemDetailsV1 {
+func (r CheckAgentEntitlementResponse) GetJSON200() *SharedPrimitivesBoundedStringMap {
 	return r.JSON200
 }
 
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
-func (r CheckAgentEntitlementResponse) GetApplicationproblemJSON400() *ProblemDetailsV1 {
+func (r CheckAgentEntitlementResponse) GetApplicationproblemJSON400() *ProblemDetails {
 	return r.ApplicationproblemJSON400
 }
 
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r CheckAgentEntitlementResponse) GetApplicationproblemJSON401() *ProblemDetails {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r CheckAgentEntitlementResponse) GetApplicationproblemJSON403() *ProblemDetails {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r CheckAgentEntitlementResponse) GetApplicationproblemJSON404() *ProblemDetails {
+	return r.ApplicationproblemJSON404
+}
+
 // GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
-func (r CheckAgentEntitlementResponse) GetApplicationproblemJSON409() *ProblemDetailsV1 {
+func (r CheckAgentEntitlementResponse) GetApplicationproblemJSON409() *ProblemDetails {
 	return r.ApplicationproblemJSON409
 }
 
 // GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
-func (r CheckAgentEntitlementResponse) GetApplicationproblemJSON422() *ProblemDetailsV1 {
+func (r CheckAgentEntitlementResponse) GetApplicationproblemJSON422() *ProblemDetails {
 	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r CheckAgentEntitlementResponse) GetApplicationproblemJSON500() *ProblemDetails {
+	return r.ApplicationproblemJSON500
 }
 
 // GetBody returns the raw response body bytes
@@ -1869,8 +2015,8 @@ func (r CheckAgentEntitlementResponse) ContentType() string {
 	return ""
 }
 
-// ObserveAgentUsageResponse200Headers the declared response headers of an HTTP 200 response for ObserveAgentUsage
-type ObserveAgentUsageResponse200Headers struct {
+// ObserveAgentUsageResponse201Headers the declared response headers of an HTTP 201 response for ObserveAgentUsage
+type ObserveAgentUsageResponse201Headers struct {
 	IdempotencyReplayed    *bool
 	XAnvilKitRequestDigest *string
 }
@@ -1878,36 +2024,64 @@ type ObserveAgentUsageResponse200Headers struct {
 type ObserveAgentUsageResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *UsageObservationV1
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *SharedPrimitivesBoundedStringMap
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
-	ApplicationproblemJSON400 *ProblemDetailsV1
+	ApplicationproblemJSON400 *ProblemDetails
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *ProblemDetails
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *ProblemDetails
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *ProblemDetails
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
-	ApplicationproblemJSON409 *ProblemDetailsV1
+	ApplicationproblemJSON409 *ProblemDetails
 	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
-	ApplicationproblemJSON422 *ProblemDetailsV1
-	// Headers200 the parsed response headers for an HTTP 200 response
-	Headers200 *ObserveAgentUsageResponse200Headers
+	ApplicationproblemJSON422 *ProblemDetails
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *ProblemDetails
+	// Headers201 the parsed response headers for an HTTP 201 response
+	Headers201 *ObserveAgentUsageResponse201Headers
 }
 
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r ObserveAgentUsageResponse) GetJSON200() *UsageObservationV1 {
-	return r.JSON200
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r ObserveAgentUsageResponse) GetJSON201() *SharedPrimitivesBoundedStringMap {
+	return r.JSON201
 }
 
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
-func (r ObserveAgentUsageResponse) GetApplicationproblemJSON400() *ProblemDetailsV1 {
+func (r ObserveAgentUsageResponse) GetApplicationproblemJSON400() *ProblemDetails {
 	return r.ApplicationproblemJSON400
 }
 
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r ObserveAgentUsageResponse) GetApplicationproblemJSON401() *ProblemDetails {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r ObserveAgentUsageResponse) GetApplicationproblemJSON403() *ProblemDetails {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r ObserveAgentUsageResponse) GetApplicationproblemJSON404() *ProblemDetails {
+	return r.ApplicationproblemJSON404
+}
+
 // GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
-func (r ObserveAgentUsageResponse) GetApplicationproblemJSON409() *ProblemDetailsV1 {
+func (r ObserveAgentUsageResponse) GetApplicationproblemJSON409() *ProblemDetails {
 	return r.ApplicationproblemJSON409
 }
 
 // GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
-func (r ObserveAgentUsageResponse) GetApplicationproblemJSON422() *ProblemDetailsV1 {
+func (r ObserveAgentUsageResponse) GetApplicationproblemJSON422() *ProblemDetails {
 	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r ObserveAgentUsageResponse) GetApplicationproblemJSON500() *ProblemDetails {
+	return r.ApplicationproblemJSON500
 }
 
 // GetBody returns the raw response body bytes
@@ -1949,35 +2123,63 @@ type ReconcileAgentUsageResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *AgentBudgetV1
+	JSON200 *SharedPrimitivesBoundedStringMap
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
-	ApplicationproblemJSON400 *ProblemDetailsV1
+	ApplicationproblemJSON400 *ProblemDetails
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *ProblemDetails
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *ProblemDetails
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *ProblemDetails
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
-	ApplicationproblemJSON409 *ProblemDetailsV1
+	ApplicationproblemJSON409 *ProblemDetails
 	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
-	ApplicationproblemJSON422 *ProblemDetailsV1
+	ApplicationproblemJSON422 *ProblemDetails
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *ProblemDetails
 	// Headers200 the parsed response headers for an HTTP 200 response
 	Headers200 *ReconcileAgentUsageResponse200Headers
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r ReconcileAgentUsageResponse) GetJSON200() *AgentBudgetV1 {
+func (r ReconcileAgentUsageResponse) GetJSON200() *SharedPrimitivesBoundedStringMap {
 	return r.JSON200
 }
 
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
-func (r ReconcileAgentUsageResponse) GetApplicationproblemJSON400() *ProblemDetailsV1 {
+func (r ReconcileAgentUsageResponse) GetApplicationproblemJSON400() *ProblemDetails {
 	return r.ApplicationproblemJSON400
 }
 
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r ReconcileAgentUsageResponse) GetApplicationproblemJSON401() *ProblemDetails {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r ReconcileAgentUsageResponse) GetApplicationproblemJSON403() *ProblemDetails {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r ReconcileAgentUsageResponse) GetApplicationproblemJSON404() *ProblemDetails {
+	return r.ApplicationproblemJSON404
+}
+
 // GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
-func (r ReconcileAgentUsageResponse) GetApplicationproblemJSON409() *ProblemDetailsV1 {
+func (r ReconcileAgentUsageResponse) GetApplicationproblemJSON409() *ProblemDetails {
 	return r.ApplicationproblemJSON409
 }
 
 // GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
-func (r ReconcileAgentUsageResponse) GetApplicationproblemJSON422() *ProblemDetailsV1 {
+func (r ReconcileAgentUsageResponse) GetApplicationproblemJSON422() *ProblemDetails {
 	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r ReconcileAgentUsageResponse) GetApplicationproblemJSON500() *ProblemDetails {
+	return r.ApplicationproblemJSON500
 }
 
 // GetBody returns the raw response body bytes
@@ -2009,8 +2211,8 @@ func (r ReconcileAgentUsageResponse) ContentType() string {
 	return ""
 }
 
-// ReserveAgentUsageResponse200Headers the declared response headers of an HTTP 200 response for ReserveAgentUsage
-type ReserveAgentUsageResponse200Headers struct {
+// ReserveAgentUsageResponse201Headers the declared response headers of an HTTP 201 response for ReserveAgentUsage
+type ReserveAgentUsageResponse201Headers struct {
 	IdempotencyReplayed    *bool
 	XAnvilKitRequestDigest *string
 }
@@ -2018,36 +2220,64 @@ type ReserveAgentUsageResponse200Headers struct {
 type ReserveAgentUsageResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *AgentBudgetV1
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *SharedPrimitivesBoundedStringMap
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
-	ApplicationproblemJSON400 *ProblemDetailsV1
+	ApplicationproblemJSON400 *ProblemDetails
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *ProblemDetails
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *ProblemDetails
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *ProblemDetails
 	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
-	ApplicationproblemJSON409 *ProblemDetailsV1
+	ApplicationproblemJSON409 *ProblemDetails
 	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
-	ApplicationproblemJSON422 *ProblemDetailsV1
-	// Headers200 the parsed response headers for an HTTP 200 response
-	Headers200 *ReserveAgentUsageResponse200Headers
+	ApplicationproblemJSON422 *ProblemDetails
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *ProblemDetails
+	// Headers201 the parsed response headers for an HTTP 201 response
+	Headers201 *ReserveAgentUsageResponse201Headers
 }
 
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r ReserveAgentUsageResponse) GetJSON200() *AgentBudgetV1 {
-	return r.JSON200
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r ReserveAgentUsageResponse) GetJSON201() *SharedPrimitivesBoundedStringMap {
+	return r.JSON201
 }
 
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
-func (r ReserveAgentUsageResponse) GetApplicationproblemJSON400() *ProblemDetailsV1 {
+func (r ReserveAgentUsageResponse) GetApplicationproblemJSON400() *ProblemDetails {
 	return r.ApplicationproblemJSON400
 }
 
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r ReserveAgentUsageResponse) GetApplicationproblemJSON401() *ProblemDetails {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r ReserveAgentUsageResponse) GetApplicationproblemJSON403() *ProblemDetails {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r ReserveAgentUsageResponse) GetApplicationproblemJSON404() *ProblemDetails {
+	return r.ApplicationproblemJSON404
+}
+
 // GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
-func (r ReserveAgentUsageResponse) GetApplicationproblemJSON409() *ProblemDetailsV1 {
+func (r ReserveAgentUsageResponse) GetApplicationproblemJSON409() *ProblemDetails {
 	return r.ApplicationproblemJSON409
 }
 
 // GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
-func (r ReserveAgentUsageResponse) GetApplicationproblemJSON422() *ProblemDetailsV1 {
+func (r ReserveAgentUsageResponse) GetApplicationproblemJSON422() *ProblemDetails {
 	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r ReserveAgentUsageResponse) GetApplicationproblemJSON500() *ProblemDetails {
+	return r.ApplicationproblemJSON500
 }
 
 // GetBody returns the raw response body bytes
@@ -2079,11 +2309,11 @@ func (r ReserveAgentUsageResponse) ContentType() string {
 	return ""
 }
 
-// FinalizeAgentAssetWithBodyWithResponse Finalize a validated immutable artifact.
+// FinalizeAgentAssetWithBodyWithResponse Finalize an immutable governed asset.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
+// Corresponds with POST /internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
 func (c *ClientWithResponses) FinalizeAgentAssetWithBodyWithResponse(ctx context.Context, params *FinalizeAgentAssetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*FinalizeAgentAssetResponse, error) {
 	rsp, err := c.FinalizeAgentAssetWithBody(ctx, params, contentType, body, reqEditors...)
 	if err != nil {
@@ -2092,11 +2322,11 @@ func (c *ClientWithResponses) FinalizeAgentAssetWithBodyWithResponse(ctx context
 	return ParseFinalizeAgentAssetResponse(rsp)
 }
 
-// FinalizeAgentAssetWithResponse Finalize a validated immutable artifact.
+// FinalizeAgentAssetWithResponse Finalize an immutable governed asset.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
+// Corresponds with POST /internal/agent/assets/finalization (the `FinalizeAgentAsset` operationId).
 func (c *ClientWithResponses) FinalizeAgentAssetWithResponse(ctx context.Context, params *FinalizeAgentAssetParams, body FinalizeAgentAssetJSONRequestBody, reqEditors ...RequestEditorFn) (*FinalizeAgentAssetResponse, error) {
 	rsp, err := c.FinalizeAgentAsset(ctx, params, body, reqEditors...)
 	if err != nil {
@@ -2105,11 +2335,11 @@ func (c *ClientWithResponses) FinalizeAgentAssetWithResponse(ctx context.Context
 	return ParseFinalizeAgentAssetResponse(rsp)
 }
 
-// ReserveAgentAssetWithBodyWithResponse Reserve bounded artifact storage.
+// ReserveAgentAssetWithBodyWithResponse Reserve governed asset capacity before finalization.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
+// Corresponds with POST /internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
 func (c *ClientWithResponses) ReserveAgentAssetWithBodyWithResponse(ctx context.Context, params *ReserveAgentAssetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReserveAgentAssetResponse, error) {
 	rsp, err := c.ReserveAgentAssetWithBody(ctx, params, contentType, body, reqEditors...)
 	if err != nil {
@@ -2118,11 +2348,11 @@ func (c *ClientWithResponses) ReserveAgentAssetWithBodyWithResponse(ctx context.
 	return ParseReserveAgentAssetResponse(rsp)
 }
 
-// ReserveAgentAssetWithResponse Reserve bounded artifact storage.
+// ReserveAgentAssetWithResponse Reserve governed asset capacity before finalization.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
+// Corresponds with POST /internal/agent/assets/reservations (the `ReserveAgentAsset` operationId).
 func (c *ClientWithResponses) ReserveAgentAssetWithResponse(ctx context.Context, params *ReserveAgentAssetParams, body ReserveAgentAssetJSONRequestBody, reqEditors ...RequestEditorFn) (*ReserveAgentAssetResponse, error) {
 	rsp, err := c.ReserveAgentAsset(ctx, params, body, reqEditors...)
 	if err != nil {
@@ -2131,11 +2361,11 @@ func (c *ClientWithResponses) ReserveAgentAssetWithResponse(ctx context.Context,
 	return ParseReserveAgentAssetResponse(rsp)
 }
 
-// CreateTargetSnapshotWithBodyWithResponse Return an authorized immutable target snapshot.
+// CreateTargetSnapshotWithBodyWithResponse Capture an immutable authorized target snapshot.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
+// Corresponds with POST /internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
 func (c *ClientWithResponses) CreateTargetSnapshotWithBodyWithResponse(ctx context.Context, params *CreateTargetSnapshotParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateTargetSnapshotResponse, error) {
 	rsp, err := c.CreateTargetSnapshotWithBody(ctx, params, contentType, body, reqEditors...)
 	if err != nil {
@@ -2144,11 +2374,11 @@ func (c *ClientWithResponses) CreateTargetSnapshotWithBodyWithResponse(ctx conte
 	return ParseCreateTargetSnapshotResponse(rsp)
 }
 
-// CreateTargetSnapshotWithResponse Return an authorized immutable target snapshot.
+// CreateTargetSnapshotWithResponse Capture an immutable authorized target snapshot.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
+// Corresponds with POST /internal/agent/context-snapshots (the `CreateTargetSnapshot` operationId).
 func (c *ClientWithResponses) CreateTargetSnapshotWithResponse(ctx context.Context, params *CreateTargetSnapshotParams, body CreateTargetSnapshotJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateTargetSnapshotResponse, error) {
 	rsp, err := c.CreateTargetSnapshot(ctx, params, body, reqEditors...)
 	if err != nil {
@@ -2157,11 +2387,11 @@ func (c *ClientWithResponses) CreateTargetSnapshotWithResponse(ctx context.Conte
 	return ParseCreateTargetSnapshotResponse(rsp)
 }
 
-// PersistAuthorizedPageWithBodyWithResponse Atomically redeem authorization, persist the effect, idempotency record, and outbox event.
+// PersistAuthorizedPageWithBodyWithResponse Verify and atomically commit an authorized page mutation with its outbox event.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
+// Corresponds with POST /internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
 func (c *ClientWithResponses) PersistAuthorizedPageWithBodyWithResponse(ctx context.Context, params *PersistAuthorizedPageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PersistAuthorizedPageResponse, error) {
 	rsp, err := c.PersistAuthorizedPageWithBody(ctx, params, contentType, body, reqEditors...)
 	if err != nil {
@@ -2170,11 +2400,11 @@ func (c *ClientWithResponses) PersistAuthorizedPageWithBodyWithResponse(ctx cont
 	return ParsePersistAuthorizedPageResponse(rsp)
 }
 
-// PersistAuthorizedPageWithResponse Atomically redeem authorization, persist the effect, idempotency record, and outbox event.
+// PersistAuthorizedPageWithResponse Verify and atomically commit an authorized page mutation with its outbox event.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
+// Corresponds with POST /internal/agent/domain/page-persistence (the `PersistAuthorizedPage` operationId).
 func (c *ClientWithResponses) PersistAuthorizedPageWithResponse(ctx context.Context, params *PersistAuthorizedPageParams, body PersistAuthorizedPageJSONRequestBody, reqEditors ...RequestEditorFn) (*PersistAuthorizedPageResponse, error) {
 	rsp, err := c.PersistAuthorizedPage(ctx, params, body, reqEditors...)
 	if err != nil {
@@ -2183,11 +2413,11 @@ func (c *ClientWithResponses) PersistAuthorizedPageWithResponse(ctx context.Cont
 	return ParsePersistAuthorizedPageResponse(rsp)
 }
 
-// CheckAgentEntitlementWithBodyWithResponse Check current permission and entitlement.
+// CheckAgentEntitlementWithBodyWithResponse Check current Team, Project, permission, and entitlement authority.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
+// Corresponds with POST /internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
 func (c *ClientWithResponses) CheckAgentEntitlementWithBodyWithResponse(ctx context.Context, params *CheckAgentEntitlementParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CheckAgentEntitlementResponse, error) {
 	rsp, err := c.CheckAgentEntitlementWithBody(ctx, params, contentType, body, reqEditors...)
 	if err != nil {
@@ -2196,11 +2426,11 @@ func (c *ClientWithResponses) CheckAgentEntitlementWithBodyWithResponse(ctx cont
 	return ParseCheckAgentEntitlementResponse(rsp)
 }
 
-// CheckAgentEntitlementWithResponse Check current permission and entitlement.
+// CheckAgentEntitlementWithResponse Check current Team, Project, permission, and entitlement authority.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
+// Corresponds with POST /internal/agent/entitlements/check (the `CheckAgentEntitlement` operationId).
 func (c *ClientWithResponses) CheckAgentEntitlementWithResponse(ctx context.Context, params *CheckAgentEntitlementParams, body CheckAgentEntitlementJSONRequestBody, reqEditors ...RequestEditorFn) (*CheckAgentEntitlementResponse, error) {
 	rsp, err := c.CheckAgentEntitlement(ctx, params, body, reqEditors...)
 	if err != nil {
@@ -2209,11 +2439,11 @@ func (c *ClientWithResponses) CheckAgentEntitlementWithResponse(ctx context.Cont
 	return ParseCheckAgentEntitlementResponse(rsp)
 }
 
-// ObserveAgentUsageWithBodyWithResponse Append usage from every physical attempt.
+// ObserveAgentUsageWithBodyWithResponse Record one additive per-attempt usage observation.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
+// Corresponds with POST /internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
 func (c *ClientWithResponses) ObserveAgentUsageWithBodyWithResponse(ctx context.Context, params *ObserveAgentUsageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ObserveAgentUsageResponse, error) {
 	rsp, err := c.ObserveAgentUsageWithBody(ctx, params, contentType, body, reqEditors...)
 	if err != nil {
@@ -2222,11 +2452,11 @@ func (c *ClientWithResponses) ObserveAgentUsageWithBodyWithResponse(ctx context.
 	return ParseObserveAgentUsageResponse(rsp)
 }
 
-// ObserveAgentUsageWithResponse Append usage from every physical attempt.
+// ObserveAgentUsageWithResponse Record one additive per-attempt usage observation.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
+// Corresponds with POST /internal/agent/usage/observations (the `ObserveAgentUsage` operationId).
 func (c *ClientWithResponses) ObserveAgentUsageWithResponse(ctx context.Context, params *ObserveAgentUsageParams, body ObserveAgentUsageJSONRequestBody, reqEditors ...RequestEditorFn) (*ObserveAgentUsageResponse, error) {
 	rsp, err := c.ObserveAgentUsage(ctx, params, body, reqEditors...)
 	if err != nil {
@@ -2235,11 +2465,11 @@ func (c *ClientWithResponses) ObserveAgentUsageWithResponse(ctx context.Context,
 	return ParseObserveAgentUsageResponse(rsp)
 }
 
-// ReconcileAgentUsageWithBodyWithResponse Reconcile or release an authorized reservation.
+// ReconcileAgentUsageWithBodyWithResponse Reconcile reservation and observed usage exactly once.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
+// Corresponds with POST /internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
 func (c *ClientWithResponses) ReconcileAgentUsageWithBodyWithResponse(ctx context.Context, params *ReconcileAgentUsageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReconcileAgentUsageResponse, error) {
 	rsp, err := c.ReconcileAgentUsageWithBody(ctx, params, contentType, body, reqEditors...)
 	if err != nil {
@@ -2248,11 +2478,11 @@ func (c *ClientWithResponses) ReconcileAgentUsageWithBodyWithResponse(ctx contex
 	return ParseReconcileAgentUsageResponse(rsp)
 }
 
-// ReconcileAgentUsageWithResponse Reconcile or release an authorized reservation.
+// ReconcileAgentUsageWithResponse Reconcile reservation and observed usage exactly once.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
+// Corresponds with POST /internal/agent/usage/reconciliation (the `ReconcileAgentUsage` operationId).
 func (c *ClientWithResponses) ReconcileAgentUsageWithResponse(ctx context.Context, params *ReconcileAgentUsageParams, body ReconcileAgentUsageJSONRequestBody, reqEditors ...RequestEditorFn) (*ReconcileAgentUsageResponse, error) {
 	rsp, err := c.ReconcileAgentUsage(ctx, params, body, reqEditors...)
 	if err != nil {
@@ -2261,11 +2491,11 @@ func (c *ClientWithResponses) ReconcileAgentUsageWithResponse(ctx context.Contex
 	return ParseReconcileAgentUsageResponse(rsp)
 }
 
-// ReserveAgentUsageWithBodyWithResponse Reserve the pinned upper budget before dispatch.
+// ReserveAgentUsageWithBodyWithResponse Reserve worst-case budget before expensive dispatch.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
+// Corresponds with POST /internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
 func (c *ClientWithResponses) ReserveAgentUsageWithBodyWithResponse(ctx context.Context, params *ReserveAgentUsageParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ReserveAgentUsageResponse, error) {
 	rsp, err := c.ReserveAgentUsageWithBody(ctx, params, contentType, body, reqEditors...)
 	if err != nil {
@@ -2274,11 +2504,11 @@ func (c *ClientWithResponses) ReserveAgentUsageWithBodyWithResponse(ctx context.
 	return ParseReserveAgentUsageResponse(rsp)
 }
 
-// ReserveAgentUsageWithResponse Reserve the pinned upper budget before dispatch.
+// ReserveAgentUsageWithResponse Reserve worst-case budget before expensive dispatch.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
-// Corresponds with POST /v1/internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
+// Corresponds with POST /internal/agent/usage/reservations (the `ReserveAgentUsage` operationId).
 func (c *ClientWithResponses) ReserveAgentUsageWithResponse(ctx context.Context, params *ReserveAgentUsageParams, body ReserveAgentUsageJSONRequestBody, reqEditors ...RequestEditorFn) (*ReserveAgentUsageResponse, error) {
 	rsp, err := c.ReserveAgentUsage(ctx, params, body, reqEditors...)
 	if err != nil {
@@ -2302,32 +2532,60 @@ func ParseFinalizeAgentAssetResponse(rsp *http.Response) (*FinalizeAgentAssetRes
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest AgentArtifactV1
+		var dest AgentArtifact
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
 
 	}
 
@@ -2368,39 +2626,67 @@ func ParseReserveAgentAssetResponse(rsp *http.Response) (*ReserveAgentAssetRespo
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest AgentArtifactV1
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest SharedPrimitivesBoundedStringMap
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
-		response.JSON200 = &dest
+		response.JSON201 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON422 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
 	}
 
 	switch {
-	case rsp.StatusCode == 200:
-		var headers ReserveAgentAssetResponse200Headers
+	case rsp.StatusCode == 201:
+		var headers ReserveAgentAssetResponse201Headers
 		if values := rsp.Header.Values("Idempotency-Replayed"); len(values) > 0 {
 			var value bool
 			if err := runtime.BindStyledParameterWithOptions("simple", "Idempotency-Replayed", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "boolean", Format: ""}); err != nil {
@@ -2415,7 +2701,7 @@ func ParseReserveAgentAssetResponse(rsp *http.Response) (*ReserveAgentAssetRespo
 			}
 			headers.XAnvilKitRequestDigest = &value
 		}
-		response.Headers200 = &headers
+		response.Headers201 = &headers
 	}
 
 	return response, nil
@@ -2435,39 +2721,67 @@ func ParseCreateTargetSnapshotResponse(rsp *http.Response) (*CreateTargetSnapsho
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest TargetSnapshotV1
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest TargetSnapshot
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
-		response.JSON200 = &dest
+		response.JSON201 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON422 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
 	}
 
 	switch {
-	case rsp.StatusCode == 200:
-		var headers CreateTargetSnapshotResponse200Headers
+	case rsp.StatusCode == 201:
+		var headers CreateTargetSnapshotResponse201Headers
 		if values := rsp.Header.Values("Idempotency-Replayed"); len(values) > 0 {
 			var value bool
 			if err := runtime.BindStyledParameterWithOptions("simple", "Idempotency-Replayed", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "boolean", Format: ""}); err != nil {
@@ -2482,7 +2796,7 @@ func ParseCreateTargetSnapshotResponse(rsp *http.Response) (*CreateTargetSnapsho
 			}
 			headers.XAnvilKitRequestDigest = &value
 		}
-		response.Headers200 = &headers
+		response.Headers201 = &headers
 	}
 
 	return response, nil
@@ -2503,32 +2817,60 @@ func ParsePersistAuthorizedPageResponse(rsp *http.Response) (*PersistAuthorizedP
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest TargetSnapshotV1
+		var dest SharedPrimitivesBoundedStringMap
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
 
 	}
 
@@ -2570,32 +2912,60 @@ func ParseCheckAgentEntitlementResponse(rsp *http.Response) (*CheckAgentEntitlem
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest ProblemDetailsV1
+		var dest SharedPrimitivesBoundedStringMap
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
 
 	}
 
@@ -2636,39 +3006,67 @@ func ParseObserveAgentUsageResponse(rsp *http.Response) (*ObserveAgentUsageRespo
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest UsageObservationV1
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest SharedPrimitivesBoundedStringMap
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
-		response.JSON200 = &dest
+		response.JSON201 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON422 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
 	}
 
 	switch {
-	case rsp.StatusCode == 200:
-		var headers ObserveAgentUsageResponse200Headers
+	case rsp.StatusCode == 201:
+		var headers ObserveAgentUsageResponse201Headers
 		if values := rsp.Header.Values("Idempotency-Replayed"); len(values) > 0 {
 			var value bool
 			if err := runtime.BindStyledParameterWithOptions("simple", "Idempotency-Replayed", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "boolean", Format: ""}); err != nil {
@@ -2683,7 +3081,7 @@ func ParseObserveAgentUsageResponse(rsp *http.Response) (*ObserveAgentUsageRespo
 			}
 			headers.XAnvilKitRequestDigest = &value
 		}
-		response.Headers200 = &headers
+		response.Headers201 = &headers
 	}
 
 	return response, nil
@@ -2704,32 +3102,60 @@ func ParseReconcileAgentUsageResponse(rsp *http.Response) (*ReconcileAgentUsageR
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest AgentBudgetV1
+		var dest SharedPrimitivesBoundedStringMap
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
 
 	}
 
@@ -2770,39 +3196,67 @@ func ParseReserveAgentUsageResponse(rsp *http.Response) (*ReserveAgentUsageRespo
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest AgentBudgetV1
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest SharedPrimitivesBoundedStringMap
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
-		response.JSON200 = &dest
+		response.JSON201 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON400 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
-		var dest ProblemDetailsV1
+		var dest ProblemDetails
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.ApplicationproblemJSON422 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
 	}
 
 	switch {
-	case rsp.StatusCode == 200:
-		var headers ReserveAgentUsageResponse200Headers
+	case rsp.StatusCode == 201:
+		var headers ReserveAgentUsageResponse201Headers
 		if values := rsp.Header.Values("Idempotency-Replayed"); len(values) > 0 {
 			var value bool
 			if err := runtime.BindStyledParameterWithOptions("simple", "Idempotency-Replayed", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "boolean", Format: ""}); err != nil {
@@ -2817,7 +3271,7 @@ func ParseReserveAgentUsageResponse(rsp *http.Response) (*ReserveAgentUsageRespo
 			}
 			headers.XAnvilKitRequestDigest = &value
 		}
-		response.Headers200 = &headers
+		response.Headers201 = &headers
 	}
 
 	return response, nil

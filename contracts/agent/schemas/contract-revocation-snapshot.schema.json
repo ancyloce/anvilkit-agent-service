@@ -1,0 +1,93 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/contract-revocation-snapshot.schema.json",
+  "title": "ContractRevocationSnapshot contract",
+  "description": "Signed fail-closed key revocation snapshot with explicit freshness.",
+  "type": "object",
+  "minProperties": 5,
+  "maxProperties": 5,
+  "required": [
+    "kind",
+    "snapshotId",
+    "issuedAt",
+    "nextUpdate",
+    "revokedKeys"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ContractRevocationSnapshot"
+    },
+    "snapshotId": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9:-]*$"
+    },
+    "issuedAt": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "nextUpdate": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "revokedKeys": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 10000,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "keyId",
+          "effectiveAt",
+          "reason"
+        ],
+        "properties": {
+          "keyId": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 256,
+            "pattern": "^urn:anvilkit:key:[a-z0-9][a-z0-9:-]*$"
+          },
+          "effectiveAt": {
+            "type": "string",
+            "minLength": 24,
+            "maxLength": 24,
+            "format": "date-time",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ContractRevocationSnapshot",
+    "componentName": "anvilkit.contract.schema.contract-revocation-snapshot",
+    "owner": "Security",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/snapshotId",
+      "/issuedAt",
+      "/nextUpdate",
+      "/revokedKeys"
+    ],
+    "maximumSerializedBytes": 1048576,
+    "descriptions": []
+  }
+}

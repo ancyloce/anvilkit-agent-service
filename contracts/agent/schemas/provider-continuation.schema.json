@@ -1,0 +1,62 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/provider-continuation.schema.json",
+  "title": "ProviderContinuation contract",
+  "description": "Bounded ProviderContinuation wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 6,
+  "maxProperties": 6,
+  "required": [
+    "kind",
+    "encryptedBinding",
+    "provider",
+    "expiresAt",
+    "restartPolicy",
+    "bindingDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ProviderContinuation"
+    },
+    "encryptedBinding": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 24576,
+      "pattern": "^[A-Za-z0-9_-]+={0,2}$",
+      "contentEncoding": "base64"
+    },
+    "provider": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "expiresAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    },
+    "restartPolicy": {
+      "enum": [
+        "resume-if-valid",
+        "restart-stage",
+        "restart-run"
+      ]
+    },
+    "bindingDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ProviderContinuation",
+    "componentName": "anvilkit.contract.schema.provider-continuation",
+    "owner": "Agent Service Adapter owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/encryptedBinding",
+      "/provider",
+      "/expiresAt",
+      "/restartPolicy"
+    ],
+    "maximumSerializedBytes": 32768,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json"
+    ]
+  }
+}

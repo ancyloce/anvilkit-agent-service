@@ -34,13 +34,13 @@ type Finding struct{ Code, InstancePath, SchemaPath string }
 
 type Adapter struct{ schemas map[string]*jsonschema.Schema }
 
-func logicalURI(name, version string, bytes []byte) string {
+func logicalURI(name string, bytes []byte) string {
 	digest := sha256.Sum256(bytes)
-	return fmt.Sprintf("anvilkit://schema/%s.v%s@%s?digest=sha256:%s", name, strings.SplitN(version, ".", 2)[0], version, hex.EncodeToString(digest[:]))
+	return fmt.Sprintf("anvilkit://schema/%s?digest=sha256:%s", name, hex.EncodeToString(digest[:]))
 }
 
 func New(repositoryRoot string) (*Adapter, error) {
-	directory := filepath.Join(repositoryRoot, "contracts", "schemas", "v1")
+	directory := filepath.Join(repositoryRoot, "contracts", "agent", "schemas")
 	schemaRoot, err := os.OpenRoot(directory)
 	if err != nil {
 		return nil, fmt.Errorf("open schema root: %w", err)
@@ -91,12 +91,11 @@ func New(repositoryRoot string) (*Adapter, error) {
 		if !ok {
 			return nil, fmt.Errorf("%s lacks metadata", entry.Name())
 		}
-		version, ok := metadata["semanticVersion"].(string)
-		if !ok {
-			return nil, fmt.Errorf("%s lacks semantic version", entry.Name())
+		if _, ok := metadata["logicalId"].(string); !ok {
+			return nil, fmt.Errorf("%s lacks a logical ID", entry.Name())
 		}
 		name := strings.TrimSuffix(entry.Name(), ".schema.json")
-		uri := logicalURI(name, version, raw)
+		uri := logicalURI(name, raw)
 		value["$schema"] = "https://json-schema.org/draft/2020-12/schema"
 		value["$id"] = uri
 		delete(value, "x-anvilkit-contract")

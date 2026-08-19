@@ -1,0 +1,75 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/agent-stream-delta.schema.json",
+  "title": "AgentStreamDelta contract",
+  "description": "Provisional streaming transport shape governed by ADR-020. Deltas are not AgentEvent, carry no public sequence, may be dropped, combined, sampled, or rate-limited, and can never satisfy a Validator, approval, or final-state reconstruction.",
+  "type": "object",
+  "minProperties": 7,
+  "maxProperties": 9,
+  "required": [
+    "kind",
+    "runId",
+    "workspaceId",
+    "channel",
+    "provisional",
+    "emittedAt",
+    "payload"
+  ],
+  "properties": {
+    "kind": {
+      "const": "AgentStreamDelta"
+    },
+    "runId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
+    },
+    "workspaceId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/WorkspaceId"
+    },
+    "channel": {
+      "enum": [
+        "token",
+        "text",
+        "field",
+        "progress"
+      ]
+    },
+    "provisional": {
+      "const": true
+    },
+    "emittedAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    },
+    "payload": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+    },
+    "turnId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "traceContext": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TraceContext"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "turnId": "omitted for deltas outside an AgentRunner turn",
+    "traceContext": "omitted when no trace is propagated on the provisional channel"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "AgentStreamDelta",
+    "componentName": "anvilkit.contract.schema.agent-stream-delta",
+    "owner": "Agent Service Events owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/runId",
+      "/workspaceId",
+      "/channel",
+      "/provisional",
+      "/emittedAt",
+      "/payload"
+    ],
+    "maximumSerializedBytes": 32768,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json"
+    ]
+  }
+}

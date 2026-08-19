@@ -1,0 +1,60 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/target-snapshot.schema.json",
+  "title": "TargetSnapshot contract",
+  "description": "Bounded TargetSnapshot wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 7,
+  "maxProperties": 7,
+  "required": [
+    "kind",
+    "target",
+    "baseRevision",
+    "snapshot",
+    "contractBomDigest",
+    "catalogDigest",
+    "capturedAt"
+  ],
+  "properties": {
+    "kind": {
+      "const": "TargetSnapshot"
+    },
+    "target": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TargetReference"
+    },
+    "baseRevision": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "snapshot": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+    },
+    "contractBomDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "catalogDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "capturedAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "TargetSnapshot",
+    "componentName": "anvilkit.contract.schema.target-snapshot",
+    "owner": "Pagix Snapshot owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/target",
+      "/baseRevision",
+      "/snapshot",
+      "/contractBomDigest",
+      "/catalogDigest"
+    ],
+    "maximumSerializedBytes": 32768,
+    "descriptions": [
+      "contracts/agent/openapi/pagix-agent-integration.openapi.json",
+      "contracts/agent/asyncapi/pagix-domain-events.asyncapi.json"
+    ]
+  }
+}

@@ -12,54 +12,51 @@ import "regexp"
 import "time"
 import "unicode/utf8"
 
-// Bounded AgentArtifactV1 wire contract governed by PRD 0012.
-type AgentArtifactV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
-
+// Bounded AgentArtifact wire contract governed by PRD 0012.
+type AgentArtifact struct {
 	// ArtifactId corresponds to the JSON schema field "artifactId".
-	ArtifactId SharedPrimitivesV1OpaqueId `json:"artifactId" yaml:"artifactId" mapstructure:"artifactId"`
+	ArtifactId SharedPrimitivesOpaqueId `json:"artifactId" yaml:"artifactId" mapstructure:"artifactId"`
 
 	// ContractType corresponds to the JSON schema field "contractType".
 	ContractType interface{} `json:"contractType" yaml:"contractType" mapstructure:"contractType"`
 
 	// CreatedAt corresponds to the JSON schema field "createdAt".
-	CreatedAt SharedPrimitivesV1Timestamp `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+	CreatedAt SharedPrimitivesTimestamp `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
 
 	// Digest corresponds to the JSON schema field "digest".
-	Digest SharedPrimitivesV1Digest `json:"digest" yaml:"digest" mapstructure:"digest"`
+	Digest SharedPrimitivesDigest `json:"digest" yaml:"digest" mapstructure:"digest"`
 
 	// Kind corresponds to the JSON schema field "kind".
-	Kind AgentArtifactV1Kind `json:"kind" yaml:"kind" mapstructure:"kind"`
+	Kind AgentArtifactKind `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// Lifecycle corresponds to the JSON schema field "lifecycle".
-	Lifecycle AgentArtifactV1Lifecycle `json:"lifecycle" yaml:"lifecycle" mapstructure:"lifecycle"`
+	Lifecycle AgentArtifactLifecycle `json:"lifecycle" yaml:"lifecycle" mapstructure:"lifecycle"`
 
 	// Lineage corresponds to the JSON schema field "lineage".
-	Lineage []SharedPrimitivesV1ArtifactReference `json:"lineage" yaml:"lineage" mapstructure:"lineage"`
+	Lineage []SharedPrimitivesArtifactReference `json:"lineage" yaml:"lineage" mapstructure:"lineage"`
 
 	// Producer corresponds to the JSON schema field "producer".
-	Producer AgentArtifactV1Producer `json:"producer" yaml:"producer" mapstructure:"producer"`
+	Producer AgentArtifactProducer `json:"producer" yaml:"producer" mapstructure:"producer"`
 
 	// Reference corresponds to the JSON schema field "reference".
-	Reference AgentArtifactV1Reference `json:"reference" yaml:"reference" mapstructure:"reference"`
+	Reference AgentArtifactReference `json:"reference" yaml:"reference" mapstructure:"reference"`
 
 	// Schema corresponds to the JSON schema field "schema".
-	Schema SharedPrimitivesV1SchemaReference `json:"schema" yaml:"schema" mapstructure:"schema"`
+	Schema SharedPrimitivesSchemaReference `json:"schema" yaml:"schema" mapstructure:"schema"`
 
 	// Validation corresponds to the JSON schema field "validation".
-	Validation AgentArtifactV1Validation `json:"validation" yaml:"validation" mapstructure:"validation"`
+	Validation AgentArtifactValidation `json:"validation" yaml:"validation" mapstructure:"validation"`
 }
 
-type AgentArtifactV1Kind string
+type AgentArtifactKind string
 
-const AgentArtifactV1KindAgentPlan AgentArtifactV1Kind = "agent-plan"
-const AgentArtifactV1KindCompiledContext AgentArtifactV1Kind = "compiled-context"
-const AgentArtifactV1KindTargetSnapshot AgentArtifactV1Kind = "target-snapshot"
-const AgentArtifactV1KindValidationReport AgentArtifactV1Kind = "validation-report"
-const AgentArtifactV1KindWorkerResult AgentArtifactV1Kind = "worker-result"
+const AgentArtifactKindAgentPlan AgentArtifactKind = "agent-plan"
+const AgentArtifactKindCompiledContext AgentArtifactKind = "compiled-context"
+const AgentArtifactKindTargetSnapshot AgentArtifactKind = "target-snapshot"
+const AgentArtifactKindValidationReport AgentArtifactKind = "validation-report"
+const AgentArtifactKindWorkerResult AgentArtifactKind = "worker-result"
 
-var enumValues_AgentArtifactV1Kind = []interface{}{
+var enumValues_AgentArtifactKind = []interface{}{
 	"compiled-context",
 	"target-snapshot",
 	"agent-plan",
@@ -68,7 +65,7 @@ var enumValues_AgentArtifactV1Kind = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentArtifactV1Kind) UnmarshalJSON(value []byte) error {
+func (j *AgentArtifactKind) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -77,31 +74,31 @@ func (j *AgentArtifactV1Kind) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentArtifactV1Kind {
+	for _, expected := range enumValues_AgentArtifactKind {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentArtifactV1Kind, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentArtifactKind, v)
 	}
-	*j = AgentArtifactV1Kind(v)
+	*j = AgentArtifactKind(v)
 	return nil
 }
 
-type AgentArtifactV1Lifecycle string
+type AgentArtifactLifecycle string
 
-const AgentArtifactV1LifecycleCommitted AgentArtifactV1Lifecycle = "committed"
-const AgentArtifactV1LifecycleDeleted AgentArtifactV1Lifecycle = "deleted"
-const AgentArtifactV1LifecycleExpired AgentArtifactV1Lifecycle = "expired"
-const AgentArtifactV1LifecycleFinalized AgentArtifactV1Lifecycle = "finalized"
-const AgentArtifactV1LifecyclePending AgentArtifactV1Lifecycle = "pending"
-const AgentArtifactV1LifecycleQuarantined AgentArtifactV1Lifecycle = "quarantined"
-const AgentArtifactV1LifecycleScanning AgentArtifactV1Lifecycle = "scanning"
-const AgentArtifactV1LifecycleValid AgentArtifactV1Lifecycle = "valid"
+const AgentArtifactLifecycleCommitted AgentArtifactLifecycle = "committed"
+const AgentArtifactLifecycleDeleted AgentArtifactLifecycle = "deleted"
+const AgentArtifactLifecycleExpired AgentArtifactLifecycle = "expired"
+const AgentArtifactLifecycleFinalized AgentArtifactLifecycle = "finalized"
+const AgentArtifactLifecyclePending AgentArtifactLifecycle = "pending"
+const AgentArtifactLifecycleQuarantined AgentArtifactLifecycle = "quarantined"
+const AgentArtifactLifecycleScanning AgentArtifactLifecycle = "scanning"
+const AgentArtifactLifecycleValid AgentArtifactLifecycle = "valid"
 
-var enumValues_AgentArtifactV1Lifecycle = []interface{}{
+var enumValues_AgentArtifactLifecycle = []interface{}{
 	"pending",
 	"scanning",
 	"valid",
@@ -113,7 +110,7 @@ var enumValues_AgentArtifactV1Lifecycle = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentArtifactV1Lifecycle) UnmarshalJSON(value []byte) error {
+func (j *AgentArtifactLifecycle) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -122,20 +119,20 @@ func (j *AgentArtifactV1Lifecycle) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentArtifactV1Lifecycle {
+	for _, expected := range enumValues_AgentArtifactLifecycle {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentArtifactV1Lifecycle, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentArtifactLifecycle, v)
 	}
-	*j = AgentArtifactV1Lifecycle(v)
+	*j = AgentArtifactLifecycle(v)
 	return nil
 }
 
-type AgentArtifactV1Producer struct {
+type AgentArtifactProducer struct {
 	// ExecutionGeneration corresponds to the JSON schema field "executionGeneration".
 	ExecutionGeneration int `json:"executionGeneration" yaml:"executionGeneration" mapstructure:"executionGeneration"`
 
@@ -143,17 +140,17 @@ type AgentArtifactV1Producer struct {
 	LeaseEpoch int `json:"leaseEpoch" yaml:"leaseEpoch" mapstructure:"leaseEpoch"`
 
 	// PhysicalAttemptId corresponds to the JSON schema field "physicalAttemptId".
-	PhysicalAttemptId SharedPrimitivesV1OpaqueId `json:"physicalAttemptId" yaml:"physicalAttemptId" mapstructure:"physicalAttemptId"`
+	PhysicalAttemptId SharedPrimitivesOpaqueId `json:"physicalAttemptId" yaml:"physicalAttemptId" mapstructure:"physicalAttemptId"`
 
 	// RecoveryEpoch corresponds to the JSON schema field "recoveryEpoch".
 	RecoveryEpoch int `json:"recoveryEpoch" yaml:"recoveryEpoch" mapstructure:"recoveryEpoch"`
 
 	// TaskId corresponds to the JSON schema field "taskId".
-	TaskId SharedPrimitivesV1OpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
+	TaskId SharedPrimitivesOpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentArtifactV1Producer) UnmarshalJSON(value []byte) error {
+func (j *AgentArtifactProducer) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -162,21 +159,21 @@ func (j *AgentArtifactV1Producer) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["executionGeneration"]; raw != nil && !ok {
-		return fmt.Errorf("field executionGeneration in AgentArtifactV1Producer: required")
+		return fmt.Errorf("field executionGeneration in AgentArtifactProducer: required")
 	}
 	if _, ok := raw["leaseEpoch"]; raw != nil && !ok {
-		return fmt.Errorf("field leaseEpoch in AgentArtifactV1Producer: required")
+		return fmt.Errorf("field leaseEpoch in AgentArtifactProducer: required")
 	}
 	if _, ok := raw["physicalAttemptId"]; raw != nil && !ok {
-		return fmt.Errorf("field physicalAttemptId in AgentArtifactV1Producer: required")
+		return fmt.Errorf("field physicalAttemptId in AgentArtifactProducer: required")
 	}
 	if _, ok := raw["recoveryEpoch"]; raw != nil && !ok {
-		return fmt.Errorf("field recoveryEpoch in AgentArtifactV1Producer: required")
+		return fmt.Errorf("field recoveryEpoch in AgentArtifactProducer: required")
 	}
 	if _, ok := raw["taskId"]; raw != nil && !ok {
-		return fmt.Errorf("field taskId in AgentArtifactV1Producer: required")
+		return fmt.Errorf("field taskId in AgentArtifactProducer: required")
 	}
-	type Plain AgentArtifactV1Producer
+	type Plain AgentArtifactProducer
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -199,11 +196,11 @@ func (j *AgentArtifactV1Producer) UnmarshalJSON(value []byte) error {
 	if 0 > plain.RecoveryEpoch {
 		return fmt.Errorf("field %s: must be >= %v", "recoveryEpoch", 0)
 	}
-	*j = AgentArtifactV1Producer(plain)
+	*j = AgentArtifactProducer(plain)
 	return nil
 }
 
-type AgentArtifactV1Reference struct {
+type AgentArtifactReference struct {
 	// Bucket corresponds to the JSON schema field "bucket".
 	Bucket string `json:"bucket" yaml:"bucket" mapstructure:"bucket"`
 
@@ -218,7 +215,7 @@ type AgentArtifactV1Reference struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentArtifactV1Reference) UnmarshalJSON(value []byte) error {
+func (j *AgentArtifactReference) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -227,18 +224,18 @@ func (j *AgentArtifactV1Reference) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["bucket"]; raw != nil && !ok {
-		return fmt.Errorf("field bucket in AgentArtifactV1Reference: required")
+		return fmt.Errorf("field bucket in AgentArtifactReference: required")
 	}
 	if _, ok := raw["mediaType"]; raw != nil && !ok {
-		return fmt.Errorf("field mediaType in AgentArtifactV1Reference: required")
+		return fmt.Errorf("field mediaType in AgentArtifactReference: required")
 	}
 	if _, ok := raw["objectKey"]; raw != nil && !ok {
-		return fmt.Errorf("field objectKey in AgentArtifactV1Reference: required")
+		return fmt.Errorf("field objectKey in AgentArtifactReference: required")
 	}
 	if _, ok := raw["sizeBytes"]; raw != nil && !ok {
-		return fmt.Errorf("field sizeBytes in AgentArtifactV1Reference: required")
+		return fmt.Errorf("field sizeBytes in AgentArtifactReference: required")
 	}
-	type Plain AgentArtifactV1Reference
+	type Plain AgentArtifactReference
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -276,41 +273,41 @@ func (j *AgentArtifactV1Reference) UnmarshalJSON(value []byte) error {
 	if 0 > plain.SizeBytes {
 		return fmt.Errorf("field %s: must be >= %v", "sizeBytes", 0)
 	}
-	*j = AgentArtifactV1Reference(plain)
+	*j = AgentArtifactReference(plain)
 	return nil
 }
 
-type AgentArtifactV1Validation struct {
+type AgentArtifactValidation struct {
 	// Checks corresponds to the JSON schema field "checks".
-	Checks []AgentArtifactV1ValidationChecksElem `json:"checks" yaml:"checks" mapstructure:"checks"`
+	Checks []AgentArtifactValidationChecksElem `json:"checks" yaml:"checks" mapstructure:"checks"`
 
 	// ValidatedAt corresponds to the JSON schema field "validatedAt".
-	ValidatedAt SharedPrimitivesV1Timestamp `json:"validatedAt" yaml:"validatedAt" mapstructure:"validatedAt"`
+	ValidatedAt SharedPrimitivesTimestamp `json:"validatedAt" yaml:"validatedAt" mapstructure:"validatedAt"`
 }
 
-type AgentArtifactV1ValidationChecksElem struct {
+type AgentArtifactValidationChecksElem struct {
 	// EvidenceDigest corresponds to the JSON schema field "evidenceDigest".
-	EvidenceDigest SharedPrimitivesV1Digest `json:"evidenceDigest" yaml:"evidenceDigest" mapstructure:"evidenceDigest"`
+	EvidenceDigest SharedPrimitivesDigest `json:"evidenceDigest" yaml:"evidenceDigest" mapstructure:"evidenceDigest"`
 
 	// Name corresponds to the JSON schema field "name".
 	Name string `json:"name" yaml:"name" mapstructure:"name"`
 
 	// Result corresponds to the JSON schema field "result".
-	Result AgentArtifactV1ValidationChecksElemResult `json:"result" yaml:"result" mapstructure:"result"`
+	Result AgentArtifactValidationChecksElemResult `json:"result" yaml:"result" mapstructure:"result"`
 }
 
-type AgentArtifactV1ValidationChecksElemResult string
+type AgentArtifactValidationChecksElemResult string
 
-const AgentArtifactV1ValidationChecksElemResultFailed AgentArtifactV1ValidationChecksElemResult = "failed"
-const AgentArtifactV1ValidationChecksElemResultPassed AgentArtifactV1ValidationChecksElemResult = "passed"
+const AgentArtifactValidationChecksElemResultFailed AgentArtifactValidationChecksElemResult = "failed"
+const AgentArtifactValidationChecksElemResultPassed AgentArtifactValidationChecksElemResult = "passed"
 
-var enumValues_AgentArtifactV1ValidationChecksElemResult = []interface{}{
+var enumValues_AgentArtifactValidationChecksElemResult = []interface{}{
 	"passed",
 	"failed",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentArtifactV1ValidationChecksElemResult) UnmarshalJSON(value []byte) error {
+func (j *AgentArtifactValidationChecksElemResult) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -319,21 +316,21 @@ func (j *AgentArtifactV1ValidationChecksElemResult) UnmarshalJSON(value []byte) 
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentArtifactV1ValidationChecksElemResult {
+	for _, expected := range enumValues_AgentArtifactValidationChecksElemResult {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentArtifactV1ValidationChecksElemResult, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentArtifactValidationChecksElemResult, v)
 	}
-	*j = AgentArtifactV1ValidationChecksElemResult(v)
+	*j = AgentArtifactValidationChecksElemResult(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentArtifactV1ValidationChecksElem) UnmarshalJSON(value []byte) error {
+func (j *AgentArtifactValidationChecksElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -342,15 +339,15 @@ func (j *AgentArtifactV1ValidationChecksElem) UnmarshalJSON(value []byte) error 
 		return err
 	}
 	if _, ok := raw["evidenceDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field evidenceDigest in AgentArtifactV1ValidationChecksElem: required")
+		return fmt.Errorf("field evidenceDigest in AgentArtifactValidationChecksElem: required")
 	}
 	if _, ok := raw["name"]; raw != nil && !ok {
-		return fmt.Errorf("field name in AgentArtifactV1ValidationChecksElem: required")
+		return fmt.Errorf("field name in AgentArtifactValidationChecksElem: required")
 	}
 	if _, ok := raw["result"]; raw != nil && !ok {
-		return fmt.Errorf("field result in AgentArtifactV1ValidationChecksElem: required")
+		return fmt.Errorf("field result in AgentArtifactValidationChecksElem: required")
 	}
-	type Plain AgentArtifactV1ValidationChecksElem
+	type Plain AgentArtifactValidationChecksElem
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -364,12 +361,12 @@ func (j *AgentArtifactV1ValidationChecksElem) UnmarshalJSON(value []byte) error 
 	if utf8.RuneCountInString(string(plain.Name)) > 64 {
 		return fmt.Errorf("field %s length: must be <= %d", "name", 64)
 	}
-	*j = AgentArtifactV1ValidationChecksElem(plain)
+	*j = AgentArtifactValidationChecksElem(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentArtifactV1Validation) UnmarshalJSON(value []byte) error {
+func (j *AgentArtifactValidation) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -378,12 +375,12 @@ func (j *AgentArtifactV1Validation) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["checks"]; raw != nil && !ok {
-		return fmt.Errorf("field checks in AgentArtifactV1Validation: required")
+		return fmt.Errorf("field checks in AgentArtifactValidation: required")
 	}
 	if _, ok := raw["validatedAt"]; raw != nil && !ok {
-		return fmt.Errorf("field validatedAt in AgentArtifactV1Validation: required")
+		return fmt.Errorf("field validatedAt in AgentArtifactValidation: required")
 	}
-	type Plain AgentArtifactV1Validation
+	type Plain AgentArtifactValidation
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -394,12 +391,12 @@ func (j *AgentArtifactV1Validation) UnmarshalJSON(value []byte) error {
 	if len(plain.Checks) > 32 {
 		return fmt.Errorf("field %s length: must be <= %d", "checks", 32)
 	}
-	*j = AgentArtifactV1Validation(plain)
+	*j = AgentArtifactValidation(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentArtifactV1) UnmarshalJSON(value []byte) error {
+func (j *AgentArtifact) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -407,43 +404,40 @@ func (j *AgentArtifactV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in AgentArtifactV1: required")
-	}
 	if _, ok := raw["artifactId"]; raw != nil && !ok {
-		return fmt.Errorf("field artifactId in AgentArtifactV1: required")
+		return fmt.Errorf("field artifactId in AgentArtifact: required")
 	}
 	if _, ok := raw["contractType"]; raw != nil && !ok {
-		return fmt.Errorf("field contractType in AgentArtifactV1: required")
+		return fmt.Errorf("field contractType in AgentArtifact: required")
 	}
 	if _, ok := raw["createdAt"]; raw != nil && !ok {
-		return fmt.Errorf("field createdAt in AgentArtifactV1: required")
+		return fmt.Errorf("field createdAt in AgentArtifact: required")
 	}
 	if _, ok := raw["digest"]; raw != nil && !ok {
-		return fmt.Errorf("field digest in AgentArtifactV1: required")
+		return fmt.Errorf("field digest in AgentArtifact: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in AgentArtifactV1: required")
+		return fmt.Errorf("field kind in AgentArtifact: required")
 	}
 	if _, ok := raw["lifecycle"]; raw != nil && !ok {
-		return fmt.Errorf("field lifecycle in AgentArtifactV1: required")
+		return fmt.Errorf("field lifecycle in AgentArtifact: required")
 	}
 	if _, ok := raw["lineage"]; raw != nil && !ok {
-		return fmt.Errorf("field lineage in AgentArtifactV1: required")
+		return fmt.Errorf("field lineage in AgentArtifact: required")
 	}
 	if _, ok := raw["producer"]; raw != nil && !ok {
-		return fmt.Errorf("field producer in AgentArtifactV1: required")
+		return fmt.Errorf("field producer in AgentArtifact: required")
 	}
 	if _, ok := raw["reference"]; raw != nil && !ok {
-		return fmt.Errorf("field reference in AgentArtifactV1: required")
+		return fmt.Errorf("field reference in AgentArtifact: required")
 	}
 	if _, ok := raw["schema"]; raw != nil && !ok {
-		return fmt.Errorf("field schema in AgentArtifactV1: required")
+		return fmt.Errorf("field schema in AgentArtifact: required")
 	}
 	if _, ok := raw["validation"]; raw != nil && !ok {
-		return fmt.Errorf("field validation in AgentArtifactV1: required")
+		return fmt.Errorf("field validation in AgentArtifact: required")
 	}
-	type Plain AgentArtifactV1
+	type Plain AgentArtifact
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -451,53 +445,50 @@ func (j *AgentArtifactV1) UnmarshalJSON(value []byte) error {
 	if len(plain.Lineage) > 64 {
 		return fmt.Errorf("field %s length: must be <= %d", "lineage", 64)
 	}
-	*j = AgentArtifactV1(plain)
+	*j = AgentArtifact(plain)
 	return nil
 }
 
-// Bounded AgentBudgetV1 wire contract governed by PRD 0012.
-type AgentBudgetV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
-
+// Bounded AgentBudget wire contract governed by PRD 0012.
+type AgentBudget struct {
 	// CurrencyLimits corresponds to the JSON schema field "currencyLimits".
-	CurrencyLimits AgentBudgetV1CurrencyLimits `json:"currencyLimits" yaml:"currencyLimits" mapstructure:"currencyLimits"`
+	CurrencyLimits AgentBudgetCurrencyLimits `json:"currencyLimits" yaml:"currencyLimits" mapstructure:"currencyLimits"`
 
 	// ExceedBehavior corresponds to the JSON schema field "exceedBehavior".
-	ExceedBehavior AgentBudgetV1ExceedBehavior `json:"exceedBehavior" yaml:"exceedBehavior" mapstructure:"exceedBehavior"`
+	ExceedBehavior AgentBudgetExceedBehavior `json:"exceedBehavior" yaml:"exceedBehavior" mapstructure:"exceedBehavior"`
 
 	// GpuLimits corresponds to the JSON schema field "gpuLimits".
-	GpuLimits AgentBudgetV1GpuLimits `json:"gpuLimits" yaml:"gpuLimits" mapstructure:"gpuLimits"`
+	GpuLimits AgentBudgetGpuLimits `json:"gpuLimits" yaml:"gpuLimits" mapstructure:"gpuLimits"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// ModelLimits corresponds to the JSON schema field "modelLimits".
-	ModelLimits AgentBudgetV1ModelLimits `json:"modelLimits" yaml:"modelLimits" mapstructure:"modelLimits"`
+	ModelLimits AgentBudgetModelLimits `json:"modelLimits" yaml:"modelLimits" mapstructure:"modelLimits"`
 
 	// Policy corresponds to the JSON schema field "policy".
-	Policy SharedPrimitivesV1PolicyReference `json:"policy" yaml:"policy" mapstructure:"policy"`
+	Policy SharedPrimitivesPolicyReference `json:"policy" yaml:"policy" mapstructure:"policy"`
 
 	// ReservationId corresponds to the JSON schema field "reservationId".
-	ReservationId SharedPrimitivesV1OpaqueId `json:"reservationId" yaml:"reservationId" mapstructure:"reservationId"`
+	ReservationId SharedPrimitivesOpaqueId `json:"reservationId" yaml:"reservationId" mapstructure:"reservationId"`
 
 	// TokenLimits corresponds to the JSON schema field "tokenLimits".
-	TokenLimits AgentBudgetV1TokenLimits `json:"tokenLimits" yaml:"tokenLimits" mapstructure:"tokenLimits"`
+	TokenLimits AgentBudgetTokenLimits `json:"tokenLimits" yaml:"tokenLimits" mapstructure:"tokenLimits"`
 
 	// WorkerLimits corresponds to the JSON schema field "workerLimits".
-	WorkerLimits AgentBudgetV1WorkerLimits `json:"workerLimits" yaml:"workerLimits" mapstructure:"workerLimits"`
+	WorkerLimits AgentBudgetWorkerLimits `json:"workerLimits" yaml:"workerLimits" mapstructure:"workerLimits"`
 }
 
-type AgentBudgetV1CurrencyLimits struct {
+type AgentBudgetCurrencyLimits struct {
 	// MaximumCost corresponds to the JSON schema field "maximumCost".
-	MaximumCost SharedPrimitivesV1Cost `json:"maximumCost" yaml:"maximumCost" mapstructure:"maximumCost"`
+	MaximumCost SharedPrimitivesCost `json:"maximumCost" yaml:"maximumCost" mapstructure:"maximumCost"`
 
 	// ReservedCost corresponds to the JSON schema field "reservedCost".
-	ReservedCost SharedPrimitivesV1Cost `json:"reservedCost" yaml:"reservedCost" mapstructure:"reservedCost"`
+	ReservedCost SharedPrimitivesCost `json:"reservedCost" yaml:"reservedCost" mapstructure:"reservedCost"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentBudgetV1CurrencyLimits) UnmarshalJSON(value []byte) error {
+func (j *AgentBudgetCurrencyLimits) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -506,34 +497,34 @@ func (j *AgentBudgetV1CurrencyLimits) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["maximumCost"]; raw != nil && !ok {
-		return fmt.Errorf("field maximumCost in AgentBudgetV1CurrencyLimits: required")
+		return fmt.Errorf("field maximumCost in AgentBudgetCurrencyLimits: required")
 	}
 	if _, ok := raw["reservedCost"]; raw != nil && !ok {
-		return fmt.Errorf("field reservedCost in AgentBudgetV1CurrencyLimits: required")
+		return fmt.Errorf("field reservedCost in AgentBudgetCurrencyLimits: required")
 	}
-	type Plain AgentBudgetV1CurrencyLimits
+	type Plain AgentBudgetCurrencyLimits
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	*j = AgentBudgetV1CurrencyLimits(plain)
+	*j = AgentBudgetCurrencyLimits(plain)
 	return nil
 }
 
-type AgentBudgetV1ExceedBehavior string
+type AgentBudgetExceedBehavior string
 
-const AgentBudgetV1ExceedBehaviorCancel AgentBudgetV1ExceedBehavior = "cancel"
-const AgentBudgetV1ExceedBehaviorPauseForApproval AgentBudgetV1ExceedBehavior = "pause-for-approval"
-const AgentBudgetV1ExceedBehaviorRefuse AgentBudgetV1ExceedBehavior = "refuse"
+const AgentBudgetExceedBehaviorCancel AgentBudgetExceedBehavior = "cancel"
+const AgentBudgetExceedBehaviorPauseForApproval AgentBudgetExceedBehavior = "pause-for-approval"
+const AgentBudgetExceedBehaviorRefuse AgentBudgetExceedBehavior = "refuse"
 
-var enumValues_AgentBudgetV1ExceedBehavior = []interface{}{
+var enumValues_AgentBudgetExceedBehavior = []interface{}{
 	"refuse",
 	"pause-for-approval",
 	"cancel",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentBudgetV1ExceedBehavior) UnmarshalJSON(value []byte) error {
+func (j *AgentBudgetExceedBehavior) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -542,27 +533,27 @@ func (j *AgentBudgetV1ExceedBehavior) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentBudgetV1ExceedBehavior {
+	for _, expected := range enumValues_AgentBudgetExceedBehavior {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentBudgetV1ExceedBehavior, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentBudgetExceedBehavior, v)
 	}
-	*j = AgentBudgetV1ExceedBehavior(v)
+	*j = AgentBudgetExceedBehavior(v)
 	return nil
 }
 
-type AgentBudgetV1GpuLimits struct {
+type AgentBudgetGpuLimits struct {
 	// MaximumGpuMilliseconds corresponds to the JSON schema field
 	// "maximumGpuMilliseconds".
 	MaximumGpuMilliseconds int `json:"maximumGpuMilliseconds" yaml:"maximumGpuMilliseconds" mapstructure:"maximumGpuMilliseconds"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentBudgetV1GpuLimits) UnmarshalJSON(value []byte) error {
+func (j *AgentBudgetGpuLimits) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -571,9 +562,9 @@ func (j *AgentBudgetV1GpuLimits) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["maximumGpuMilliseconds"]; raw != nil && !ok {
-		return fmt.Errorf("field maximumGpuMilliseconds in AgentBudgetV1GpuLimits: required")
+		return fmt.Errorf("field maximumGpuMilliseconds in AgentBudgetGpuLimits: required")
 	}
-	type Plain AgentBudgetV1GpuLimits
+	type Plain AgentBudgetGpuLimits
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -584,11 +575,11 @@ func (j *AgentBudgetV1GpuLimits) UnmarshalJSON(value []byte) error {
 	if 0 > plain.MaximumGpuMilliseconds {
 		return fmt.Errorf("field %s: must be >= %v", "maximumGpuMilliseconds", 0)
 	}
-	*j = AgentBudgetV1GpuLimits(plain)
+	*j = AgentBudgetGpuLimits(plain)
 	return nil
 }
 
-type AgentBudgetV1ModelLimits struct {
+type AgentBudgetModelLimits struct {
 	// MaximumCalls corresponds to the JSON schema field "maximumCalls".
 	MaximumCalls int `json:"maximumCalls" yaml:"maximumCalls" mapstructure:"maximumCalls"`
 
@@ -598,7 +589,7 @@ type AgentBudgetV1ModelLimits struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentBudgetV1ModelLimits) UnmarshalJSON(value []byte) error {
+func (j *AgentBudgetModelLimits) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -607,12 +598,12 @@ func (j *AgentBudgetV1ModelLimits) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["maximumCalls"]; raw != nil && !ok {
-		return fmt.Errorf("field maximumCalls in AgentBudgetV1ModelLimits: required")
+		return fmt.Errorf("field maximumCalls in AgentBudgetModelLimits: required")
 	}
 	if _, ok := raw["maximumConcurrentCalls"]; raw != nil && !ok {
-		return fmt.Errorf("field maximumConcurrentCalls in AgentBudgetV1ModelLimits: required")
+		return fmt.Errorf("field maximumConcurrentCalls in AgentBudgetModelLimits: required")
 	}
-	type Plain AgentBudgetV1ModelLimits
+	type Plain AgentBudgetModelLimits
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -629,11 +620,11 @@ func (j *AgentBudgetV1ModelLimits) UnmarshalJSON(value []byte) error {
 	if 0 > plain.MaximumConcurrentCalls {
 		return fmt.Errorf("field %s: must be >= %v", "maximumConcurrentCalls", 0)
 	}
-	*j = AgentBudgetV1ModelLimits(plain)
+	*j = AgentBudgetModelLimits(plain)
 	return nil
 }
 
-type AgentBudgetV1TokenLimits struct {
+type AgentBudgetTokenLimits struct {
 	// InputTokens corresponds to the JSON schema field "inputTokens".
 	InputTokens int `json:"inputTokens" yaml:"inputTokens" mapstructure:"inputTokens"`
 
@@ -645,7 +636,7 @@ type AgentBudgetV1TokenLimits struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentBudgetV1TokenLimits) UnmarshalJSON(value []byte) error {
+func (j *AgentBudgetTokenLimits) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -654,15 +645,15 @@ func (j *AgentBudgetV1TokenLimits) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["inputTokens"]; raw != nil && !ok {
-		return fmt.Errorf("field inputTokens in AgentBudgetV1TokenLimits: required")
+		return fmt.Errorf("field inputTokens in AgentBudgetTokenLimits: required")
 	}
 	if _, ok := raw["outputTokens"]; raw != nil && !ok {
-		return fmt.Errorf("field outputTokens in AgentBudgetV1TokenLimits: required")
+		return fmt.Errorf("field outputTokens in AgentBudgetTokenLimits: required")
 	}
 	if _, ok := raw["totalTokens"]; raw != nil && !ok {
-		return fmt.Errorf("field totalTokens in AgentBudgetV1TokenLimits: required")
+		return fmt.Errorf("field totalTokens in AgentBudgetTokenLimits: required")
 	}
-	type Plain AgentBudgetV1TokenLimits
+	type Plain AgentBudgetTokenLimits
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -685,11 +676,11 @@ func (j *AgentBudgetV1TokenLimits) UnmarshalJSON(value []byte) error {
 	if 0 > plain.TotalTokens {
 		return fmt.Errorf("field %s: must be >= %v", "totalTokens", 0)
 	}
-	*j = AgentBudgetV1TokenLimits(plain)
+	*j = AgentBudgetTokenLimits(plain)
 	return nil
 }
 
-type AgentBudgetV1WorkerLimits struct {
+type AgentBudgetWorkerLimits struct {
 	// MaximumAttempts corresponds to the JSON schema field "maximumAttempts".
 	MaximumAttempts int `json:"maximumAttempts" yaml:"maximumAttempts" mapstructure:"maximumAttempts"`
 
@@ -699,7 +690,7 @@ type AgentBudgetV1WorkerLimits struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentBudgetV1WorkerLimits) UnmarshalJSON(value []byte) error {
+func (j *AgentBudgetWorkerLimits) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -708,12 +699,12 @@ func (j *AgentBudgetV1WorkerLimits) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["maximumAttempts"]; raw != nil && !ok {
-		return fmt.Errorf("field maximumAttempts in AgentBudgetV1WorkerLimits: required")
+		return fmt.Errorf("field maximumAttempts in AgentBudgetWorkerLimits: required")
 	}
 	if _, ok := raw["maximumDurationMilliseconds"]; raw != nil && !ok {
-		return fmt.Errorf("field maximumDurationMilliseconds in AgentBudgetV1WorkerLimits: required")
+		return fmt.Errorf("field maximumDurationMilliseconds in AgentBudgetWorkerLimits: required")
 	}
-	type Plain AgentBudgetV1WorkerLimits
+	type Plain AgentBudgetWorkerLimits
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -730,12 +721,12 @@ func (j *AgentBudgetV1WorkerLimits) UnmarshalJSON(value []byte) error {
 	if 1 > plain.MaximumDurationMilliseconds {
 		return fmt.Errorf("field %s: must be >= %v", "maximumDurationMilliseconds", 1)
 	}
-	*j = AgentBudgetV1WorkerLimits(plain)
+	*j = AgentBudgetWorkerLimits(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentBudgetV1) UnmarshalJSON(value []byte) error {
+func (j *AgentBudget) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -743,104 +734,123 @@ func (j *AgentBudgetV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in AgentBudgetV1: required")
-	}
 	if _, ok := raw["currencyLimits"]; raw != nil && !ok {
-		return fmt.Errorf("field currencyLimits in AgentBudgetV1: required")
+		return fmt.Errorf("field currencyLimits in AgentBudget: required")
 	}
 	if _, ok := raw["exceedBehavior"]; raw != nil && !ok {
-		return fmt.Errorf("field exceedBehavior in AgentBudgetV1: required")
+		return fmt.Errorf("field exceedBehavior in AgentBudget: required")
 	}
 	if _, ok := raw["gpuLimits"]; raw != nil && !ok {
-		return fmt.Errorf("field gpuLimits in AgentBudgetV1: required")
+		return fmt.Errorf("field gpuLimits in AgentBudget: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in AgentBudgetV1: required")
+		return fmt.Errorf("field kind in AgentBudget: required")
 	}
 	if _, ok := raw["modelLimits"]; raw != nil && !ok {
-		return fmt.Errorf("field modelLimits in AgentBudgetV1: required")
+		return fmt.Errorf("field modelLimits in AgentBudget: required")
 	}
 	if _, ok := raw["policy"]; raw != nil && !ok {
-		return fmt.Errorf("field policy in AgentBudgetV1: required")
+		return fmt.Errorf("field policy in AgentBudget: required")
 	}
 	if _, ok := raw["reservationId"]; raw != nil && !ok {
-		return fmt.Errorf("field reservationId in AgentBudgetV1: required")
+		return fmt.Errorf("field reservationId in AgentBudget: required")
 	}
 	if _, ok := raw["tokenLimits"]; raw != nil && !ok {
-		return fmt.Errorf("field tokenLimits in AgentBudgetV1: required")
+		return fmt.Errorf("field tokenLimits in AgentBudget: required")
 	}
 	if _, ok := raw["workerLimits"]; raw != nil && !ok {
-		return fmt.Errorf("field workerLimits in AgentBudgetV1: required")
+		return fmt.Errorf("field workerLimits in AgentBudget: required")
 	}
-	type Plain AgentBudgetV1
+	type Plain AgentBudget
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	*j = AgentBudgetV1(plain)
+	*j = AgentBudget(plain)
 	return nil
 }
 
-// Bounded AgentDefinitionV1 wire contract governed by PRD 0012.
-type AgentDefinitionV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
+// Bounded AgentDefinition wire contract governed by PRD 0012 and ADR-018. A
+// definition is immutable by definitionId and definitionDigest and carries role,
+// owner, instruction digest, input/output schema identity, Tool profile,
+// delegation constraints, repair policy, and evaluation profile.
+type AgentDefinition struct {
+	// AllowedDelegates corresponds to the JSON schema field "allowedDelegates".
+	AllowedDelegates []SharedPrimitivesOpaqueId `json:"allowedDelegates" yaml:"allowedDelegates" mapstructure:"allowedDelegates"`
+
+	// DefinitionDigest corresponds to the JSON schema field "definitionDigest".
+	DefinitionDigest SharedPrimitivesDigest `json:"definitionDigest" yaml:"definitionDigest" mapstructure:"definitionDigest"`
 
 	// DefinitionId corresponds to the JSON schema field "definitionId".
-	DefinitionId SharedPrimitivesV1OpaqueId `json:"definitionId" yaml:"definitionId" mapstructure:"definitionId"`
+	DefinitionId SharedPrimitivesOpaqueId `json:"definitionId" yaml:"definitionId" mapstructure:"definitionId"`
 
 	// Domain corresponds to the JSON schema field "domain".
-	Domain AgentDefinitionV1Domain `json:"domain" yaml:"domain" mapstructure:"domain"`
+	Domain AgentDefinitionDomain `json:"domain" yaml:"domain" mapstructure:"domain"`
 
 	// Evaluators corresponds to the JSON schema field "evaluators".
-	Evaluators []SharedPrimitivesV1SchemaReference `json:"evaluators" yaml:"evaluators" mapstructure:"evaluators"`
+	Evaluators []SharedPrimitivesSchemaReference `json:"evaluators" yaml:"evaluators" mapstructure:"evaluators"`
 
 	// GuardrailPolicy corresponds to the JSON schema field "guardrailPolicy".
-	GuardrailPolicy SharedPrimitivesV1PolicyReference `json:"guardrailPolicy" yaml:"guardrailPolicy" mapstructure:"guardrailPolicy"`
+	GuardrailPolicy SharedPrimitivesPolicyReference `json:"guardrailPolicy" yaml:"guardrailPolicy" mapstructure:"guardrailPolicy"`
+
+	// InputSchema corresponds to the JSON schema field "inputSchema".
+	InputSchema SharedPrimitivesSchemaReference `json:"inputSchema" yaml:"inputSchema" mapstructure:"inputSchema"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
+	// MaximumDelegationDepth corresponds to the JSON schema field
+	// "maximumDelegationDepth".
+	MaximumDelegationDepth int `json:"maximumDelegationDepth" yaml:"maximumDelegationDepth" mapstructure:"maximumDelegationDepth"`
+
+	// MaximumFanOut corresponds to the JSON schema field "maximumFanOut".
+	MaximumFanOut int `json:"maximumFanOut" yaml:"maximumFanOut" mapstructure:"maximumFanOut"`
+
 	// MemoryPolicy corresponds to the JSON schema field "memoryPolicy".
-	MemoryPolicy SharedPrimitivesV1PolicyReference `json:"memoryPolicy" yaml:"memoryPolicy" mapstructure:"memoryPolicy"`
+	MemoryPolicy SharedPrimitivesPolicyReference `json:"memoryPolicy" yaml:"memoryPolicy" mapstructure:"memoryPolicy"`
 
 	// ModelPolicy corresponds to the JSON schema field "modelPolicy".
-	ModelPolicy SharedPrimitivesV1PolicyReference `json:"modelPolicy" yaml:"modelPolicy" mapstructure:"modelPolicy"`
+	ModelPolicy SharedPrimitivesPolicyReference `json:"modelPolicy" yaml:"modelPolicy" mapstructure:"modelPolicy"`
 
 	// OutputSchema corresponds to the JSON schema field "outputSchema".
-	OutputSchema SharedPrimitivesV1SchemaReference `json:"outputSchema" yaml:"outputSchema" mapstructure:"outputSchema"`
+	OutputSchema SharedPrimitivesSchemaReference `json:"outputSchema" yaml:"outputSchema" mapstructure:"outputSchema"`
+
+	// Owner corresponds to the JSON schema field "owner".
+	Owner string `json:"owner" yaml:"owner" mapstructure:"owner"`
 
 	// PromptDigest corresponds to the JSON schema field "promptDigest".
-	PromptDigest SharedPrimitivesV1Digest `json:"promptDigest" yaml:"promptDigest" mapstructure:"promptDigest"`
+	PromptDigest SharedPrimitivesDigest `json:"promptDigest" yaml:"promptDigest" mapstructure:"promptDigest"`
+
+	// RepairPolicy corresponds to the JSON schema field "repairPolicy".
+	RepairPolicy AgentDefinitionRepairPolicy `json:"repairPolicy" yaml:"repairPolicy" mapstructure:"repairPolicy"`
+
+	// Role corresponds to the JSON schema field "role".
+	Role AgentDefinitionRole `json:"role" yaml:"role" mapstructure:"role"`
 
 	// StopConditions corresponds to the JSON schema field "stopConditions".
-	StopConditions []AgentDefinitionV1StopConditionsElem `json:"stopConditions" yaml:"stopConditions" mapstructure:"stopConditions"`
+	StopConditions []AgentDefinitionStopConditionsElem `json:"stopConditions" yaml:"stopConditions" mapstructure:"stopConditions"`
 
 	// ToolProfile corresponds to the JSON schema field "toolProfile".
-	ToolProfile AgentDefinitionV1ToolProfile `json:"toolProfile" yaml:"toolProfile" mapstructure:"toolProfile"`
+	ToolProfile AgentDefinitionToolProfile `json:"toolProfile" yaml:"toolProfile" mapstructure:"toolProfile"`
 
 	// TurnLimit corresponds to the JSON schema field "turnLimit".
 	TurnLimit int `json:"turnLimit" yaml:"turnLimit" mapstructure:"turnLimit"`
-
-	// Version corresponds to the JSON schema field "version".
-	Version string `json:"version" yaml:"version" mapstructure:"version"`
 }
 
-type AgentDefinitionV1Domain string
+type AgentDefinitionDomain string
 
-const AgentDefinitionV1DomainContractRuntime AgentDefinitionV1Domain = "contract-runtime"
-const AgentDefinitionV1DomainPagixPage AgentDefinitionV1Domain = "pagix-page"
-const AgentDefinitionV1DomainPlatformAgent AgentDefinitionV1Domain = "platform-agent"
+const AgentDefinitionDomainContractRuntime AgentDefinitionDomain = "contract-runtime"
+const AgentDefinitionDomainPagixPage AgentDefinitionDomain = "pagix-page"
+const AgentDefinitionDomainPlatformAgent AgentDefinitionDomain = "platform-agent"
 
-var enumValues_AgentDefinitionV1Domain = []interface{}{
+var enumValues_AgentDefinitionDomain = []interface{}{
 	"platform-agent",
 	"pagix-page",
 	"contract-runtime",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentDefinitionV1Domain) UnmarshalJSON(value []byte) error {
+func (j *AgentDefinitionDomain) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -849,29 +859,133 @@ func (j *AgentDefinitionV1Domain) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentDefinitionV1Domain {
+	for _, expected := range enumValues_AgentDefinitionDomain {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentDefinitionV1Domain, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentDefinitionDomain, v)
 	}
-	*j = AgentDefinitionV1Domain(v)
+	*j = AgentDefinitionDomain(v)
 	return nil
 }
 
-type AgentDefinitionV1StopConditionsElem string
+type AgentDefinitionRepairPolicy struct {
+	// MaximumAttempts corresponds to the JSON schema field "maximumAttempts".
+	MaximumAttempts int `json:"maximumAttempts" yaml:"maximumAttempts" mapstructure:"maximumAttempts"`
 
-const AgentDefinitionV1StopConditionsElemApprovalRequired AgentDefinitionV1StopConditionsElem = "approval-required"
-const AgentDefinitionV1StopConditionsElemBudgetExhausted AgentDefinitionV1StopConditionsElem = "budget-exhausted"
-const AgentDefinitionV1StopConditionsElemCompleted AgentDefinitionV1StopConditionsElem = "completed"
-const AgentDefinitionV1StopConditionsElemInputRequired AgentDefinitionV1StopConditionsElem = "input-required"
-const AgentDefinitionV1StopConditionsElemPolicyBlocked AgentDefinitionV1StopConditionsElem = "policy-blocked"
-const AgentDefinitionV1StopConditionsElemRefused AgentDefinitionV1StopConditionsElem = "refused"
+	// Mode corresponds to the JSON schema field "mode".
+	Mode AgentDefinitionRepairPolicyMode `json:"mode" yaml:"mode" mapstructure:"mode"`
+}
 
-var enumValues_AgentDefinitionV1StopConditionsElem = []interface{}{
+type AgentDefinitionRepairPolicyMode string
+
+const AgentDefinitionRepairPolicyModeBoundedRepair AgentDefinitionRepairPolicyMode = "bounded-repair"
+const AgentDefinitionRepairPolicyModeReject AgentDefinitionRepairPolicyMode = "reject"
+
+var enumValues_AgentDefinitionRepairPolicyMode = []interface{}{
+	"reject",
+	"bounded-repair",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentDefinitionRepairPolicyMode) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AgentDefinitionRepairPolicyMode {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentDefinitionRepairPolicyMode, v)
+	}
+	*j = AgentDefinitionRepairPolicyMode(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentDefinitionRepairPolicy) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["maximumAttempts"]; raw != nil && !ok {
+		return fmt.Errorf("field maximumAttempts in AgentDefinitionRepairPolicy: required")
+	}
+	if _, ok := raw["mode"]; raw != nil && !ok {
+		return fmt.Errorf("field mode in AgentDefinitionRepairPolicy: required")
+	}
+	type Plain AgentDefinitionRepairPolicy
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 8 < plain.MaximumAttempts {
+		return fmt.Errorf("field %s: must be <= %v", "maximumAttempts", 8)
+	}
+	if 0 > plain.MaximumAttempts {
+		return fmt.Errorf("field %s: must be >= %v", "maximumAttempts", 0)
+	}
+	*j = AgentDefinitionRepairPolicy(plain)
+	return nil
+}
+
+type AgentDefinitionRole string
+
+const AgentDefinitionRoleManager AgentDefinitionRole = "manager"
+const AgentDefinitionRoleSpecialist AgentDefinitionRole = "specialist"
+
+var enumValues_AgentDefinitionRole = []interface{}{
+	"manager",
+	"specialist",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentDefinitionRole) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AgentDefinitionRole {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentDefinitionRole, v)
+	}
+	*j = AgentDefinitionRole(v)
+	return nil
+}
+
+type AgentDefinitionStopConditionsElem string
+
+const AgentDefinitionStopConditionsElemApprovalRequired AgentDefinitionStopConditionsElem = "approval-required"
+const AgentDefinitionStopConditionsElemBudgetExhausted AgentDefinitionStopConditionsElem = "budget-exhausted"
+const AgentDefinitionStopConditionsElemCompleted AgentDefinitionStopConditionsElem = "completed"
+const AgentDefinitionStopConditionsElemInputRequired AgentDefinitionStopConditionsElem = "input-required"
+const AgentDefinitionStopConditionsElemPolicyBlocked AgentDefinitionStopConditionsElem = "policy-blocked"
+const AgentDefinitionStopConditionsElemRefused AgentDefinitionStopConditionsElem = "refused"
+
+var enumValues_AgentDefinitionStopConditionsElem = []interface{}{
 	"completed",
 	"refused",
 	"budget-exhausted",
@@ -881,7 +995,7 @@ var enumValues_AgentDefinitionV1StopConditionsElem = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentDefinitionV1StopConditionsElem) UnmarshalJSON(value []byte) error {
+func (j *AgentDefinitionStopConditionsElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -890,30 +1004,30 @@ func (j *AgentDefinitionV1StopConditionsElem) UnmarshalJSON(value []byte) error 
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentDefinitionV1StopConditionsElem {
+	for _, expected := range enumValues_AgentDefinitionStopConditionsElem {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentDefinitionV1StopConditionsElem, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentDefinitionStopConditionsElem, v)
 	}
-	*j = AgentDefinitionV1StopConditionsElem(v)
+	*j = AgentDefinitionStopConditionsElem(v)
 	return nil
 }
 
-type AgentDefinitionV1ToolProfile struct {
+type AgentDefinitionToolProfile struct {
 	// MaximumParallelTools corresponds to the JSON schema field
 	// "maximumParallelTools".
 	MaximumParallelTools int `json:"maximumParallelTools" yaml:"maximumParallelTools" mapstructure:"maximumParallelTools"`
 
 	// Tools corresponds to the JSON schema field "tools".
-	Tools []SharedPrimitivesV1SchemaReference `json:"tools" yaml:"tools" mapstructure:"tools"`
+	Tools []SharedPrimitivesSchemaReference `json:"tools" yaml:"tools" mapstructure:"tools"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentDefinitionV1ToolProfile) UnmarshalJSON(value []byte) error {
+func (j *AgentDefinitionToolProfile) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -922,12 +1036,12 @@ func (j *AgentDefinitionV1ToolProfile) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["maximumParallelTools"]; raw != nil && !ok {
-		return fmt.Errorf("field maximumParallelTools in AgentDefinitionV1ToolProfile: required")
+		return fmt.Errorf("field maximumParallelTools in AgentDefinitionToolProfile: required")
 	}
 	if _, ok := raw["tools"]; raw != nil && !ok {
-		return fmt.Errorf("field tools in AgentDefinitionV1ToolProfile: required")
+		return fmt.Errorf("field tools in AgentDefinitionToolProfile: required")
 	}
-	type Plain AgentDefinitionV1ToolProfile
+	type Plain AgentDefinitionToolProfile
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -941,12 +1055,12 @@ func (j *AgentDefinitionV1ToolProfile) UnmarshalJSON(value []byte) error {
 	if len(plain.Tools) > 64 {
 		return fmt.Errorf("field %s length: must be <= %d", "tools", 64)
 	}
-	*j = AgentDefinitionV1ToolProfile(plain)
+	*j = AgentDefinitionToolProfile(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentDefinitionV1) UnmarshalJSON(value []byte) error {
+func (j *AgentDefinition) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -954,55 +1068,94 @@ func (j *AgentDefinitionV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in AgentDefinitionV1: required")
+	if _, ok := raw["allowedDelegates"]; raw != nil && !ok {
+		return fmt.Errorf("field allowedDelegates in AgentDefinition: required")
+	}
+	if _, ok := raw["definitionDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field definitionDigest in AgentDefinition: required")
 	}
 	if _, ok := raw["definitionId"]; raw != nil && !ok {
-		return fmt.Errorf("field definitionId in AgentDefinitionV1: required")
+		return fmt.Errorf("field definitionId in AgentDefinition: required")
 	}
 	if _, ok := raw["domain"]; raw != nil && !ok {
-		return fmt.Errorf("field domain in AgentDefinitionV1: required")
+		return fmt.Errorf("field domain in AgentDefinition: required")
 	}
 	if _, ok := raw["evaluators"]; raw != nil && !ok {
-		return fmt.Errorf("field evaluators in AgentDefinitionV1: required")
+		return fmt.Errorf("field evaluators in AgentDefinition: required")
 	}
 	if _, ok := raw["guardrailPolicy"]; raw != nil && !ok {
-		return fmt.Errorf("field guardrailPolicy in AgentDefinitionV1: required")
+		return fmt.Errorf("field guardrailPolicy in AgentDefinition: required")
+	}
+	if _, ok := raw["inputSchema"]; raw != nil && !ok {
+		return fmt.Errorf("field inputSchema in AgentDefinition: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in AgentDefinitionV1: required")
+		return fmt.Errorf("field kind in AgentDefinition: required")
+	}
+	if _, ok := raw["maximumDelegationDepth"]; raw != nil && !ok {
+		return fmt.Errorf("field maximumDelegationDepth in AgentDefinition: required")
+	}
+	if _, ok := raw["maximumFanOut"]; raw != nil && !ok {
+		return fmt.Errorf("field maximumFanOut in AgentDefinition: required")
 	}
 	if _, ok := raw["memoryPolicy"]; raw != nil && !ok {
-		return fmt.Errorf("field memoryPolicy in AgentDefinitionV1: required")
+		return fmt.Errorf("field memoryPolicy in AgentDefinition: required")
 	}
 	if _, ok := raw["modelPolicy"]; raw != nil && !ok {
-		return fmt.Errorf("field modelPolicy in AgentDefinitionV1: required")
+		return fmt.Errorf("field modelPolicy in AgentDefinition: required")
 	}
 	if _, ok := raw["outputSchema"]; raw != nil && !ok {
-		return fmt.Errorf("field outputSchema in AgentDefinitionV1: required")
+		return fmt.Errorf("field outputSchema in AgentDefinition: required")
+	}
+	if _, ok := raw["owner"]; raw != nil && !ok {
+		return fmt.Errorf("field owner in AgentDefinition: required")
 	}
 	if _, ok := raw["promptDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field promptDigest in AgentDefinitionV1: required")
+		return fmt.Errorf("field promptDigest in AgentDefinition: required")
+	}
+	if _, ok := raw["repairPolicy"]; raw != nil && !ok {
+		return fmt.Errorf("field repairPolicy in AgentDefinition: required")
+	}
+	if _, ok := raw["role"]; raw != nil && !ok {
+		return fmt.Errorf("field role in AgentDefinition: required")
 	}
 	if _, ok := raw["stopConditions"]; raw != nil && !ok {
-		return fmt.Errorf("field stopConditions in AgentDefinitionV1: required")
+		return fmt.Errorf("field stopConditions in AgentDefinition: required")
 	}
 	if _, ok := raw["toolProfile"]; raw != nil && !ok {
-		return fmt.Errorf("field toolProfile in AgentDefinitionV1: required")
+		return fmt.Errorf("field toolProfile in AgentDefinition: required")
 	}
 	if _, ok := raw["turnLimit"]; raw != nil && !ok {
-		return fmt.Errorf("field turnLimit in AgentDefinitionV1: required")
+		return fmt.Errorf("field turnLimit in AgentDefinition: required")
 	}
-	if _, ok := raw["version"]; raw != nil && !ok {
-		return fmt.Errorf("field version in AgentDefinitionV1: required")
-	}
-	type Plain AgentDefinitionV1
+	type Plain AgentDefinition
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if len(plain.AllowedDelegates) > 16 {
+		return fmt.Errorf("field %s length: must be <= %d", "allowedDelegates", 16)
+	}
 	if len(plain.Evaluators) > 32 {
 		return fmt.Errorf("field %s length: must be <= %d", "evaluators", 32)
+	}
+	if 8 < plain.MaximumDelegationDepth {
+		return fmt.Errorf("field %s: must be <= %v", "maximumDelegationDepth", 8)
+	}
+	if 0 > plain.MaximumDelegationDepth {
+		return fmt.Errorf("field %s: must be >= %v", "maximumDelegationDepth", 0)
+	}
+	if 64 < plain.MaximumFanOut {
+		return fmt.Errorf("field %s: must be <= %v", "maximumFanOut", 64)
+	}
+	if 0 > plain.MaximumFanOut {
+		return fmt.Errorf("field %s: must be >= %v", "maximumFanOut", 0)
+	}
+	if utf8.RuneCountInString(string(plain.Owner)) < 3 {
+		return fmt.Errorf("field %s length: must be >= %d", "owner", 3)
+	}
+	if utf8.RuneCountInString(string(plain.Owner)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "owner", 128)
 	}
 	if plain.StopConditions != nil && len(plain.StopConditions) < 1 {
 		return fmt.Errorf("field %s length: must be >= %d", "stopConditions", 1)
@@ -1016,69 +1169,66 @@ func (j *AgentDefinitionV1) UnmarshalJSON(value []byte) error {
 	if 1 > plain.TurnLimit {
 		return fmt.Errorf("field %s: must be >= %v", "turnLimit", 1)
 	}
-	if matched, _ := regexp.MatchString(`^[1-9][0-9]*\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`, string(plain.Version)); !matched {
-		return fmt.Errorf("field %s pattern match: must match %s", "Version", `^[1-9][0-9]*\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
-	}
-	if utf8.RuneCountInString(string(plain.Version)) < 5 {
-		return fmt.Errorf("field %s length: must be >= %d", "version", 5)
-	}
-	if utf8.RuneCountInString(string(plain.Version)) > 32 {
-		return fmt.Errorf("field %s length: must be <= %d", "version", 32)
-	}
-	*j = AgentDefinitionV1(plain)
+	*j = AgentDefinition(plain)
 	return nil
 }
 
-// Bounded AgentEventV1 wire contract governed by PRD 0012.
-type AgentEventV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
-
+// Bounded AgentEvent wire contract governed by PRD 0012.
+type AgentEvent struct {
 	// ArtifactReference corresponds to the JSON schema field "artifactReference".
-	ArtifactReference *SharedPrimitivesV1ArtifactReference `json:"artifactReference,omitempty,omitzero" yaml:"artifactReference,omitempty" mapstructure:"artifactReference,omitempty"`
+	ArtifactReference *SharedPrimitivesArtifactReference `json:"artifactReference,omitempty,omitzero" yaml:"artifactReference,omitempty" mapstructure:"artifactReference,omitempty"`
 
 	// ContractBomReference corresponds to the JSON schema field
 	// "contractBomReference".
-	ContractBomReference SharedPrimitivesV1ContractBomReferenceV1 `json:"contractBomReference" yaml:"contractBomReference" mapstructure:"contractBomReference"`
+	ContractBomReference SharedPrimitivesContractBomReference `json:"contractBomReference" yaml:"contractBomReference" mapstructure:"contractBomReference"`
 
 	// EventId corresponds to the JSON schema field "eventId".
-	EventId SharedPrimitivesV1OpaqueId `json:"eventId" yaml:"eventId" mapstructure:"eventId"`
+	EventId SharedPrimitivesOpaqueId `json:"eventId" yaml:"eventId" mapstructure:"eventId"`
 
 	// EventType corresponds to the JSON schema field "eventType".
-	EventType AgentEventV1EventType `json:"eventType" yaml:"eventType" mapstructure:"eventType"`
+	EventType AgentEventEventType `json:"eventType" yaml:"eventType" mapstructure:"eventType"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// OccurredAt corresponds to the JSON schema field "occurredAt".
-	OccurredAt SharedPrimitivesV1Timestamp `json:"occurredAt" yaml:"occurredAt" mapstructure:"occurredAt"`
+	OccurredAt SharedPrimitivesTimestamp `json:"occurredAt" yaml:"occurredAt" mapstructure:"occurredAt"`
 
 	// Payload corresponds to the JSON schema field "payload".
-	Payload SharedPrimitivesV1BoundedStringMap `json:"payload,omitempty,omitzero" yaml:"payload,omitempty" mapstructure:"payload,omitempty"`
+	Payload SharedPrimitivesBoundedStringMap `json:"payload,omitempty,omitzero" yaml:"payload,omitempty" mapstructure:"payload,omitempty"`
+
+	// ProjectId corresponds to the JSON schema field "projectId".
+	ProjectId SharedPrimitivesOpaqueId `json:"projectId" yaml:"projectId" mapstructure:"projectId"`
 
 	// RunId corresponds to the JSON schema field "runId".
-	RunId SharedPrimitivesV1OpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
+	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
 
 	// Sequence corresponds to the JSON schema field "sequence".
 	Sequence int `json:"sequence" yaml:"sequence" mapstructure:"sequence"`
 
+	// Subject corresponds to the JSON schema field "subject".
+	Subject AgentEventSubject `json:"subject" yaml:"subject" mapstructure:"subject"`
+
 	// TaskId corresponds to the JSON schema field "taskId".
-	TaskId *SharedPrimitivesV1OpaqueId `json:"taskId,omitempty,omitzero" yaml:"taskId,omitempty" mapstructure:"taskId,omitempty"`
+	TaskId *SharedPrimitivesOpaqueId `json:"taskId,omitempty,omitzero" yaml:"taskId,omitempty" mapstructure:"taskId,omitempty"`
 
 	// TraceContext corresponds to the JSON schema field "traceContext".
-	TraceContext SharedPrimitivesV1TraceContext `json:"traceContext" yaml:"traceContext" mapstructure:"traceContext"`
+	TraceContext SharedPrimitivesTraceContext `json:"traceContext" yaml:"traceContext" mapstructure:"traceContext"`
+
+	// WorkspaceId corresponds to the JSON schema field "workspaceId".
+	WorkspaceId SharedPrimitivesOpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
 }
 
-type AgentEventV1EventType string
+type AgentEventEventType string
 
-const AgentEventV1EventTypeRunApprovalRequested AgentEventV1EventType = "run.approval-requested"
-const AgentEventV1EventTypeRunArtifactAvailable AgentEventV1EventType = "run.artifact-available"
-const AgentEventV1EventTypeRunCreated AgentEventV1EventType = "run.created"
-const AgentEventV1EventTypeRunInputRequested AgentEventV1EventType = "run.input-requested"
-const AgentEventV1EventTypeRunProblemRecorded AgentEventV1EventType = "run.problem-recorded"
-const AgentEventV1EventTypeRunStateChanged AgentEventV1EventType = "run.state-changed"
+const AgentEventEventTypeRunApprovalRequested AgentEventEventType = "run.approval-requested"
+const AgentEventEventTypeRunArtifactAvailable AgentEventEventType = "run.artifact-available"
+const AgentEventEventTypeRunCreated AgentEventEventType = "run.created"
+const AgentEventEventTypeRunInputRequested AgentEventEventType = "run.input-requested"
+const AgentEventEventTypeRunProblemRecorded AgentEventEventType = "run.problem-recorded"
+const AgentEventEventTypeRunStateChanged AgentEventEventType = "run.state-changed"
 
-var enumValues_AgentEventV1EventType = []interface{}{
+var enumValues_AgentEventEventType = []interface{}{
 	"run.created",
 	"run.state-changed",
 	"run.input-requested",
@@ -1088,7 +1238,7 @@ var enumValues_AgentEventV1EventType = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentEventV1EventType) UnmarshalJSON(value []byte) error {
+func (j *AgentEventEventType) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1097,21 +1247,62 @@ func (j *AgentEventV1EventType) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentEventV1EventType {
+	for _, expected := range enumValues_AgentEventEventType {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentEventV1EventType, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentEventEventType, v)
 	}
-	*j = AgentEventV1EventType(v)
+	*j = AgentEventEventType(v)
+	return nil
+}
+
+type AgentEventSubject struct {
+	// SubjectId corresponds to the JSON schema field "subjectId".
+	SubjectId SharedPrimitivesOpaqueId `json:"subjectId" yaml:"subjectId" mapstructure:"subjectId"`
+
+	// SubjectType corresponds to the JSON schema field "subjectType".
+	SubjectType AgentEventSubjectSubjectType `json:"subjectType" yaml:"subjectType" mapstructure:"subjectType"`
+}
+
+type AgentEventSubjectSubjectType string
+
+const AgentEventSubjectSubjectTypeSystem AgentEventSubjectSubjectType = "system"
+const AgentEventSubjectSubjectTypeUser AgentEventSubjectSubjectType = "user"
+
+var enumValues_AgentEventSubjectSubjectType = []interface{}{
+	"user",
+	"system",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentEventSubjectSubjectType) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AgentEventSubjectSubjectType {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentEventSubjectSubjectType, v)
+	}
+	*j = AgentEventSubjectSubjectType(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentEventV1) UnmarshalJSON(value []byte) error {
+func (j *AgentEventSubject) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1119,34 +1310,64 @@ func (j *AgentEventV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in AgentEventV1: required")
+	if _, ok := raw["subjectId"]; raw != nil && !ok {
+		return fmt.Errorf("field subjectId in AgentEventSubject: required")
+	}
+	if _, ok := raw["subjectType"]; raw != nil && !ok {
+		return fmt.Errorf("field subjectType in AgentEventSubject: required")
+	}
+	type Plain AgentEventSubject
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = AgentEventSubject(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentEvent) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
 	}
 	if _, ok := raw["contractBomReference"]; raw != nil && !ok {
-		return fmt.Errorf("field contractBomReference in AgentEventV1: required")
+		return fmt.Errorf("field contractBomReference in AgentEvent: required")
 	}
 	if _, ok := raw["eventId"]; raw != nil && !ok {
-		return fmt.Errorf("field eventId in AgentEventV1: required")
+		return fmt.Errorf("field eventId in AgentEvent: required")
 	}
 	if _, ok := raw["eventType"]; raw != nil && !ok {
-		return fmt.Errorf("field eventType in AgentEventV1: required")
+		return fmt.Errorf("field eventType in AgentEvent: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in AgentEventV1: required")
+		return fmt.Errorf("field kind in AgentEvent: required")
 	}
 	if _, ok := raw["occurredAt"]; raw != nil && !ok {
-		return fmt.Errorf("field occurredAt in AgentEventV1: required")
+		return fmt.Errorf("field occurredAt in AgentEvent: required")
+	}
+	if _, ok := raw["projectId"]; raw != nil && !ok {
+		return fmt.Errorf("field projectId in AgentEvent: required")
 	}
 	if _, ok := raw["runId"]; raw != nil && !ok {
-		return fmt.Errorf("field runId in AgentEventV1: required")
+		return fmt.Errorf("field runId in AgentEvent: required")
 	}
 	if _, ok := raw["sequence"]; raw != nil && !ok {
-		return fmt.Errorf("field sequence in AgentEventV1: required")
+		return fmt.Errorf("field sequence in AgentEvent: required")
+	}
+	if _, ok := raw["subject"]; raw != nil && !ok {
+		return fmt.Errorf("field subject in AgentEvent: required")
 	}
 	if _, ok := raw["traceContext"]; raw != nil && !ok {
-		return fmt.Errorf("field traceContext in AgentEventV1: required")
+		return fmt.Errorf("field traceContext in AgentEvent: required")
 	}
-	type Plain AgentEventV1
+	if _, ok := raw["workspaceId"]; raw != nil && !ok {
+		return fmt.Errorf("field workspaceId in AgentEvent: required")
+	}
+	type Plain AgentEvent
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -1157,88 +1378,88 @@ func (j *AgentEventV1) UnmarshalJSON(value []byte) error {
 	if 1 > plain.Sequence {
 		return fmt.Errorf("field %s: must be >= %v", "sequence", 1)
 	}
-	*j = AgentEventV1(plain)
+	*j = AgentEvent(plain)
 	return nil
 }
 
-// Bounded AgentRunV1 wire contract governed by PRD 0012.
-type AgentRunV1 struct {
-	// ActorId corresponds to the JSON schema field "actorId".
-	ActorId SharedPrimitivesV1OpaqueId `json:"actorId" yaml:"actorId" mapstructure:"actorId"`
+// Bounded internal AgentEvidence wire contract governed by ADR-020. Evidence is
+// internal, separately sequenced, access-controlled execution fact and is never a
+// public AgentEvent.
+type AgentEvidence struct {
+	// ArtifactReference corresponds to the JSON schema field "artifactReference".
+	ArtifactReference *SharedPrimitivesArtifactReference `json:"artifactReference,omitempty,omitzero" yaml:"artifactReference,omitempty" mapstructure:"artifactReference,omitempty"`
 
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
+	// CausedByEvidenceId corresponds to the JSON schema field "causedByEvidenceId".
+	CausedByEvidenceId *SharedPrimitivesOpaqueId `json:"causedByEvidenceId,omitempty,omitzero" yaml:"causedByEvidenceId,omitempty" mapstructure:"causedByEvidenceId,omitempty"`
 
-	// Budget corresponds to the JSON schema field "budget".
-	Budget AgentBudgetV1 `json:"budget" yaml:"budget" mapstructure:"budget"`
+	// DataClassification corresponds to the JSON schema field "dataClassification".
+	DataClassification AgentEvidenceDataClassification `json:"dataClassification" yaml:"dataClassification" mapstructure:"dataClassification"`
 
-	// ContractBomReference corresponds to the JSON schema field
-	// "contractBomReference".
-	ContractBomReference SharedPrimitivesV1ContractBomReferenceV1 `json:"contractBomReference" yaml:"contractBomReference" mapstructure:"contractBomReference"`
+	// EvidenceId corresponds to the JSON schema field "evidenceId".
+	EvidenceId SharedPrimitivesOpaqueId `json:"evidenceId" yaml:"evidenceId" mapstructure:"evidenceId"`
 
-	// CreatedAt corresponds to the JSON schema field "createdAt".
-	CreatedAt SharedPrimitivesV1Timestamp `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+	// EvidenceSequence corresponds to the JSON schema field "evidenceSequence".
+	EvidenceSequence int `json:"evidenceSequence" yaml:"evidenceSequence" mapstructure:"evidenceSequence"`
 
-	// Domain corresponds to the JSON schema field "domain".
-	Domain AgentRunV1Domain `json:"domain" yaml:"domain" mapstructure:"domain"`
-
-	// ExecutionGeneration corresponds to the JSON schema field "executionGeneration".
-	ExecutionGeneration int `json:"executionGeneration" yaml:"executionGeneration" mapstructure:"executionGeneration"`
-
-	// Idempotency corresponds to the JSON schema field "idempotency".
-	Idempotency SharedPrimitivesV1Idempotency `json:"idempotency" yaml:"idempotency" mapstructure:"idempotency"`
+	// EvidenceType corresponds to the JSON schema field "evidenceType".
+	EvidenceType string `json:"evidenceType" yaml:"evidenceType" mapstructure:"evidenceType"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
-	// Operation corresponds to the JSON schema field "operation".
-	Operation AgentRunV1Operation `json:"operation" yaml:"operation" mapstructure:"operation"`
+	// OccurredAt corresponds to the JSON schema field "occurredAt".
+	OccurredAt SharedPrimitivesTimestamp `json:"occurredAt" yaml:"occurredAt" mapstructure:"occurredAt"`
 
-	// ParentRunId corresponds to the JSON schema field "parentRunId".
-	ParentRunId *SharedPrimitivesV1OpaqueId `json:"parentRunId,omitempty,omitzero" yaml:"parentRunId,omitempty" mapstructure:"parentRunId,omitempty"`
+	// Payload corresponds to the JSON schema field "payload".
+	Payload SharedPrimitivesBoundedStringMap `json:"payload,omitempty,omitzero" yaml:"payload,omitempty" mapstructure:"payload,omitempty"`
 
-	// Policy corresponds to the JSON schema field "policy".
-	Policy SharedPrimitivesV1PolicyReference `json:"policy" yaml:"policy" mapstructure:"policy"`
+	// Producer corresponds to the JSON schema field "producer".
+	Producer AgentEvidenceProducer `json:"producer" yaml:"producer" mapstructure:"producer"`
 
-	// Problem corresponds to the JSON schema field "problem".
-	Problem *ProblemDetailsV1 `json:"problem,omitempty,omitzero" yaml:"problem,omitempty" mapstructure:"problem,omitempty"`
+	// ProjectId corresponds to the JSON schema field "projectId".
+	ProjectId SharedPrimitivesOpaqueId `json:"projectId" yaml:"projectId" mapstructure:"projectId"`
 
-	// RootRunId corresponds to the JSON schema field "rootRunId".
-	RootRunId SharedPrimitivesV1OpaqueId `json:"rootRunId" yaml:"rootRunId" mapstructure:"rootRunId"`
+	// PublicEventId corresponds to the JSON schema field "publicEventId".
+	PublicEventId *SharedPrimitivesOpaqueId `json:"publicEventId,omitempty,omitzero" yaml:"publicEventId,omitempty" mapstructure:"publicEventId,omitempty"`
+
+	// RecordedAt corresponds to the JSON schema field "recordedAt".
+	RecordedAt SharedPrimitivesTimestamp `json:"recordedAt" yaml:"recordedAt" mapstructure:"recordedAt"`
+
+	// RetentionCategory corresponds to the JSON schema field "retentionCategory".
+	RetentionCategory AgentEvidenceRetentionCategory `json:"retentionCategory" yaml:"retentionCategory" mapstructure:"retentionCategory"`
 
 	// RunId corresponds to the JSON schema field "runId".
-	RunId SharedPrimitivesV1OpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
+	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
 
-	// Status corresponds to the JSON schema field "status".
-	Status AgentRunV1Status `json:"status" yaml:"status" mapstructure:"status"`
+	// TraceContext corresponds to the JSON schema field "traceContext".
+	TraceContext SharedPrimitivesTraceContext `json:"traceContext" yaml:"traceContext" mapstructure:"traceContext"`
 
-	// Target corresponds to the JSON schema field "target".
-	Target SharedPrimitivesV1TargetReference `json:"target" yaml:"target" mapstructure:"target"`
+	// TurnId corresponds to the JSON schema field "turnId".
+	TurnId *SharedPrimitivesOpaqueId `json:"turnId,omitempty,omitzero" yaml:"turnId,omitempty" mapstructure:"turnId,omitempty"`
 
-	// TenantId corresponds to the JSON schema field "tenantId".
-	TenantId SharedPrimitivesV1OpaqueId `json:"tenantId" yaml:"tenantId" mapstructure:"tenantId"`
-
-	// UpdatedAt corresponds to the JSON schema field "updatedAt".
-	UpdatedAt SharedPrimitivesV1Timestamp `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
+	// WorkflowId corresponds to the JSON schema field "workflowId".
+	WorkflowId *SharedPrimitivesOpaqueId `json:"workflowId,omitempty,omitzero" yaml:"workflowId,omitempty" mapstructure:"workflowId,omitempty"`
 
 	// WorkspaceId corresponds to the JSON schema field "workspaceId".
-	WorkspaceId SharedPrimitivesV1OpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
+	WorkspaceId SharedPrimitivesOpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
 }
 
-type AgentRunV1Domain string
+type AgentEvidenceDataClassification string
 
-const AgentRunV1DomainContractRuntime AgentRunV1Domain = "contract-runtime"
-const AgentRunV1DomainPagixPage AgentRunV1Domain = "pagix-page"
-const AgentRunV1DomainPlatformAgent AgentRunV1Domain = "platform-agent"
+const AgentEvidenceDataClassificationConfidential AgentEvidenceDataClassification = "confidential"
+const AgentEvidenceDataClassificationInternal AgentEvidenceDataClassification = "internal"
+const AgentEvidenceDataClassificationPublic AgentEvidenceDataClassification = "public"
+const AgentEvidenceDataClassificationRestricted AgentEvidenceDataClassification = "restricted"
 
-var enumValues_AgentRunV1Domain = []interface{}{
-	"platform-agent",
-	"pagix-page",
-	"contract-runtime",
+var enumValues_AgentEvidenceDataClassification = []interface{}{
+	"public",
+	"internal",
+	"confidential",
+	"restricted",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentRunV1Domain) UnmarshalJSON(value []byte) error {
+func (j *AgentEvidenceDataClassification) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1247,27 +1468,274 @@ func (j *AgentRunV1Domain) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentRunV1Domain {
+	for _, expected := range enumValues_AgentEvidenceDataClassification {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRunV1Domain, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentEvidenceDataClassification, v)
 	}
-	*j = AgentRunV1Domain(v)
+	*j = AgentEvidenceDataClassification(v)
 	return nil
 }
 
-type AgentRunV1Operation string
+type AgentEvidenceProducer struct {
+	// Component corresponds to the JSON schema field "component".
+	Component SharedPrimitivesOpaqueId `json:"component" yaml:"component" mapstructure:"component"`
 
-const AgentRunV1OperationArtifactValidation AgentRunV1Operation = "artifact-validation"
-const AgentRunV1OperationComponentPackage AgentRunV1Operation = "component-package"
-const AgentRunV1OperationImageOperation AgentRunV1Operation = "image-operation"
-const AgentRunV1OperationPageChange AgentRunV1Operation = "page-change"
+	// ContractBomDigest corresponds to the JSON schema field "contractBomDigest".
+	ContractBomDigest SharedPrimitivesDigest `json:"contractBomDigest" yaml:"contractBomDigest" mapstructure:"contractBomDigest"`
 
-var enumValues_AgentRunV1Operation = []interface{}{
+	// DefinitionDigest corresponds to the JSON schema field "definitionDigest".
+	DefinitionDigest *SharedPrimitivesDigest `json:"definitionDigest,omitempty,omitzero" yaml:"definitionDigest,omitempty" mapstructure:"definitionDigest,omitempty"`
+
+	// PolicyDigest corresponds to the JSON schema field "policyDigest".
+	PolicyDigest SharedPrimitivesDigest `json:"policyDigest" yaml:"policyDigest" mapstructure:"policyDigest"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentEvidenceProducer) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["component"]; raw != nil && !ok {
+		return fmt.Errorf("field component in AgentEvidenceProducer: required")
+	}
+	if _, ok := raw["contractBomDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field contractBomDigest in AgentEvidenceProducer: required")
+	}
+	if _, ok := raw["policyDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field policyDigest in AgentEvidenceProducer: required")
+	}
+	type Plain AgentEvidenceProducer
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = AgentEvidenceProducer(plain)
+	return nil
+}
+
+type AgentEvidenceRetentionCategory string
+
+const AgentEvidenceRetentionCategoryAudit AgentEvidenceRetentionCategory = "audit"
+const AgentEvidenceRetentionCategoryOperational AgentEvidenceRetentionCategory = "operational"
+const AgentEvidenceRetentionCategorySecurity AgentEvidenceRetentionCategory = "security"
+
+var enumValues_AgentEvidenceRetentionCategory = []interface{}{
+	"operational",
+	"audit",
+	"security",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentEvidenceRetentionCategory) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AgentEvidenceRetentionCategory {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentEvidenceRetentionCategory, v)
+	}
+	*j = AgentEvidenceRetentionCategory(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentEvidence) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["dataClassification"]; raw != nil && !ok {
+		return fmt.Errorf("field dataClassification in AgentEvidence: required")
+	}
+	if _, ok := raw["evidenceId"]; raw != nil && !ok {
+		return fmt.Errorf("field evidenceId in AgentEvidence: required")
+	}
+	if _, ok := raw["evidenceSequence"]; raw != nil && !ok {
+		return fmt.Errorf("field evidenceSequence in AgentEvidence: required")
+	}
+	if _, ok := raw["evidenceType"]; raw != nil && !ok {
+		return fmt.Errorf("field evidenceType in AgentEvidence: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in AgentEvidence: required")
+	}
+	if _, ok := raw["occurredAt"]; raw != nil && !ok {
+		return fmt.Errorf("field occurredAt in AgentEvidence: required")
+	}
+	if _, ok := raw["producer"]; raw != nil && !ok {
+		return fmt.Errorf("field producer in AgentEvidence: required")
+	}
+	if _, ok := raw["projectId"]; raw != nil && !ok {
+		return fmt.Errorf("field projectId in AgentEvidence: required")
+	}
+	if _, ok := raw["recordedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field recordedAt in AgentEvidence: required")
+	}
+	if _, ok := raw["retentionCategory"]; raw != nil && !ok {
+		return fmt.Errorf("field retentionCategory in AgentEvidence: required")
+	}
+	if _, ok := raw["runId"]; raw != nil && !ok {
+		return fmt.Errorf("field runId in AgentEvidence: required")
+	}
+	if _, ok := raw["traceContext"]; raw != nil && !ok {
+		return fmt.Errorf("field traceContext in AgentEvidence: required")
+	}
+	if _, ok := raw["workspaceId"]; raw != nil && !ok {
+		return fmt.Errorf("field workspaceId in AgentEvidence: required")
+	}
+	type Plain AgentEvidence
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 9007199254740991 < plain.EvidenceSequence {
+		return fmt.Errorf("field %s: must be <= %v", "evidenceSequence", 9007199254740991)
+	}
+	if 1 > plain.EvidenceSequence {
+		return fmt.Errorf("field %s: must be >= %v", "evidenceSequence", 1)
+	}
+	if matched, _ := regexp.MatchString(`^(agent|model|tool|validation|artifact|approval|commit|domain|recovery)\.[a-z0-9][a-z0-9.-]*$`, string(plain.EvidenceType)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "EvidenceType", `^(agent|model|tool|validation|artifact|approval|commit|domain|recovery)\.[a-z0-9][a-z0-9.-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.EvidenceType)) < 6 {
+		return fmt.Errorf("field %s length: must be >= %d", "evidenceType", 6)
+	}
+	if utf8.RuneCountInString(string(plain.EvidenceType)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "evidenceType", 128)
+	}
+	*j = AgentEvidence(plain)
+	return nil
+}
+
+// Bounded AgentRun wire contract governed by PRD 0012.
+type AgentRun struct {
+	// ActorId corresponds to the JSON schema field "actorId".
+	ActorId SharedPrimitivesOpaqueId `json:"actorId" yaml:"actorId" mapstructure:"actorId"`
+
+	// Budget corresponds to the JSON schema field "budget".
+	Budget AgentBudget `json:"budget" yaml:"budget" mapstructure:"budget"`
+
+	// ContractBomReference corresponds to the JSON schema field
+	// "contractBomReference".
+	ContractBomReference SharedPrimitivesContractBomReference `json:"contractBomReference" yaml:"contractBomReference" mapstructure:"contractBomReference"`
+
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt SharedPrimitivesTimestamp `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Definition corresponds to the JSON schema field "definition".
+	Definition SharedPrimitivesDefinitionReference `json:"definition" yaml:"definition" mapstructure:"definition"`
+
+	// Domain corresponds to the JSON schema field "domain".
+	Domain AgentRunDomain `json:"domain" yaml:"domain" mapstructure:"domain"`
+
+	// ExecutionGeneration corresponds to the JSON schema field "executionGeneration".
+	ExecutionGeneration int `json:"executionGeneration" yaml:"executionGeneration" mapstructure:"executionGeneration"`
+
+	// Idempotency corresponds to the JSON schema field "idempotency".
+	Idempotency SharedPrimitivesIdempotency `json:"idempotency" yaml:"idempotency" mapstructure:"idempotency"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Operation corresponds to the JSON schema field "operation".
+	Operation AgentRunOperation `json:"operation" yaml:"operation" mapstructure:"operation"`
+
+	// ParentRunId corresponds to the JSON schema field "parentRunId".
+	ParentRunId *SharedPrimitivesOpaqueId `json:"parentRunId,omitempty,omitzero" yaml:"parentRunId,omitempty" mapstructure:"parentRunId,omitempty"`
+
+	// Policy corresponds to the JSON schema field "policy".
+	Policy SharedPrimitivesPolicyReference `json:"policy" yaml:"policy" mapstructure:"policy"`
+
+	// Problem corresponds to the JSON schema field "problem".
+	Problem *ProblemDetails `json:"problem,omitempty,omitzero" yaml:"problem,omitempty" mapstructure:"problem,omitempty"`
+
+	// ResourceRevision corresponds to the JSON schema field "resourceRevision".
+	ResourceRevision int `json:"resourceRevision" yaml:"resourceRevision" mapstructure:"resourceRevision"`
+
+	// RootRunId corresponds to the JSON schema field "rootRunId".
+	RootRunId SharedPrimitivesOpaqueId `json:"rootRunId" yaml:"rootRunId" mapstructure:"rootRunId"`
+
+	// RunId corresponds to the JSON schema field "runId".
+	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
+
+	// Status corresponds to the JSON schema field "status".
+	Status AgentRunStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// Target corresponds to the JSON schema field "target".
+	Target SharedPrimitivesTargetReference `json:"target" yaml:"target" mapstructure:"target"`
+
+	// UpdatedAt corresponds to the JSON schema field "updatedAt".
+	UpdatedAt SharedPrimitivesTimestamp `json:"updatedAt" yaml:"updatedAt" mapstructure:"updatedAt"`
+
+	// WorkspaceId corresponds to the JSON schema field "workspaceId".
+	WorkspaceId SharedPrimitivesOpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
+}
+
+type AgentRunDomain string
+
+const AgentRunDomainContractRuntime AgentRunDomain = "contract-runtime"
+const AgentRunDomainPagixPage AgentRunDomain = "pagix-page"
+const AgentRunDomainPlatformAgent AgentRunDomain = "platform-agent"
+
+var enumValues_AgentRunDomain = []interface{}{
+	"platform-agent",
+	"pagix-page",
+	"contract-runtime",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRunDomain) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AgentRunDomain {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRunDomain, v)
+	}
+	*j = AgentRunDomain(v)
+	return nil
+}
+
+type AgentRunOperation string
+
+const AgentRunOperationArtifactValidation AgentRunOperation = "artifact-validation"
+const AgentRunOperationComponentPackage AgentRunOperation = "component-package"
+const AgentRunOperationImageOperation AgentRunOperation = "image-operation"
+const AgentRunOperationPageChange AgentRunOperation = "page-change"
+
+var enumValues_AgentRunOperation = []interface{}{
 	"page-change",
 	"artifact-validation",
 	"image-operation",
@@ -1275,7 +1743,7 @@ var enumValues_AgentRunV1Operation = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentRunV1Operation) UnmarshalJSON(value []byte) error {
+func (j *AgentRunOperation) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1284,40 +1752,40 @@ func (j *AgentRunV1Operation) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentRunV1Operation {
+	for _, expected := range enumValues_AgentRunOperation {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRunV1Operation, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRunOperation, v)
 	}
-	*j = AgentRunV1Operation(v)
+	*j = AgentRunOperation(v)
 	return nil
 }
 
-type AgentRunV1Status string
+type AgentRunStatus string
 
-const AgentRunV1StatusAwaitingApproval AgentRunV1Status = "awaiting_approval"
-const AgentRunV1StatusAwaitingDomainConfirmation AgentRunV1Status = "awaiting_domain_confirmation"
-const AgentRunV1StatusAwaitingInput AgentRunV1Status = "awaiting_input"
-const AgentRunV1StatusAwaitingReview AgentRunV1Status = "awaiting_review"
-const AgentRunV1StatusCancelled AgentRunV1Status = "cancelled"
-const AgentRunV1StatusCancelling AgentRunV1Status = "cancelling"
-const AgentRunV1StatusCommitting AgentRunV1Status = "committing"
-const AgentRunV1StatusCompleted AgentRunV1Status = "completed"
-const AgentRunV1StatusConflict AgentRunV1Status = "conflict"
-const AgentRunV1StatusCreated AgentRunV1Status = "created"
-const AgentRunV1StatusDiscarded AgentRunV1Status = "discarded"
-const AgentRunV1StatusExecuting AgentRunV1Status = "executing"
-const AgentRunV1StatusFailed AgentRunV1Status = "failed"
-const AgentRunV1StatusPlanning AgentRunV1Status = "planning"
-const AgentRunV1StatusPreparing AgentRunV1Status = "preparing"
-const AgentRunV1StatusRefused AgentRunV1Status = "refused"
-const AgentRunV1StatusValidating AgentRunV1Status = "validating"
+const AgentRunStatusAwaitingApproval AgentRunStatus = "awaiting_approval"
+const AgentRunStatusAwaitingDomainConfirmation AgentRunStatus = "awaiting_domain_confirmation"
+const AgentRunStatusAwaitingInput AgentRunStatus = "awaiting_input"
+const AgentRunStatusAwaitingReview AgentRunStatus = "awaiting_review"
+const AgentRunStatusCancelled AgentRunStatus = "cancelled"
+const AgentRunStatusCancelling AgentRunStatus = "cancelling"
+const AgentRunStatusCommitting AgentRunStatus = "committing"
+const AgentRunStatusCompleted AgentRunStatus = "completed"
+const AgentRunStatusConflict AgentRunStatus = "conflict"
+const AgentRunStatusCreated AgentRunStatus = "created"
+const AgentRunStatusDiscarded AgentRunStatus = "discarded"
+const AgentRunStatusExecuting AgentRunStatus = "executing"
+const AgentRunStatusFailed AgentRunStatus = "failed"
+const AgentRunStatusPlanning AgentRunStatus = "planning"
+const AgentRunStatusPreparing AgentRunStatus = "preparing"
+const AgentRunStatusRefused AgentRunStatus = "refused"
+const AgentRunStatusValidating AgentRunStatus = "validating"
 
-var enumValues_AgentRunV1Status = []interface{}{
+var enumValues_AgentRunStatus = []interface{}{
 	"created",
 	"preparing",
 	"planning",
@@ -1338,7 +1806,7 @@ var enumValues_AgentRunV1Status = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentRunV1Status) UnmarshalJSON(value []byte) error {
+func (j *AgentRunStatus) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1347,21 +1815,21 @@ func (j *AgentRunV1Status) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentRunV1Status {
+	for _, expected := range enumValues_AgentRunStatus {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRunV1Status, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRunStatus, v)
 	}
-	*j = AgentRunV1Status(v)
+	*j = AgentRunStatus(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentRunV1) UnmarshalJSON(value []byte) error {
+func (j *AgentRun) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1370,60 +1838,60 @@ func (j *AgentRunV1) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["actorId"]; raw != nil && !ok {
-		return fmt.Errorf("field actorId in AgentRunV1: required")
-	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in AgentRunV1: required")
+		return fmt.Errorf("field actorId in AgentRun: required")
 	}
 	if _, ok := raw["budget"]; raw != nil && !ok {
-		return fmt.Errorf("field budget in AgentRunV1: required")
+		return fmt.Errorf("field budget in AgentRun: required")
 	}
 	if _, ok := raw["contractBomReference"]; raw != nil && !ok {
-		return fmt.Errorf("field contractBomReference in AgentRunV1: required")
+		return fmt.Errorf("field contractBomReference in AgentRun: required")
 	}
 	if _, ok := raw["createdAt"]; raw != nil && !ok {
-		return fmt.Errorf("field createdAt in AgentRunV1: required")
+		return fmt.Errorf("field createdAt in AgentRun: required")
+	}
+	if _, ok := raw["definition"]; raw != nil && !ok {
+		return fmt.Errorf("field definition in AgentRun: required")
 	}
 	if _, ok := raw["domain"]; raw != nil && !ok {
-		return fmt.Errorf("field domain in AgentRunV1: required")
+		return fmt.Errorf("field domain in AgentRun: required")
 	}
 	if _, ok := raw["executionGeneration"]; raw != nil && !ok {
-		return fmt.Errorf("field executionGeneration in AgentRunV1: required")
+		return fmt.Errorf("field executionGeneration in AgentRun: required")
 	}
 	if _, ok := raw["idempotency"]; raw != nil && !ok {
-		return fmt.Errorf("field idempotency in AgentRunV1: required")
+		return fmt.Errorf("field idempotency in AgentRun: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in AgentRunV1: required")
+		return fmt.Errorf("field kind in AgentRun: required")
 	}
 	if _, ok := raw["operation"]; raw != nil && !ok {
-		return fmt.Errorf("field operation in AgentRunV1: required")
+		return fmt.Errorf("field operation in AgentRun: required")
 	}
 	if _, ok := raw["policy"]; raw != nil && !ok {
-		return fmt.Errorf("field policy in AgentRunV1: required")
+		return fmt.Errorf("field policy in AgentRun: required")
+	}
+	if _, ok := raw["resourceRevision"]; raw != nil && !ok {
+		return fmt.Errorf("field resourceRevision in AgentRun: required")
 	}
 	if _, ok := raw["rootRunId"]; raw != nil && !ok {
-		return fmt.Errorf("field rootRunId in AgentRunV1: required")
+		return fmt.Errorf("field rootRunId in AgentRun: required")
 	}
 	if _, ok := raw["runId"]; raw != nil && !ok {
-		return fmt.Errorf("field runId in AgentRunV1: required")
+		return fmt.Errorf("field runId in AgentRun: required")
 	}
 	if _, ok := raw["status"]; raw != nil && !ok {
-		return fmt.Errorf("field status in AgentRunV1: required")
+		return fmt.Errorf("field status in AgentRun: required")
 	}
 	if _, ok := raw["target"]; raw != nil && !ok {
-		return fmt.Errorf("field target in AgentRunV1: required")
-	}
-	if _, ok := raw["tenantId"]; raw != nil && !ok {
-		return fmt.Errorf("field tenantId in AgentRunV1: required")
+		return fmt.Errorf("field target in AgentRun: required")
 	}
 	if _, ok := raw["updatedAt"]; raw != nil && !ok {
-		return fmt.Errorf("field updatedAt in AgentRunV1: required")
+		return fmt.Errorf("field updatedAt in AgentRun: required")
 	}
 	if _, ok := raw["workspaceId"]; raw != nil && !ok {
-		return fmt.Errorf("field workspaceId in AgentRunV1: required")
+		return fmt.Errorf("field workspaceId in AgentRun: required")
 	}
-	type Plain AgentRunV1
+	type Plain AgentRun
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -1434,85 +1902,65 @@ func (j *AgentRunV1) UnmarshalJSON(value []byte) error {
 	if 0 > plain.ExecutionGeneration {
 		return fmt.Errorf("field %s: must be >= %v", "executionGeneration", 0)
 	}
-	*j = AgentRunV1(plain)
+	if 9007199254740991 < plain.ResourceRevision {
+		return fmt.Errorf("field %s: must be <= %v", "resourceRevision", 9007199254740991)
+	}
+	if 0 > plain.ResourceRevision {
+		return fmt.Errorf("field %s: must be >= %v", "resourceRevision", 0)
+	}
+	*j = AgentRun(plain)
 	return nil
 }
 
-// Bounded AgentTaskV1 wire contract governed by PRD 0012.
-type AgentTaskV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
+// Provisional streaming transport shape governed by ADR-020. Deltas are not
+// AgentEvent, carry no public sequence, may be dropped, combined, sampled, or
+// rate-limited, and can never satisfy a Validator, approval, or final-state
+// reconstruction.
+type AgentStreamDelta struct {
+	// Channel corresponds to the JSON schema field "channel".
+	Channel AgentStreamDeltaChannel `json:"channel" yaml:"channel" mapstructure:"channel"`
 
-	// ArtifactInputs corresponds to the JSON schema field "artifactInputs".
-	ArtifactInputs []SharedPrimitivesV1ArtifactReference `json:"artifactInputs" yaml:"artifactInputs" mapstructure:"artifactInputs"`
-
-	// Capability corresponds to the JSON schema field "capability".
-	Capability AgentTaskV1Capability `json:"capability" yaml:"capability" mapstructure:"capability"`
-
-	// CapabilityVersion corresponds to the JSON schema field "capabilityVersion".
-	CapabilityVersion AgentTaskV1CapabilityVersion `json:"capabilityVersion" yaml:"capabilityVersion" mapstructure:"capabilityVersion"`
-
-	// ContractBomReference corresponds to the JSON schema field
-	// "contractBomReference".
-	ContractBomReference SharedPrimitivesV1ContractBomReferenceV1 `json:"contractBomReference" yaml:"contractBomReference" mapstructure:"contractBomReference"`
-
-	// ExecutionGeneration corresponds to the JSON schema field "executionGeneration".
-	ExecutionGeneration int `json:"executionGeneration" yaml:"executionGeneration" mapstructure:"executionGeneration"`
-
-	// Idempotency corresponds to the JSON schema field "idempotency".
-	Idempotency SharedPrimitivesV1Idempotency `json:"idempotency" yaml:"idempotency" mapstructure:"idempotency"`
-
-	// InputSchemaVersion corresponds to the JSON schema field "inputSchemaVersion".
-	InputSchemaVersion SharedPrimitivesV1SchemaReference `json:"inputSchemaVersion" yaml:"inputSchemaVersion" mapstructure:"inputSchemaVersion"`
+	// EmittedAt corresponds to the JSON schema field "emittedAt".
+	EmittedAt SharedPrimitivesTimestamp `json:"emittedAt" yaml:"emittedAt" mapstructure:"emittedAt"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
-	// Limits corresponds to the JSON schema field "limits".
-	Limits SharedPrimitivesV1ResourceLimits `json:"limits" yaml:"limits" mapstructure:"limits"`
+	// Payload corresponds to the JSON schema field "payload".
+	Payload SharedPrimitivesBoundedStringMap `json:"payload" yaml:"payload" mapstructure:"payload"`
 
-	// Parameters corresponds to the JSON schema field "parameters".
-	Parameters SharedPrimitivesV1BoundedStringMap `json:"parameters" yaml:"parameters" mapstructure:"parameters"`
-
-	// Resources corresponds to the JSON schema field "resources".
-	Resources AgentTaskV1Resources `json:"resources" yaml:"resources" mapstructure:"resources"`
-
-	// RootRunId corresponds to the JSON schema field "rootRunId".
-	RootRunId SharedPrimitivesV1OpaqueId `json:"rootRunId" yaml:"rootRunId" mapstructure:"rootRunId"`
+	// Provisional corresponds to the JSON schema field "provisional".
+	Provisional interface{} `json:"provisional" yaml:"provisional" mapstructure:"provisional"`
 
 	// RunId corresponds to the JSON schema field "runId".
-	RunId SharedPrimitivesV1OpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
-
-	// TaskId corresponds to the JSON schema field "taskId".
-	TaskId SharedPrimitivesV1OpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
+	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
 
 	// TraceContext corresponds to the JSON schema field "traceContext".
-	TraceContext SharedPrimitivesV1TraceContext `json:"traceContext" yaml:"traceContext" mapstructure:"traceContext"`
+	TraceContext *SharedPrimitivesTraceContext `json:"traceContext,omitempty,omitzero" yaml:"traceContext,omitempty" mapstructure:"traceContext,omitempty"`
+
+	// TurnId corresponds to the JSON schema field "turnId".
+	TurnId *SharedPrimitivesOpaqueId `json:"turnId,omitempty,omitzero" yaml:"turnId,omitempty" mapstructure:"turnId,omitempty"`
+
+	// WorkspaceId corresponds to the JSON schema field "workspaceId".
+	WorkspaceId SharedPrimitivesOpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
 }
 
-type AgentTaskV1Capability string
+type AgentStreamDeltaChannel string
 
-const AgentTaskV1CapabilityArtifactScan AgentTaskV1Capability = "artifact.scan"
-const AgentTaskV1CapabilityContractValidate AgentTaskV1Capability = "contract.validate"
-const AgentTaskV1CapabilityFakeExecute AgentTaskV1Capability = "fake.execute"
-const AgentTaskV1CapabilityProviderInvoke AgentTaskV1Capability = "provider.invoke"
+const AgentStreamDeltaChannelField AgentStreamDeltaChannel = "field"
+const AgentStreamDeltaChannelProgress AgentStreamDeltaChannel = "progress"
+const AgentStreamDeltaChannelText AgentStreamDeltaChannel = "text"
+const AgentStreamDeltaChannelToken AgentStreamDeltaChannel = "token"
 
-type AgentTaskV1CapabilityVersion string
-
-const AgentTaskV1CapabilityVersionArtifactScanV1 AgentTaskV1CapabilityVersion = "artifact.scan/v1"
-const AgentTaskV1CapabilityVersionContractValidateV1 AgentTaskV1CapabilityVersion = "contract.validate/v1"
-const AgentTaskV1CapabilityVersionFakeExecuteV1 AgentTaskV1CapabilityVersion = "fake.execute/v1"
-const AgentTaskV1CapabilityVersionProviderInvokeV1 AgentTaskV1CapabilityVersion = "provider.invoke/v1"
-
-var enumValues_AgentTaskV1CapabilityVersion = []interface{}{
-	"provider.invoke/v1",
-	"contract.validate/v1",
-	"artifact.scan/v1",
-	"fake.execute/v1",
+var enumValues_AgentStreamDeltaChannel = []interface{}{
+	"token",
+	"text",
+	"field",
+	"progress",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentTaskV1CapabilityVersion) UnmarshalJSON(value []byte) error {
+func (j *AgentStreamDeltaChannel) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1521,20 +1969,112 @@ func (j *AgentTaskV1CapabilityVersion) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentTaskV1CapabilityVersion {
+	for _, expected := range enumValues_AgentStreamDeltaChannel {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentTaskV1CapabilityVersion, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentStreamDeltaChannel, v)
 	}
-	*j = AgentTaskV1CapabilityVersion(v)
+	*j = AgentStreamDeltaChannel(v)
 	return nil
 }
 
-var enumValues_AgentTaskV1Capability = []interface{}{
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentStreamDelta) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["channel"]; raw != nil && !ok {
+		return fmt.Errorf("field channel in AgentStreamDelta: required")
+	}
+	if _, ok := raw["emittedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field emittedAt in AgentStreamDelta: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in AgentStreamDelta: required")
+	}
+	if _, ok := raw["payload"]; raw != nil && !ok {
+		return fmt.Errorf("field payload in AgentStreamDelta: required")
+	}
+	if _, ok := raw["provisional"]; raw != nil && !ok {
+		return fmt.Errorf("field provisional in AgentStreamDelta: required")
+	}
+	if _, ok := raw["runId"]; raw != nil && !ok {
+		return fmt.Errorf("field runId in AgentStreamDelta: required")
+	}
+	if _, ok := raw["workspaceId"]; raw != nil && !ok {
+		return fmt.Errorf("field workspaceId in AgentStreamDelta: required")
+	}
+	type Plain AgentStreamDelta
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = AgentStreamDelta(plain)
+	return nil
+}
+
+// Bounded AgentTask wire contract governed by PRD 0012.
+type AgentTask struct {
+	// ArtifactInputs corresponds to the JSON schema field "artifactInputs".
+	ArtifactInputs []SharedPrimitivesArtifactReference `json:"artifactInputs" yaml:"artifactInputs" mapstructure:"artifactInputs"`
+
+	// Capability corresponds to the JSON schema field "capability".
+	Capability AgentTaskCapability `json:"capability" yaml:"capability" mapstructure:"capability"`
+
+	// ContractBomReference corresponds to the JSON schema field
+	// "contractBomReference".
+	ContractBomReference SharedPrimitivesContractBomReference `json:"contractBomReference" yaml:"contractBomReference" mapstructure:"contractBomReference"`
+
+	// ExecutionGeneration corresponds to the JSON schema field "executionGeneration".
+	ExecutionGeneration int `json:"executionGeneration" yaml:"executionGeneration" mapstructure:"executionGeneration"`
+
+	// Idempotency corresponds to the JSON schema field "idempotency".
+	Idempotency SharedPrimitivesIdempotency `json:"idempotency" yaml:"idempotency" mapstructure:"idempotency"`
+
+	// InputSchema corresponds to the JSON schema field "inputSchema".
+	InputSchema SharedPrimitivesSchemaReference `json:"inputSchema" yaml:"inputSchema" mapstructure:"inputSchema"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Limits corresponds to the JSON schema field "limits".
+	Limits SharedPrimitivesResourceLimits `json:"limits" yaml:"limits" mapstructure:"limits"`
+
+	// Parameters corresponds to the JSON schema field "parameters".
+	Parameters SharedPrimitivesBoundedStringMap `json:"parameters" yaml:"parameters" mapstructure:"parameters"`
+
+	// Resources corresponds to the JSON schema field "resources".
+	Resources AgentTaskResources `json:"resources" yaml:"resources" mapstructure:"resources"`
+
+	// RootRunId corresponds to the JSON schema field "rootRunId".
+	RootRunId SharedPrimitivesOpaqueId `json:"rootRunId" yaml:"rootRunId" mapstructure:"rootRunId"`
+
+	// RunId corresponds to the JSON schema field "runId".
+	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
+
+	// TaskId corresponds to the JSON schema field "taskId".
+	TaskId SharedPrimitivesOpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
+
+	// TraceContext corresponds to the JSON schema field "traceContext".
+	TraceContext SharedPrimitivesTraceContext `json:"traceContext" yaml:"traceContext" mapstructure:"traceContext"`
+}
+
+type AgentTaskCapability string
+
+const AgentTaskCapabilityArtifactScan AgentTaskCapability = "artifact.scan"
+const AgentTaskCapabilityContractValidate AgentTaskCapability = "contract.validate"
+const AgentTaskCapabilityFakeExecute AgentTaskCapability = "fake.execute"
+const AgentTaskCapabilityProviderInvoke AgentTaskCapability = "provider.invoke"
+
+var enumValues_AgentTaskCapability = []interface{}{
 	"provider.invoke",
 	"contract.validate",
 	"artifact.scan",
@@ -1542,7 +2082,7 @@ var enumValues_AgentTaskV1Capability = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentTaskV1Capability) UnmarshalJSON(value []byte) error {
+func (j *AgentTaskCapability) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1551,35 +2091,35 @@ func (j *AgentTaskV1Capability) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentTaskV1Capability {
+	for _, expected := range enumValues_AgentTaskCapability {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentTaskV1Capability, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentTaskCapability, v)
 	}
-	*j = AgentTaskV1Capability(v)
+	*j = AgentTaskCapability(v)
 	return nil
 }
 
-type AgentTaskV1Resources struct {
+type AgentTaskResources struct {
 	// Priority corresponds to the JSON schema field "priority".
 	Priority int `json:"priority" yaml:"priority" mapstructure:"priority"`
 
 	// ResourceClass corresponds to the JSON schema field "resourceClass".
-	ResourceClass AgentTaskV1ResourcesResourceClass `json:"resourceClass" yaml:"resourceClass" mapstructure:"resourceClass"`
+	ResourceClass AgentTaskResourcesResourceClass `json:"resourceClass" yaml:"resourceClass" mapstructure:"resourceClass"`
 }
 
-type AgentTaskV1ResourcesResourceClass string
+type AgentTaskResourcesResourceClass string
 
-const AgentTaskV1ResourcesResourceClassBatchCpu AgentTaskV1ResourcesResourceClass = "batch-cpu"
-const AgentTaskV1ResourcesResourceClassBatchGpu AgentTaskV1ResourcesResourceClass = "batch-gpu"
-const AgentTaskV1ResourcesResourceClassInteractiveCpu AgentTaskV1ResourcesResourceClass = "interactive-cpu"
-const AgentTaskV1ResourcesResourceClassInteractiveGpu AgentTaskV1ResourcesResourceClass = "interactive-gpu"
+const AgentTaskResourcesResourceClassBatchCpu AgentTaskResourcesResourceClass = "batch-cpu"
+const AgentTaskResourcesResourceClassBatchGpu AgentTaskResourcesResourceClass = "batch-gpu"
+const AgentTaskResourcesResourceClassInteractiveCpu AgentTaskResourcesResourceClass = "interactive-cpu"
+const AgentTaskResourcesResourceClassInteractiveGpu AgentTaskResourcesResourceClass = "interactive-gpu"
 
-var enumValues_AgentTaskV1ResourcesResourceClass = []interface{}{
+var enumValues_AgentTaskResourcesResourceClass = []interface{}{
 	"interactive-cpu",
 	"batch-cpu",
 	"interactive-gpu",
@@ -1587,7 +2127,7 @@ var enumValues_AgentTaskV1ResourcesResourceClass = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentTaskV1ResourcesResourceClass) UnmarshalJSON(value []byte) error {
+func (j *AgentTaskResourcesResourceClass) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1596,21 +2136,21 @@ func (j *AgentTaskV1ResourcesResourceClass) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_AgentTaskV1ResourcesResourceClass {
+	for _, expected := range enumValues_AgentTaskResourcesResourceClass {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentTaskV1ResourcesResourceClass, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentTaskResourcesResourceClass, v)
 	}
-	*j = AgentTaskV1ResourcesResourceClass(v)
+	*j = AgentTaskResourcesResourceClass(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentTaskV1Resources) UnmarshalJSON(value []byte) error {
+func (j *AgentTaskResources) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1619,12 +2159,12 @@ func (j *AgentTaskV1Resources) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["priority"]; raw != nil && !ok {
-		return fmt.Errorf("field priority in AgentTaskV1Resources: required")
+		return fmt.Errorf("field priority in AgentTaskResources: required")
 	}
 	if _, ok := raw["resourceClass"]; raw != nil && !ok {
-		return fmt.Errorf("field resourceClass in AgentTaskV1Resources: required")
+		return fmt.Errorf("field resourceClass in AgentTaskResources: required")
 	}
-	type Plain AgentTaskV1Resources
+	type Plain AgentTaskResources
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -1635,12 +2175,12 @@ func (j *AgentTaskV1Resources) UnmarshalJSON(value []byte) error {
 	if 0 > plain.Priority {
 		return fmt.Errorf("field %s: must be >= %v", "priority", 0)
 	}
-	*j = AgentTaskV1Resources(plain)
+	*j = AgentTaskResources(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentTaskV1) UnmarshalJSON(value []byte) error {
+func (j *AgentTask) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1648,55 +2188,49 @@ func (j *AgentTaskV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in AgentTaskV1: required")
-	}
 	if _, ok := raw["artifactInputs"]; raw != nil && !ok {
-		return fmt.Errorf("field artifactInputs in AgentTaskV1: required")
+		return fmt.Errorf("field artifactInputs in AgentTask: required")
 	}
 	if _, ok := raw["capability"]; raw != nil && !ok {
-		return fmt.Errorf("field capability in AgentTaskV1: required")
-	}
-	if _, ok := raw["capabilityVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field capabilityVersion in AgentTaskV1: required")
+		return fmt.Errorf("field capability in AgentTask: required")
 	}
 	if _, ok := raw["contractBomReference"]; raw != nil && !ok {
-		return fmt.Errorf("field contractBomReference in AgentTaskV1: required")
+		return fmt.Errorf("field contractBomReference in AgentTask: required")
 	}
 	if _, ok := raw["executionGeneration"]; raw != nil && !ok {
-		return fmt.Errorf("field executionGeneration in AgentTaskV1: required")
+		return fmt.Errorf("field executionGeneration in AgentTask: required")
 	}
 	if _, ok := raw["idempotency"]; raw != nil && !ok {
-		return fmt.Errorf("field idempotency in AgentTaskV1: required")
+		return fmt.Errorf("field idempotency in AgentTask: required")
 	}
-	if _, ok := raw["inputSchemaVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field inputSchemaVersion in AgentTaskV1: required")
+	if _, ok := raw["inputSchema"]; raw != nil && !ok {
+		return fmt.Errorf("field inputSchema in AgentTask: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in AgentTaskV1: required")
+		return fmt.Errorf("field kind in AgentTask: required")
 	}
 	if _, ok := raw["limits"]; raw != nil && !ok {
-		return fmt.Errorf("field limits in AgentTaskV1: required")
+		return fmt.Errorf("field limits in AgentTask: required")
 	}
 	if _, ok := raw["parameters"]; raw != nil && !ok {
-		return fmt.Errorf("field parameters in AgentTaskV1: required")
+		return fmt.Errorf("field parameters in AgentTask: required")
 	}
 	if _, ok := raw["resources"]; raw != nil && !ok {
-		return fmt.Errorf("field resources in AgentTaskV1: required")
+		return fmt.Errorf("field resources in AgentTask: required")
 	}
 	if _, ok := raw["rootRunId"]; raw != nil && !ok {
-		return fmt.Errorf("field rootRunId in AgentTaskV1: required")
+		return fmt.Errorf("field rootRunId in AgentTask: required")
 	}
 	if _, ok := raw["runId"]; raw != nil && !ok {
-		return fmt.Errorf("field runId in AgentTaskV1: required")
+		return fmt.Errorf("field runId in AgentTask: required")
 	}
 	if _, ok := raw["taskId"]; raw != nil && !ok {
-		return fmt.Errorf("field taskId in AgentTaskV1: required")
+		return fmt.Errorf("field taskId in AgentTask: required")
 	}
 	if _, ok := raw["traceContext"]; raw != nil && !ok {
-		return fmt.Errorf("field traceContext in AgentTaskV1: required")
+		return fmt.Errorf("field traceContext in AgentTask: required")
 	}
-	type Plain AgentTaskV1
+	type Plain AgentTask
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -1710,44 +2244,44 @@ func (j *AgentTaskV1) UnmarshalJSON(value []byte) error {
 	if 0 > plain.ExecutionGeneration {
 		return fmt.Errorf("field %s: must be >= %v", "executionGeneration", 0)
 	}
-	*j = AgentTaskV1(plain)
+	*j = AgentTask(plain)
 	return nil
 }
 
-// Bounded ApplyAuthorizationV1 wire contract governed by PRD 0012.
-type ApplyAuthorizationV1 struct {
+// Bounded ApplyAuthorization wire contract governed by PRD 0012.
+type ApplyAuthorization struct {
 	// ActionDigest corresponds to the JSON schema field "actionDigest".
-	ActionDigest SharedPrimitivesV1Digest `json:"actionDigest" yaml:"actionDigest" mapstructure:"actionDigest"`
+	ActionDigest SharedPrimitivesDigest `json:"actionDigest" yaml:"actionDigest" mapstructure:"actionDigest"`
 
 	// ActorId corresponds to the JSON schema field "actorId".
-	ActorId SharedPrimitivesV1OpaqueId `json:"actorId" yaml:"actorId" mapstructure:"actorId"`
-
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
+	ActorId SharedPrimitivesOpaqueId `json:"actorId" yaml:"actorId" mapstructure:"actorId"`
 
 	// ApprovalVersion corresponds to the JSON schema field "approvalVersion".
 	ApprovalVersion int `json:"approvalVersion" yaml:"approvalVersion" mapstructure:"approvalVersion"`
 
 	// ArtifactDigest corresponds to the JSON schema field "artifactDigest".
-	ArtifactDigest SharedPrimitivesV1Digest `json:"artifactDigest" yaml:"artifactDigest" mapstructure:"artifactDigest"`
+	ArtifactDigest SharedPrimitivesDigest `json:"artifactDigest" yaml:"artifactDigest" mapstructure:"artifactDigest"`
 
 	// Audience corresponds to the JSON schema field "audience".
 	Audience interface{} `json:"audience" yaml:"audience" mapstructure:"audience"`
 
 	// AuthorizationId corresponds to the JSON schema field "authorizationId".
-	AuthorizationId SharedPrimitivesV1OpaqueId `json:"authorizationId" yaml:"authorizationId" mapstructure:"authorizationId"`
+	AuthorizationId SharedPrimitivesOpaqueId `json:"authorizationId" yaml:"authorizationId" mapstructure:"authorizationId"`
 
 	// BaseRevision corresponds to the JSON schema field "baseRevision".
-	BaseRevision SharedPrimitivesV1OpaqueId `json:"baseRevision" yaml:"baseRevision" mapstructure:"baseRevision"`
+	BaseRevision SharedPrimitivesOpaqueId `json:"baseRevision" yaml:"baseRevision" mapstructure:"baseRevision"`
 
 	// ContractBomDigest corresponds to the JSON schema field "contractBomDigest".
-	ContractBomDigest SharedPrimitivesV1Digest `json:"contractBomDigest" yaml:"contractBomDigest" mapstructure:"contractBomDigest"`
+	ContractBomDigest SharedPrimitivesDigest `json:"contractBomDigest" yaml:"contractBomDigest" mapstructure:"contractBomDigest"`
+
+	// DefinitionDigest corresponds to the JSON schema field "definitionDigest".
+	DefinitionDigest SharedPrimitivesDigest `json:"definitionDigest" yaml:"definitionDigest" mapstructure:"definitionDigest"`
 
 	// ExpiresAt corresponds to the JSON schema field "expiresAt".
-	ExpiresAt SharedPrimitivesV1Timestamp `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
+	ExpiresAt SharedPrimitivesTimestamp `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
 
 	// IssuedAt corresponds to the JSON schema field "issuedAt".
-	IssuedAt SharedPrimitivesV1Timestamp `json:"issuedAt" yaml:"issuedAt" mapstructure:"issuedAt"`
+	IssuedAt SharedPrimitivesTimestamp `json:"issuedAt" yaml:"issuedAt" mapstructure:"issuedAt"`
 
 	// Issuer corresponds to the JSON schema field "issuer".
 	Issuer interface{} `json:"issuer" yaml:"issuer" mapstructure:"issuer"`
@@ -1759,23 +2293,23 @@ type ApplyAuthorizationV1 struct {
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// NotBefore corresponds to the JSON schema field "notBefore".
-	NotBefore SharedPrimitivesV1Timestamp `json:"notBefore" yaml:"notBefore" mapstructure:"notBefore"`
+	NotBefore SharedPrimitivesTimestamp `json:"notBefore" yaml:"notBefore" mapstructure:"notBefore"`
 
 	// PolicyDigest corresponds to the JSON schema field "policyDigest".
-	PolicyDigest SharedPrimitivesV1Digest `json:"policyDigest" yaml:"policyDigest" mapstructure:"policyDigest"`
+	PolicyDigest SharedPrimitivesDigest `json:"policyDigest" yaml:"policyDigest" mapstructure:"policyDigest"`
 
 	// RunId corresponds to the JSON schema field "runId".
-	RunId SharedPrimitivesV1OpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
+	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
 
 	// Target corresponds to the JSON schema field "target".
-	Target SharedPrimitivesV1TargetReference `json:"target" yaml:"target" mapstructure:"target"`
+	Target SharedPrimitivesTargetReference `json:"target" yaml:"target" mapstructure:"target"`
 
 	// WorkspaceId corresponds to the JSON schema field "workspaceId".
-	WorkspaceId SharedPrimitivesV1OpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
+	WorkspaceId SharedPrimitivesOpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ApplyAuthorizationV1) UnmarshalJSON(value []byte) error {
+func (j *ApplyAuthorization) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1784,63 +2318,63 @@ func (j *ApplyAuthorizationV1) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["actionDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field actionDigest in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field actionDigest in ApplyAuthorization: required")
 	}
 	if _, ok := raw["actorId"]; raw != nil && !ok {
-		return fmt.Errorf("field actorId in ApplyAuthorizationV1: required")
-	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field actorId in ApplyAuthorization: required")
 	}
 	if _, ok := raw["approvalVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field approvalVersion in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field approvalVersion in ApplyAuthorization: required")
 	}
 	if _, ok := raw["artifactDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field artifactDigest in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field artifactDigest in ApplyAuthorization: required")
 	}
 	if _, ok := raw["audience"]; raw != nil && !ok {
-		return fmt.Errorf("field audience in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field audience in ApplyAuthorization: required")
 	}
 	if _, ok := raw["authorizationId"]; raw != nil && !ok {
-		return fmt.Errorf("field authorizationId in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field authorizationId in ApplyAuthorization: required")
 	}
 	if _, ok := raw["baseRevision"]; raw != nil && !ok {
-		return fmt.Errorf("field baseRevision in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field baseRevision in ApplyAuthorization: required")
 	}
 	if _, ok := raw["contractBomDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field contractBomDigest in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field contractBomDigest in ApplyAuthorization: required")
+	}
+	if _, ok := raw["definitionDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field definitionDigest in ApplyAuthorization: required")
 	}
 	if _, ok := raw["expiresAt"]; raw != nil && !ok {
-		return fmt.Errorf("field expiresAt in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field expiresAt in ApplyAuthorization: required")
 	}
 	if _, ok := raw["issuedAt"]; raw != nil && !ok {
-		return fmt.Errorf("field issuedAt in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field issuedAt in ApplyAuthorization: required")
 	}
 	if _, ok := raw["issuer"]; raw != nil && !ok {
-		return fmt.Errorf("field issuer in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field issuer in ApplyAuthorization: required")
 	}
 	if _, ok := raw["keyId"]; raw != nil && !ok {
-		return fmt.Errorf("field keyId in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field keyId in ApplyAuthorization: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field kind in ApplyAuthorization: required")
 	}
 	if _, ok := raw["notBefore"]; raw != nil && !ok {
-		return fmt.Errorf("field notBefore in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field notBefore in ApplyAuthorization: required")
 	}
 	if _, ok := raw["policyDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field policyDigest in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field policyDigest in ApplyAuthorization: required")
 	}
 	if _, ok := raw["runId"]; raw != nil && !ok {
-		return fmt.Errorf("field runId in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field runId in ApplyAuthorization: required")
 	}
 	if _, ok := raw["target"]; raw != nil && !ok {
-		return fmt.Errorf("field target in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field target in ApplyAuthorization: required")
 	}
 	if _, ok := raw["workspaceId"]; raw != nil && !ok {
-		return fmt.Errorf("field workspaceId in ApplyAuthorizationV1: required")
+		return fmt.Errorf("field workspaceId in ApplyAuthorization: required")
 	}
-	type Plain ApplyAuthorizationV1
+	type Plain ApplyAuthorization
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -1860,63 +2394,60 @@ func (j *ApplyAuthorizationV1) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.KeyId)) > 256 {
 		return fmt.Errorf("field %s length: must be <= %d", "keyId", 256)
 	}
-	*j = ApplyAuthorizationV1(plain)
+	*j = ApplyAuthorization(plain)
 	return nil
 }
 
-// Bounded ApprovalRequestV1 wire contract governed by PRD 0012.
-type ApprovalRequestV1 struct {
+// Bounded ApprovalRequest wire contract governed by PRD 0012.
+type ApprovalRequest struct {
 	// ActionDigest corresponds to the JSON schema field "actionDigest".
-	ActionDigest SharedPrimitivesV1Digest `json:"actionDigest" yaml:"actionDigest" mapstructure:"actionDigest"`
+	ActionDigest SharedPrimitivesDigest `json:"actionDigest" yaml:"actionDigest" mapstructure:"actionDigest"`
 
 	// AllowedDecisions corresponds to the JSON schema field "allowedDecisions".
-	AllowedDecisions []ApprovalRequestV1AllowedDecisionsElem `json:"allowedDecisions" yaml:"allowedDecisions" mapstructure:"allowedDecisions"`
-
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
+	AllowedDecisions []ApprovalRequestAllowedDecisionsElem `json:"allowedDecisions" yaml:"allowedDecisions" mapstructure:"allowedDecisions"`
 
 	// Cost corresponds to the JSON schema field "cost".
-	Cost SharedPrimitivesV1Cost `json:"cost" yaml:"cost" mapstructure:"cost"`
+	Cost SharedPrimitivesCost `json:"cost" yaml:"cost" mapstructure:"cost"`
 
 	// DecisionVersion corresponds to the JSON schema field "decisionVersion".
 	DecisionVersion int `json:"decisionVersion" yaml:"decisionVersion" mapstructure:"decisionVersion"`
 
 	// Effects corresponds to the JSON schema field "effects".
-	Effects []ApprovalRequestV1EffectsElem `json:"effects" yaml:"effects" mapstructure:"effects"`
+	Effects []ApprovalRequestEffectsElem `json:"effects" yaml:"effects" mapstructure:"effects"`
 
 	// ExpiresAt corresponds to the JSON schema field "expiresAt".
-	ExpiresAt SharedPrimitivesV1Timestamp `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
+	ExpiresAt SharedPrimitivesTimestamp `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// RequestId corresponds to the JSON schema field "requestId".
-	RequestId SharedPrimitivesV1OpaqueId `json:"requestId" yaml:"requestId" mapstructure:"requestId"`
+	RequestId SharedPrimitivesOpaqueId `json:"requestId" yaml:"requestId" mapstructure:"requestId"`
 
 	// ResumeState corresponds to the JSON schema field "resumeState".
-	ResumeState ApprovalRequestV1ResumeState `json:"resumeState" yaml:"resumeState" mapstructure:"resumeState"`
+	ResumeState ApprovalRequestResumeState `json:"resumeState" yaml:"resumeState" mapstructure:"resumeState"`
 
 	// ReviewerPolicy corresponds to the JSON schema field "reviewerPolicy".
-	ReviewerPolicy SharedPrimitivesV1PolicyReference `json:"reviewerPolicy" yaml:"reviewerPolicy" mapstructure:"reviewerPolicy"`
+	ReviewerPolicy SharedPrimitivesPolicyReference `json:"reviewerPolicy" yaml:"reviewerPolicy" mapstructure:"reviewerPolicy"`
 
 	// RunId corresponds to the JSON schema field "runId".
-	RunId SharedPrimitivesV1OpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
+	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
 }
 
-type ApprovalRequestV1AllowedDecisionsElem string
+type ApprovalRequestAllowedDecisionsElem string
 
-const ApprovalRequestV1AllowedDecisionsElemApprove ApprovalRequestV1AllowedDecisionsElem = "approve"
-const ApprovalRequestV1AllowedDecisionsElemReject ApprovalRequestV1AllowedDecisionsElem = "reject"
-const ApprovalRequestV1AllowedDecisionsElemRequestChanges ApprovalRequestV1AllowedDecisionsElem = "request-changes"
+const ApprovalRequestAllowedDecisionsElemApprove ApprovalRequestAllowedDecisionsElem = "approve"
+const ApprovalRequestAllowedDecisionsElemReject ApprovalRequestAllowedDecisionsElem = "reject"
+const ApprovalRequestAllowedDecisionsElemRequestChanges ApprovalRequestAllowedDecisionsElem = "request-changes"
 
-var enumValues_ApprovalRequestV1AllowedDecisionsElem = []interface{}{
+var enumValues_ApprovalRequestAllowedDecisionsElem = []interface{}{
 	"approve",
 	"reject",
 	"request-changes",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ApprovalRequestV1AllowedDecisionsElem) UnmarshalJSON(value []byte) error {
+func (j *ApprovalRequestAllowedDecisionsElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1925,39 +2456,39 @@ func (j *ApprovalRequestV1AllowedDecisionsElem) UnmarshalJSON(value []byte) erro
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ApprovalRequestV1AllowedDecisionsElem {
+	for _, expected := range enumValues_ApprovalRequestAllowedDecisionsElem {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ApprovalRequestV1AllowedDecisionsElem, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ApprovalRequestAllowedDecisionsElem, v)
 	}
-	*j = ApprovalRequestV1AllowedDecisionsElem(v)
+	*j = ApprovalRequestAllowedDecisionsElem(v)
 	return nil
 }
 
-type ApprovalRequestV1EffectsElem struct {
+type ApprovalRequestEffectsElem struct {
 	// EffectType corresponds to the JSON schema field "effectType".
-	EffectType ApprovalRequestV1EffectsElemEffectType `json:"effectType" yaml:"effectType" mapstructure:"effectType"`
+	EffectType ApprovalRequestEffectsElemEffectType `json:"effectType" yaml:"effectType" mapstructure:"effectType"`
 
 	// Summary corresponds to the JSON schema field "summary".
 	Summary string `json:"summary" yaml:"summary" mapstructure:"summary"`
 
 	// Target corresponds to the JSON schema field "target".
-	Target SharedPrimitivesV1TargetReference `json:"target" yaml:"target" mapstructure:"target"`
+	Target SharedPrimitivesTargetReference `json:"target" yaml:"target" mapstructure:"target"`
 }
 
-type ApprovalRequestV1EffectsElemEffectType string
+type ApprovalRequestEffectsElemEffectType string
 
-const ApprovalRequestV1EffectsElemEffectTypeArtifactFinalize ApprovalRequestV1EffectsElemEffectType = "artifact-finalize"
-const ApprovalRequestV1EffectsElemEffectTypeAssetFinalize ApprovalRequestV1EffectsElemEffectType = "asset-finalize"
-const ApprovalRequestV1EffectsElemEffectTypeComponentApply ApprovalRequestV1EffectsElemEffectType = "component-apply"
-const ApprovalRequestV1EffectsElemEffectTypePackagePublish ApprovalRequestV1EffectsElemEffectType = "package-publish"
-const ApprovalRequestV1EffectsElemEffectTypePagePersist ApprovalRequestV1EffectsElemEffectType = "page-persist"
+const ApprovalRequestEffectsElemEffectTypeArtifactFinalize ApprovalRequestEffectsElemEffectType = "artifact-finalize"
+const ApprovalRequestEffectsElemEffectTypeAssetFinalize ApprovalRequestEffectsElemEffectType = "asset-finalize"
+const ApprovalRequestEffectsElemEffectTypeComponentApply ApprovalRequestEffectsElemEffectType = "component-apply"
+const ApprovalRequestEffectsElemEffectTypePackagePublish ApprovalRequestEffectsElemEffectType = "package-publish"
+const ApprovalRequestEffectsElemEffectTypePagePersist ApprovalRequestEffectsElemEffectType = "page-persist"
 
-var enumValues_ApprovalRequestV1EffectsElemEffectType = []interface{}{
+var enumValues_ApprovalRequestEffectsElemEffectType = []interface{}{
 	"artifact-finalize",
 	"page-persist",
 	"asset-finalize",
@@ -1966,7 +2497,7 @@ var enumValues_ApprovalRequestV1EffectsElemEffectType = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ApprovalRequestV1EffectsElemEffectType) UnmarshalJSON(value []byte) error {
+func (j *ApprovalRequestEffectsElemEffectType) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1975,21 +2506,21 @@ func (j *ApprovalRequestV1EffectsElemEffectType) UnmarshalJSON(value []byte) err
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ApprovalRequestV1EffectsElemEffectType {
+	for _, expected := range enumValues_ApprovalRequestEffectsElemEffectType {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ApprovalRequestV1EffectsElemEffectType, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ApprovalRequestEffectsElemEffectType, v)
 	}
-	*j = ApprovalRequestV1EffectsElemEffectType(v)
+	*j = ApprovalRequestEffectsElemEffectType(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ApprovalRequestV1EffectsElem) UnmarshalJSON(value []byte) error {
+func (j *ApprovalRequestEffectsElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -1998,15 +2529,15 @@ func (j *ApprovalRequestV1EffectsElem) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["effectType"]; raw != nil && !ok {
-		return fmt.Errorf("field effectType in ApprovalRequestV1EffectsElem: required")
+		return fmt.Errorf("field effectType in ApprovalRequestEffectsElem: required")
 	}
 	if _, ok := raw["summary"]; raw != nil && !ok {
-		return fmt.Errorf("field summary in ApprovalRequestV1EffectsElem: required")
+		return fmt.Errorf("field summary in ApprovalRequestEffectsElem: required")
 	}
 	if _, ok := raw["target"]; raw != nil && !ok {
-		return fmt.Errorf("field target in ApprovalRequestV1EffectsElem: required")
+		return fmt.Errorf("field target in ApprovalRequestEffectsElem: required")
 	}
-	type Plain ApprovalRequestV1EffectsElem
+	type Plain ApprovalRequestEffectsElem
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -2017,31 +2548,31 @@ func (j *ApprovalRequestV1EffectsElem) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.Summary)) > 1024 {
 		return fmt.Errorf("field %s length: must be <= %d", "summary", 1024)
 	}
-	*j = ApprovalRequestV1EffectsElem(plain)
+	*j = ApprovalRequestEffectsElem(plain)
 	return nil
 }
 
-type ApprovalRequestV1ResumeState string
+type ApprovalRequestResumeState string
 
-const ApprovalRequestV1ResumeStateAwaitingApproval ApprovalRequestV1ResumeState = "awaiting_approval"
-const ApprovalRequestV1ResumeStateAwaitingDomainConfirmation ApprovalRequestV1ResumeState = "awaiting_domain_confirmation"
-const ApprovalRequestV1ResumeStateAwaitingInput ApprovalRequestV1ResumeState = "awaiting_input"
-const ApprovalRequestV1ResumeStateAwaitingReview ApprovalRequestV1ResumeState = "awaiting_review"
-const ApprovalRequestV1ResumeStateCancelled ApprovalRequestV1ResumeState = "cancelled"
-const ApprovalRequestV1ResumeStateCancelling ApprovalRequestV1ResumeState = "cancelling"
-const ApprovalRequestV1ResumeStateCommitting ApprovalRequestV1ResumeState = "committing"
-const ApprovalRequestV1ResumeStateCompleted ApprovalRequestV1ResumeState = "completed"
-const ApprovalRequestV1ResumeStateConflict ApprovalRequestV1ResumeState = "conflict"
-const ApprovalRequestV1ResumeStateCreated ApprovalRequestV1ResumeState = "created"
-const ApprovalRequestV1ResumeStateDiscarded ApprovalRequestV1ResumeState = "discarded"
-const ApprovalRequestV1ResumeStateExecuting ApprovalRequestV1ResumeState = "executing"
-const ApprovalRequestV1ResumeStateFailed ApprovalRequestV1ResumeState = "failed"
-const ApprovalRequestV1ResumeStatePlanning ApprovalRequestV1ResumeState = "planning"
-const ApprovalRequestV1ResumeStatePreparing ApprovalRequestV1ResumeState = "preparing"
-const ApprovalRequestV1ResumeStateRefused ApprovalRequestV1ResumeState = "refused"
-const ApprovalRequestV1ResumeStateValidating ApprovalRequestV1ResumeState = "validating"
+const ApprovalRequestResumeStateAwaitingApproval ApprovalRequestResumeState = "awaiting_approval"
+const ApprovalRequestResumeStateAwaitingDomainConfirmation ApprovalRequestResumeState = "awaiting_domain_confirmation"
+const ApprovalRequestResumeStateAwaitingInput ApprovalRequestResumeState = "awaiting_input"
+const ApprovalRequestResumeStateAwaitingReview ApprovalRequestResumeState = "awaiting_review"
+const ApprovalRequestResumeStateCancelled ApprovalRequestResumeState = "cancelled"
+const ApprovalRequestResumeStateCancelling ApprovalRequestResumeState = "cancelling"
+const ApprovalRequestResumeStateCommitting ApprovalRequestResumeState = "committing"
+const ApprovalRequestResumeStateCompleted ApprovalRequestResumeState = "completed"
+const ApprovalRequestResumeStateConflict ApprovalRequestResumeState = "conflict"
+const ApprovalRequestResumeStateCreated ApprovalRequestResumeState = "created"
+const ApprovalRequestResumeStateDiscarded ApprovalRequestResumeState = "discarded"
+const ApprovalRequestResumeStateExecuting ApprovalRequestResumeState = "executing"
+const ApprovalRequestResumeStateFailed ApprovalRequestResumeState = "failed"
+const ApprovalRequestResumeStatePlanning ApprovalRequestResumeState = "planning"
+const ApprovalRequestResumeStatePreparing ApprovalRequestResumeState = "preparing"
+const ApprovalRequestResumeStateRefused ApprovalRequestResumeState = "refused"
+const ApprovalRequestResumeStateValidating ApprovalRequestResumeState = "validating"
 
-var enumValues_ApprovalRequestV1ResumeState = []interface{}{
+var enumValues_ApprovalRequestResumeState = []interface{}{
 	"created",
 	"preparing",
 	"planning",
@@ -2062,7 +2593,7 @@ var enumValues_ApprovalRequestV1ResumeState = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ApprovalRequestV1ResumeState) UnmarshalJSON(value []byte) error {
+func (j *ApprovalRequestResumeState) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2071,21 +2602,21 @@ func (j *ApprovalRequestV1ResumeState) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ApprovalRequestV1ResumeState {
+	for _, expected := range enumValues_ApprovalRequestResumeState {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ApprovalRequestV1ResumeState, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ApprovalRequestResumeState, v)
 	}
-	*j = ApprovalRequestV1ResumeState(v)
+	*j = ApprovalRequestResumeState(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ApprovalRequestV1) UnmarshalJSON(value []byte) error {
+func (j *ApprovalRequest) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2094,42 +2625,39 @@ func (j *ApprovalRequestV1) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["actionDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field actionDigest in ApprovalRequestV1: required")
+		return fmt.Errorf("field actionDigest in ApprovalRequest: required")
 	}
 	if _, ok := raw["allowedDecisions"]; raw != nil && !ok {
-		return fmt.Errorf("field allowedDecisions in ApprovalRequestV1: required")
-	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in ApprovalRequestV1: required")
+		return fmt.Errorf("field allowedDecisions in ApprovalRequest: required")
 	}
 	if _, ok := raw["cost"]; raw != nil && !ok {
-		return fmt.Errorf("field cost in ApprovalRequestV1: required")
+		return fmt.Errorf("field cost in ApprovalRequest: required")
 	}
 	if _, ok := raw["decisionVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field decisionVersion in ApprovalRequestV1: required")
+		return fmt.Errorf("field decisionVersion in ApprovalRequest: required")
 	}
 	if _, ok := raw["effects"]; raw != nil && !ok {
-		return fmt.Errorf("field effects in ApprovalRequestV1: required")
+		return fmt.Errorf("field effects in ApprovalRequest: required")
 	}
 	if _, ok := raw["expiresAt"]; raw != nil && !ok {
-		return fmt.Errorf("field expiresAt in ApprovalRequestV1: required")
+		return fmt.Errorf("field expiresAt in ApprovalRequest: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in ApprovalRequestV1: required")
+		return fmt.Errorf("field kind in ApprovalRequest: required")
 	}
 	if _, ok := raw["requestId"]; raw != nil && !ok {
-		return fmt.Errorf("field requestId in ApprovalRequestV1: required")
+		return fmt.Errorf("field requestId in ApprovalRequest: required")
 	}
 	if _, ok := raw["resumeState"]; raw != nil && !ok {
-		return fmt.Errorf("field resumeState in ApprovalRequestV1: required")
+		return fmt.Errorf("field resumeState in ApprovalRequest: required")
 	}
 	if _, ok := raw["reviewerPolicy"]; raw != nil && !ok {
-		return fmt.Errorf("field reviewerPolicy in ApprovalRequestV1: required")
+		return fmt.Errorf("field reviewerPolicy in ApprovalRequest: required")
 	}
 	if _, ok := raw["runId"]; raw != nil && !ok {
-		return fmt.Errorf("field runId in ApprovalRequestV1: required")
+		return fmt.Errorf("field runId in ApprovalRequest: required")
 	}
-	type Plain ApprovalRequestV1
+	type Plain ApprovalRequest
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -2152,48 +2680,45 @@ func (j *ApprovalRequestV1) UnmarshalJSON(value []byte) error {
 	if len(plain.Effects) > 32 {
 		return fmt.Errorf("field %s length: must be <= %d", "effects", 32)
 	}
-	*j = ApprovalRequestV1(plain)
+	*j = ApprovalRequest(plain)
 	return nil
 }
 
-// Bounded CompiledContextV1 wire contract governed by PRD 0012.
-type CompiledContextV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
-
+// Bounded CompiledContext wire contract governed by PRD 0012.
+type CompiledContext struct {
 	// Classifications corresponds to the JSON schema field "classifications".
-	Classifications []CompiledContextV1ClassificationsElem `json:"classifications" yaml:"classifications" mapstructure:"classifications"`
+	Classifications []CompiledContextClassificationsElem `json:"classifications" yaml:"classifications" mapstructure:"classifications"`
 
 	// CompiledAt corresponds to the JSON schema field "compiledAt".
-	CompiledAt SharedPrimitivesV1Timestamp `json:"compiledAt" yaml:"compiledAt" mapstructure:"compiledAt"`
+	CompiledAt SharedPrimitivesTimestamp `json:"compiledAt" yaml:"compiledAt" mapstructure:"compiledAt"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// LayerDigests corresponds to the JSON schema field "layerDigests".
-	LayerDigests []SharedPrimitivesV1Digest `json:"layerDigests" yaml:"layerDigests" mapstructure:"layerDigests"`
+	LayerDigests []SharedPrimitivesDigest `json:"layerDigests" yaml:"layerDigests" mapstructure:"layerDigests"`
 
 	// OrderedTrustLayers corresponds to the JSON schema field "orderedTrustLayers".
-	OrderedTrustLayers []CompiledContextV1OrderedTrustLayersElem `json:"orderedTrustLayers" yaml:"orderedTrustLayers" mapstructure:"orderedTrustLayers"`
+	OrderedTrustLayers []CompiledContextOrderedTrustLayersElem `json:"orderedTrustLayers" yaml:"orderedTrustLayers" mapstructure:"orderedTrustLayers"`
 
 	// PolicySnapshot corresponds to the JSON schema field "policySnapshot".
-	PolicySnapshot SharedPrimitivesV1PolicyReference `json:"policySnapshot" yaml:"policySnapshot" mapstructure:"policySnapshot"`
+	PolicySnapshot SharedPrimitivesPolicyReference `json:"policySnapshot" yaml:"policySnapshot" mapstructure:"policySnapshot"`
 
 	// Redaction corresponds to the JSON schema field "redaction".
-	Redaction CompiledContextV1Redaction `json:"redaction" yaml:"redaction" mapstructure:"redaction"`
+	Redaction CompiledContextRedaction `json:"redaction" yaml:"redaction" mapstructure:"redaction"`
 
 	// TokenBudgets corresponds to the JSON schema field "tokenBudgets".
-	TokenBudgets CompiledContextV1TokenBudgets `json:"tokenBudgets" yaml:"tokenBudgets" mapstructure:"tokenBudgets"`
+	TokenBudgets CompiledContextTokenBudgets `json:"tokenBudgets" yaml:"tokenBudgets" mapstructure:"tokenBudgets"`
 }
 
-type CompiledContextV1ClassificationsElem string
+type CompiledContextClassificationsElem string
 
-const CompiledContextV1ClassificationsElemConfidential CompiledContextV1ClassificationsElem = "confidential"
-const CompiledContextV1ClassificationsElemInternal CompiledContextV1ClassificationsElem = "internal"
-const CompiledContextV1ClassificationsElemPublic CompiledContextV1ClassificationsElem = "public"
-const CompiledContextV1ClassificationsElemRestricted CompiledContextV1ClassificationsElem = "restricted"
+const CompiledContextClassificationsElemConfidential CompiledContextClassificationsElem = "confidential"
+const CompiledContextClassificationsElemInternal CompiledContextClassificationsElem = "internal"
+const CompiledContextClassificationsElemPublic CompiledContextClassificationsElem = "public"
+const CompiledContextClassificationsElemRestricted CompiledContextClassificationsElem = "restricted"
 
-var enumValues_CompiledContextV1ClassificationsElem = []interface{}{
+var enumValues_CompiledContextClassificationsElem = []interface{}{
 	"public",
 	"internal",
 	"confidential",
@@ -2201,7 +2726,7 @@ var enumValues_CompiledContextV1ClassificationsElem = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *CompiledContextV1ClassificationsElem) UnmarshalJSON(value []byte) error {
+func (j *CompiledContextClassificationsElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2210,28 +2735,28 @@ func (j *CompiledContextV1ClassificationsElem) UnmarshalJSON(value []byte) error
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_CompiledContextV1ClassificationsElem {
+	for _, expected := range enumValues_CompiledContextClassificationsElem {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CompiledContextV1ClassificationsElem, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CompiledContextClassificationsElem, v)
 	}
-	*j = CompiledContextV1ClassificationsElem(v)
+	*j = CompiledContextClassificationsElem(v)
 	return nil
 }
 
-type CompiledContextV1OrderedTrustLayersElem struct {
+type CompiledContextOrderedTrustLayersElem struct {
 	// Classification corresponds to the JSON schema field "classification".
-	Classification CompiledContextV1OrderedTrustLayersElemClassification `json:"classification" yaml:"classification" mapstructure:"classification"`
+	Classification CompiledContextOrderedTrustLayersElemClassification `json:"classification" yaml:"classification" mapstructure:"classification"`
 
 	// Digest corresponds to the JSON schema field "digest".
-	Digest SharedPrimitivesV1Digest `json:"digest" yaml:"digest" mapstructure:"digest"`
+	Digest SharedPrimitivesDigest `json:"digest" yaml:"digest" mapstructure:"digest"`
 
 	// LayerId corresponds to the JSON schema field "layerId".
-	LayerId SharedPrimitivesV1OpaqueId `json:"layerId" yaml:"layerId" mapstructure:"layerId"`
+	LayerId SharedPrimitivesOpaqueId `json:"layerId" yaml:"layerId" mapstructure:"layerId"`
 
 	// Position corresponds to the JSON schema field "position".
 	Position int `json:"position" yaml:"position" mapstructure:"position"`
@@ -2243,14 +2768,14 @@ type CompiledContextV1OrderedTrustLayersElem struct {
 	TokenBudget int `json:"tokenBudget" yaml:"tokenBudget" mapstructure:"tokenBudget"`
 }
 
-type CompiledContextV1OrderedTrustLayersElemClassification string
+type CompiledContextOrderedTrustLayersElemClassification string
 
-const CompiledContextV1OrderedTrustLayersElemClassificationConfidential CompiledContextV1OrderedTrustLayersElemClassification = "confidential"
-const CompiledContextV1OrderedTrustLayersElemClassificationInternal CompiledContextV1OrderedTrustLayersElemClassification = "internal"
-const CompiledContextV1OrderedTrustLayersElemClassificationPublic CompiledContextV1OrderedTrustLayersElemClassification = "public"
-const CompiledContextV1OrderedTrustLayersElemClassificationRestricted CompiledContextV1OrderedTrustLayersElemClassification = "restricted"
+const CompiledContextOrderedTrustLayersElemClassificationConfidential CompiledContextOrderedTrustLayersElemClassification = "confidential"
+const CompiledContextOrderedTrustLayersElemClassificationInternal CompiledContextOrderedTrustLayersElemClassification = "internal"
+const CompiledContextOrderedTrustLayersElemClassificationPublic CompiledContextOrderedTrustLayersElemClassification = "public"
+const CompiledContextOrderedTrustLayersElemClassificationRestricted CompiledContextOrderedTrustLayersElemClassification = "restricted"
 
-var enumValues_CompiledContextV1OrderedTrustLayersElemClassification = []interface{}{
+var enumValues_CompiledContextOrderedTrustLayersElemClassification = []interface{}{
 	"public",
 	"internal",
 	"confidential",
@@ -2258,7 +2783,7 @@ var enumValues_CompiledContextV1OrderedTrustLayersElemClassification = []interfa
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *CompiledContextV1OrderedTrustLayersElemClassification) UnmarshalJSON(value []byte) error {
+func (j *CompiledContextOrderedTrustLayersElemClassification) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2267,21 +2792,21 @@ func (j *CompiledContextV1OrderedTrustLayersElemClassification) UnmarshalJSON(va
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_CompiledContextV1OrderedTrustLayersElemClassification {
+	for _, expected := range enumValues_CompiledContextOrderedTrustLayersElemClassification {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CompiledContextV1OrderedTrustLayersElemClassification, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CompiledContextOrderedTrustLayersElemClassification, v)
 	}
-	*j = CompiledContextV1OrderedTrustLayersElemClassification(v)
+	*j = CompiledContextOrderedTrustLayersElemClassification(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *CompiledContextV1OrderedTrustLayersElem) UnmarshalJSON(value []byte) error {
+func (j *CompiledContextOrderedTrustLayersElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2290,24 +2815,24 @@ func (j *CompiledContextV1OrderedTrustLayersElem) UnmarshalJSON(value []byte) er
 		return err
 	}
 	if _, ok := raw["classification"]; raw != nil && !ok {
-		return fmt.Errorf("field classification in CompiledContextV1OrderedTrustLayersElem: required")
+		return fmt.Errorf("field classification in CompiledContextOrderedTrustLayersElem: required")
 	}
 	if _, ok := raw["digest"]; raw != nil && !ok {
-		return fmt.Errorf("field digest in CompiledContextV1OrderedTrustLayersElem: required")
+		return fmt.Errorf("field digest in CompiledContextOrderedTrustLayersElem: required")
 	}
 	if _, ok := raw["layerId"]; raw != nil && !ok {
-		return fmt.Errorf("field layerId in CompiledContextV1OrderedTrustLayersElem: required")
+		return fmt.Errorf("field layerId in CompiledContextOrderedTrustLayersElem: required")
 	}
 	if _, ok := raw["position"]; raw != nil && !ok {
-		return fmt.Errorf("field position in CompiledContextV1OrderedTrustLayersElem: required")
+		return fmt.Errorf("field position in CompiledContextOrderedTrustLayersElem: required")
 	}
 	if _, ok := raw["redacted"]; raw != nil && !ok {
-		return fmt.Errorf("field redacted in CompiledContextV1OrderedTrustLayersElem: required")
+		return fmt.Errorf("field redacted in CompiledContextOrderedTrustLayersElem: required")
 	}
 	if _, ok := raw["tokenBudget"]; raw != nil && !ok {
-		return fmt.Errorf("field tokenBudget in CompiledContextV1OrderedTrustLayersElem: required")
+		return fmt.Errorf("field tokenBudget in CompiledContextOrderedTrustLayersElem: required")
 	}
-	type Plain CompiledContextV1OrderedTrustLayersElem
+	type Plain CompiledContextOrderedTrustLayersElem
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -2324,13 +2849,13 @@ func (j *CompiledContextV1OrderedTrustLayersElem) UnmarshalJSON(value []byte) er
 	if 0 > plain.TokenBudget {
 		return fmt.Errorf("field %s: must be >= %v", "tokenBudget", 0)
 	}
-	*j = CompiledContextV1OrderedTrustLayersElem(plain)
+	*j = CompiledContextOrderedTrustLayersElem(plain)
 	return nil
 }
 
-type CompiledContextV1Redaction struct {
+type CompiledContextRedaction struct {
 	// Policy corresponds to the JSON schema field "policy".
-	Policy SharedPrimitivesV1PolicyReference `json:"policy" yaml:"policy" mapstructure:"policy"`
+	Policy SharedPrimitivesPolicyReference `json:"policy" yaml:"policy" mapstructure:"policy"`
 
 	// RemovedFieldCount corresponds to the JSON schema field "removedFieldCount".
 	RemovedFieldCount int `json:"removedFieldCount" yaml:"removedFieldCount" mapstructure:"removedFieldCount"`
@@ -2340,7 +2865,7 @@ type CompiledContextV1Redaction struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *CompiledContextV1Redaction) UnmarshalJSON(value []byte) error {
+func (j *CompiledContextRedaction) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2349,15 +2874,15 @@ func (j *CompiledContextV1Redaction) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["policy"]; raw != nil && !ok {
-		return fmt.Errorf("field policy in CompiledContextV1Redaction: required")
+		return fmt.Errorf("field policy in CompiledContextRedaction: required")
 	}
 	if _, ok := raw["removedFieldCount"]; raw != nil && !ok {
-		return fmt.Errorf("field removedFieldCount in CompiledContextV1Redaction: required")
+		return fmt.Errorf("field removedFieldCount in CompiledContextRedaction: required")
 	}
 	if _, ok := raw["replacementMarker"]; raw != nil && !ok {
-		return fmt.Errorf("field replacementMarker in CompiledContextV1Redaction: required")
+		return fmt.Errorf("field replacementMarker in CompiledContextRedaction: required")
 	}
-	type Plain CompiledContextV1Redaction
+	type Plain CompiledContextRedaction
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -2374,11 +2899,11 @@ func (j *CompiledContextV1Redaction) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.ReplacementMarker)) > 64 {
 		return fmt.Errorf("field %s length: must be <= %d", "replacementMarker", 64)
 	}
-	*j = CompiledContextV1Redaction(plain)
+	*j = CompiledContextRedaction(plain)
 	return nil
 }
 
-type CompiledContextV1TokenBudgets struct {
+type CompiledContextTokenBudgets struct {
 	// Memory corresponds to the JSON schema field "memory".
 	Memory int `json:"memory" yaml:"memory" mapstructure:"memory"`
 
@@ -2396,7 +2921,7 @@ type CompiledContextV1TokenBudgets struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *CompiledContextV1TokenBudgets) UnmarshalJSON(value []byte) error {
+func (j *CompiledContextTokenBudgets) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2405,21 +2930,21 @@ func (j *CompiledContextV1TokenBudgets) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["memory"]; raw != nil && !ok {
-		return fmt.Errorf("field memory in CompiledContextV1TokenBudgets: required")
+		return fmt.Errorf("field memory in CompiledContextTokenBudgets: required")
 	}
 	if _, ok := raw["system"]; raw != nil && !ok {
-		return fmt.Errorf("field system in CompiledContextV1TokenBudgets: required")
+		return fmt.Errorf("field system in CompiledContextTokenBudgets: required")
 	}
 	if _, ok := raw["tools"]; raw != nil && !ok {
-		return fmt.Errorf("field tools in CompiledContextV1TokenBudgets: required")
+		return fmt.Errorf("field tools in CompiledContextTokenBudgets: required")
 	}
 	if _, ok := raw["total"]; raw != nil && !ok {
-		return fmt.Errorf("field total in CompiledContextV1TokenBudgets: required")
+		return fmt.Errorf("field total in CompiledContextTokenBudgets: required")
 	}
 	if _, ok := raw["user"]; raw != nil && !ok {
-		return fmt.Errorf("field user in CompiledContextV1TokenBudgets: required")
+		return fmt.Errorf("field user in CompiledContextTokenBudgets: required")
 	}
-	type Plain CompiledContextV1TokenBudgets
+	type Plain CompiledContextTokenBudgets
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -2454,12 +2979,12 @@ func (j *CompiledContextV1TokenBudgets) UnmarshalJSON(value []byte) error {
 	if 0 > plain.User {
 		return fmt.Errorf("field %s: must be >= %v", "user", 0)
 	}
-	*j = CompiledContextV1TokenBudgets(plain)
+	*j = CompiledContextTokenBudgets(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *CompiledContextV1) UnmarshalJSON(value []byte) error {
+func (j *CompiledContext) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2467,34 +2992,31 @@ func (j *CompiledContextV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in CompiledContextV1: required")
-	}
 	if _, ok := raw["classifications"]; raw != nil && !ok {
-		return fmt.Errorf("field classifications in CompiledContextV1: required")
+		return fmt.Errorf("field classifications in CompiledContext: required")
 	}
 	if _, ok := raw["compiledAt"]; raw != nil && !ok {
-		return fmt.Errorf("field compiledAt in CompiledContextV1: required")
+		return fmt.Errorf("field compiledAt in CompiledContext: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in CompiledContextV1: required")
+		return fmt.Errorf("field kind in CompiledContext: required")
 	}
 	if _, ok := raw["layerDigests"]; raw != nil && !ok {
-		return fmt.Errorf("field layerDigests in CompiledContextV1: required")
+		return fmt.Errorf("field layerDigests in CompiledContext: required")
 	}
 	if _, ok := raw["orderedTrustLayers"]; raw != nil && !ok {
-		return fmt.Errorf("field orderedTrustLayers in CompiledContextV1: required")
+		return fmt.Errorf("field orderedTrustLayers in CompiledContext: required")
 	}
 	if _, ok := raw["policySnapshot"]; raw != nil && !ok {
-		return fmt.Errorf("field policySnapshot in CompiledContextV1: required")
+		return fmt.Errorf("field policySnapshot in CompiledContext: required")
 	}
 	if _, ok := raw["redaction"]; raw != nil && !ok {
-		return fmt.Errorf("field redaction in CompiledContextV1: required")
+		return fmt.Errorf("field redaction in CompiledContext: required")
 	}
 	if _, ok := raw["tokenBudgets"]; raw != nil && !ok {
-		return fmt.Errorf("field tokenBudgets in CompiledContextV1: required")
+		return fmt.Errorf("field tokenBudgets in CompiledContext: required")
 	}
-	type Plain CompiledContextV1
+	type Plain CompiledContext
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -2517,39 +3039,36 @@ func (j *CompiledContextV1) UnmarshalJSON(value []byte) error {
 	if len(plain.OrderedTrustLayers) > 128 {
 		return fmt.Errorf("field %s length: must be <= %d", "orderedTrustLayers", 128)
 	}
-	*j = CompiledContextV1(plain)
+	*j = CompiledContext(plain)
 	return nil
 }
 
-// Bounded ComponentPackageSpecV1 wire contract governed by PRD 0012.
-type ComponentPackageSpecV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
-
+// Bounded ComponentPackageSpec wire contract governed by PRD 0012.
+type ComponentPackageSpec struct {
 	// BuildPolicy corresponds to the JSON schema field "buildPolicy".
-	BuildPolicy SharedPrimitivesV1PolicyReference `json:"buildPolicy" yaml:"buildPolicy" mapstructure:"buildPolicy"`
+	BuildPolicy SharedPrimitivesPolicyReference `json:"buildPolicy" yaml:"buildPolicy" mapstructure:"buildPolicy"`
 
 	// CertificationPolicy corresponds to the JSON schema field "certificationPolicy".
-	CertificationPolicy SharedPrimitivesV1PolicyReference `json:"certificationPolicy" yaml:"certificationPolicy" mapstructure:"certificationPolicy"`
+	CertificationPolicy SharedPrimitivesPolicyReference `json:"certificationPolicy" yaml:"certificationPolicy" mapstructure:"certificationPolicy"`
 
 	// Inputs corresponds to the JSON schema field "inputs".
-	Inputs []SharedPrimitivesV1ArtifactReference `json:"inputs" yaml:"inputs" mapstructure:"inputs"`
+	Inputs []SharedPrimitivesArtifactReference `json:"inputs" yaml:"inputs" mapstructure:"inputs"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// Outputs corresponds to the JSON schema field "outputs".
-	Outputs []ComponentPackageSpecV1OutputsElem `json:"outputs" yaml:"outputs" mapstructure:"outputs"`
+	Outputs []ComponentPackageSpecOutputsElem `json:"outputs" yaml:"outputs" mapstructure:"outputs"`
 
 	// PackageIntent corresponds to the JSON schema field "packageIntent".
-	PackageIntent ComponentPackageSpecV1PackageIntent `json:"packageIntent" yaml:"packageIntent" mapstructure:"packageIntent"`
+	PackageIntent ComponentPackageSpecPackageIntent `json:"packageIntent" yaml:"packageIntent" mapstructure:"packageIntent"`
 
 	// ValidationConstraints corresponds to the JSON schema field
 	// "validationConstraints".
-	ValidationConstraints []SharedPrimitivesV1PolicyReference `json:"validationConstraints" yaml:"validationConstraints" mapstructure:"validationConstraints"`
+	ValidationConstraints []SharedPrimitivesPolicyReference `json:"validationConstraints" yaml:"validationConstraints" mapstructure:"validationConstraints"`
 }
 
-type ComponentPackageSpecV1OutputsElem struct {
+type ComponentPackageSpecOutputsElem struct {
 	// MaximumBytes corresponds to the JSON schema field "maximumBytes".
 	MaximumBytes int `json:"maximumBytes" yaml:"maximumBytes" mapstructure:"maximumBytes"`
 
@@ -2557,11 +3076,11 @@ type ComponentPackageSpecV1OutputsElem struct {
 	Name string `json:"name" yaml:"name" mapstructure:"name"`
 
 	// Schema corresponds to the JSON schema field "schema".
-	Schema SharedPrimitivesV1SchemaReference `json:"schema" yaml:"schema" mapstructure:"schema"`
+	Schema SharedPrimitivesSchemaReference `json:"schema" yaml:"schema" mapstructure:"schema"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ComponentPackageSpecV1OutputsElem) UnmarshalJSON(value []byte) error {
+func (j *ComponentPackageSpecOutputsElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2570,15 +3089,15 @@ func (j *ComponentPackageSpecV1OutputsElem) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["maximumBytes"]; raw != nil && !ok {
-		return fmt.Errorf("field maximumBytes in ComponentPackageSpecV1OutputsElem: required")
+		return fmt.Errorf("field maximumBytes in ComponentPackageSpecOutputsElem: required")
 	}
 	if _, ok := raw["name"]; raw != nil && !ok {
-		return fmt.Errorf("field name in ComponentPackageSpecV1OutputsElem: required")
+		return fmt.Errorf("field name in ComponentPackageSpecOutputsElem: required")
 	}
 	if _, ok := raw["schema"]; raw != nil && !ok {
-		return fmt.Errorf("field schema in ComponentPackageSpecV1OutputsElem: required")
+		return fmt.Errorf("field schema in ComponentPackageSpecOutputsElem: required")
 	}
-	type Plain ComponentPackageSpecV1OutputsElem
+	type Plain ComponentPackageSpecOutputsElem
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -2598,13 +3117,13 @@ func (j *ComponentPackageSpecV1OutputsElem) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.Name)) > 128 {
 		return fmt.Errorf("field %s length: must be <= %d", "name", 128)
 	}
-	*j = ComponentPackageSpecV1OutputsElem(plain)
+	*j = ComponentPackageSpecOutputsElem(plain)
 	return nil
 }
 
-type ComponentPackageSpecV1PackageIntent struct {
+type ComponentPackageSpecPackageIntent struct {
 	// ComponentType corresponds to the JSON schema field "componentType".
-	ComponentType ComponentPackageSpecV1PackageIntentComponentType `json:"componentType" yaml:"componentType" mapstructure:"componentType"`
+	ComponentType ComponentPackageSpecPackageIntentComponentType `json:"componentType" yaml:"componentType" mapstructure:"componentType"`
 
 	// Name corresponds to the JSON schema field "name".
 	Name string `json:"name" yaml:"name" mapstructure:"name"`
@@ -2613,14 +3132,14 @@ type ComponentPackageSpecV1PackageIntent struct {
 	Version string `json:"version" yaml:"version" mapstructure:"version"`
 }
 
-type ComponentPackageSpecV1PackageIntentComponentType string
+type ComponentPackageSpecPackageIntentComponentType string
 
-const ComponentPackageSpecV1PackageIntentComponentTypePackage ComponentPackageSpecV1PackageIntentComponentType = "package"
-const ComponentPackageSpecV1PackageIntentComponentTypePageComponent ComponentPackageSpecV1PackageIntentComponentType = "page-component"
-const ComponentPackageSpecV1PackageIntentComponentTypeSection ComponentPackageSpecV1PackageIntentComponentType = "section"
-const ComponentPackageSpecV1PackageIntentComponentTypeTheme ComponentPackageSpecV1PackageIntentComponentType = "theme"
+const ComponentPackageSpecPackageIntentComponentTypePackage ComponentPackageSpecPackageIntentComponentType = "package"
+const ComponentPackageSpecPackageIntentComponentTypePageComponent ComponentPackageSpecPackageIntentComponentType = "page-component"
+const ComponentPackageSpecPackageIntentComponentTypeSection ComponentPackageSpecPackageIntentComponentType = "section"
+const ComponentPackageSpecPackageIntentComponentTypeTheme ComponentPackageSpecPackageIntentComponentType = "theme"
 
-var enumValues_ComponentPackageSpecV1PackageIntentComponentType = []interface{}{
+var enumValues_ComponentPackageSpecPackageIntentComponentType = []interface{}{
 	"page-component",
 	"section",
 	"theme",
@@ -2628,7 +3147,7 @@ var enumValues_ComponentPackageSpecV1PackageIntentComponentType = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ComponentPackageSpecV1PackageIntentComponentType) UnmarshalJSON(value []byte) error {
+func (j *ComponentPackageSpecPackageIntentComponentType) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2637,21 +3156,21 @@ func (j *ComponentPackageSpecV1PackageIntentComponentType) UnmarshalJSON(value [
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ComponentPackageSpecV1PackageIntentComponentType {
+	for _, expected := range enumValues_ComponentPackageSpecPackageIntentComponentType {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentPackageSpecV1PackageIntentComponentType, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentPackageSpecPackageIntentComponentType, v)
 	}
-	*j = ComponentPackageSpecV1PackageIntentComponentType(v)
+	*j = ComponentPackageSpecPackageIntentComponentType(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ComponentPackageSpecV1PackageIntent) UnmarshalJSON(value []byte) error {
+func (j *ComponentPackageSpecPackageIntent) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2660,15 +3179,15 @@ func (j *ComponentPackageSpecV1PackageIntent) UnmarshalJSON(value []byte) error 
 		return err
 	}
 	if _, ok := raw["componentType"]; raw != nil && !ok {
-		return fmt.Errorf("field componentType in ComponentPackageSpecV1PackageIntent: required")
+		return fmt.Errorf("field componentType in ComponentPackageSpecPackageIntent: required")
 	}
 	if _, ok := raw["name"]; raw != nil && !ok {
-		return fmt.Errorf("field name in ComponentPackageSpecV1PackageIntent: required")
+		return fmt.Errorf("field name in ComponentPackageSpecPackageIntent: required")
 	}
 	if _, ok := raw["version"]; raw != nil && !ok {
-		return fmt.Errorf("field version in ComponentPackageSpecV1PackageIntent: required")
+		return fmt.Errorf("field version in ComponentPackageSpecPackageIntent: required")
 	}
-	type Plain ComponentPackageSpecV1PackageIntent
+	type Plain ComponentPackageSpecPackageIntent
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -2691,12 +3210,12 @@ func (j *ComponentPackageSpecV1PackageIntent) UnmarshalJSON(value []byte) error 
 	if utf8.RuneCountInString(string(plain.Version)) > 32 {
 		return fmt.Errorf("field %s length: must be <= %d", "version", 32)
 	}
-	*j = ComponentPackageSpecV1PackageIntent(plain)
+	*j = ComponentPackageSpecPackageIntent(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ComponentPackageSpecV1) UnmarshalJSON(value []byte) error {
+func (j *ComponentPackageSpec) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2704,31 +3223,28 @@ func (j *ComponentPackageSpecV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in ComponentPackageSpecV1: required")
-	}
 	if _, ok := raw["buildPolicy"]; raw != nil && !ok {
-		return fmt.Errorf("field buildPolicy in ComponentPackageSpecV1: required")
+		return fmt.Errorf("field buildPolicy in ComponentPackageSpec: required")
 	}
 	if _, ok := raw["certificationPolicy"]; raw != nil && !ok {
-		return fmt.Errorf("field certificationPolicy in ComponentPackageSpecV1: required")
+		return fmt.Errorf("field certificationPolicy in ComponentPackageSpec: required")
 	}
 	if _, ok := raw["inputs"]; raw != nil && !ok {
-		return fmt.Errorf("field inputs in ComponentPackageSpecV1: required")
+		return fmt.Errorf("field inputs in ComponentPackageSpec: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in ComponentPackageSpecV1: required")
+		return fmt.Errorf("field kind in ComponentPackageSpec: required")
 	}
 	if _, ok := raw["outputs"]; raw != nil && !ok {
-		return fmt.Errorf("field outputs in ComponentPackageSpecV1: required")
+		return fmt.Errorf("field outputs in ComponentPackageSpec: required")
 	}
 	if _, ok := raw["packageIntent"]; raw != nil && !ok {
-		return fmt.Errorf("field packageIntent in ComponentPackageSpecV1: required")
+		return fmt.Errorf("field packageIntent in ComponentPackageSpec: required")
 	}
 	if _, ok := raw["validationConstraints"]; raw != nil && !ok {
-		return fmt.Errorf("field validationConstraints in ComponentPackageSpecV1: required")
+		return fmt.Errorf("field validationConstraints in ComponentPackageSpec: required")
 	}
-	type Plain ComponentPackageSpecV1
+	type Plain ComponentPackageSpec
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -2748,15 +3264,320 @@ func (j *ComponentPackageSpecV1) UnmarshalJSON(value []byte) error {
 	if len(plain.ValidationConstraints) > 32 {
 		return fmt.Errorf("field %s length: must be <= %d", "validationConstraints", 32)
 	}
-	*j = ComponentPackageSpecV1(plain)
+	*j = ComponentPackageSpec(plain)
+	return nil
+}
+
+// Closed content-addressed Contract BOM manifest governed by design 0003 §8: the
+// exact schema, registry, definition, Tool profile, policy, bundle, and
+// generator/runtime identities resolved for a run. Resolution uses immutable
+// digests, rejects missing, duplicate-conflicting, revoked, unsigned, or
+// mismatched components, and performs no bundle-directed network fetch.
+type ContractBom struct {
+	// Components corresponds to the JSON schema field "components".
+	Components []ContractBomEntry `json:"components" yaml:"components" mapstructure:"components"`
+
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt SharedPrimitivesTimestamp `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Digest corresponds to the JSON schema field "digest".
+	Digest SharedPrimitivesDigest `json:"digest" yaml:"digest" mapstructure:"digest"`
+
+	// Issuer corresponds to the JSON schema field "issuer".
+	Issuer string `json:"issuer" yaml:"issuer" mapstructure:"issuer"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// ProfileDigest corresponds to the JSON schema field "profileDigest".
+	ProfileDigest SharedPrimitivesDigest `json:"profileDigest" yaml:"profileDigest" mapstructure:"profileDigest"`
+
+	// RegistrySetDigest corresponds to the JSON schema field "registrySetDigest".
+	RegistrySetDigest SharedPrimitivesDigest `json:"registrySetDigest" yaml:"registrySetDigest" mapstructure:"registrySetDigest"`
+}
+
+type ContractBomComponentKind string
+
+const ContractBomComponentKindAgentDefinition ContractBomComponentKind = "agent-definition"
+const ContractBomComponentKindAsyncapi ContractBomComponentKind = "asyncapi"
+const ContractBomComponentKindDeclarativeBundle ContractBomComponentKind = "declarative-bundle"
+const ContractBomComponentKindFixtureManifest ContractBomComponentKind = "fixture-manifest"
+const ContractBomComponentKindGeneratedBinding ContractBomComponentKind = "generated-binding"
+const ContractBomComponentKindGenerator ContractBomComponentKind = "generator"
+const ContractBomComponentKindJsonSchema ContractBomComponentKind = "json-schema"
+const ContractBomComponentKindOpenapi ContractBomComponentKind = "openapi"
+const ContractBomComponentKindPolicy ContractBomComponentKind = "policy"
+const ContractBomComponentKindRegistrySet ContractBomComponentKind = "registry-set"
+const ContractBomComponentKindRuntime ContractBomComponentKind = "runtime"
+const ContractBomComponentKindToolProfile ContractBomComponentKind = "tool-profile"
+
+var enumValues_ContractBomComponentKind = []interface{}{
+	"agent-definition",
+	"asyncapi",
+	"declarative-bundle",
+	"fixture-manifest",
+	"generated-binding",
+	"generator",
+	"json-schema",
+	"openapi",
+	"policy",
+	"registry-set",
+	"runtime",
+	"tool-profile",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ContractBomComponentKind) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ContractBomComponentKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ContractBomComponentKind, v)
+	}
+	*j = ContractBomComponentKind(v)
+	return nil
+}
+
+type ContractBomComponentName string
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ContractBomComponentName) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	type Plain ContractBomComponentName
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^anvilkit\.[a-z0-9][a-z0-9.-]*$`, string(plain)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "", `^anvilkit\.[a-z0-9][a-z0-9.-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain)) < 8 {
+		return fmt.Errorf("field %s length: must be >= %d", "", 8)
+	}
+	if utf8.RuneCountInString(string(plain)) > 160 {
+		return fmt.Errorf("field %s length: must be <= %d", "", 160)
+	}
+	*j = ContractBomComponentName(plain)
+	return nil
+}
+
+type ContractBomDependency struct {
+	// Digest corresponds to the JSON schema field "digest".
+	Digest SharedPrimitivesDigest `json:"digest" yaml:"digest" mapstructure:"digest"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind ContractBomComponentKind `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name ContractBomComponentName `json:"name" yaml:"name" mapstructure:"name"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ContractBomDependency) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["digest"]; raw != nil && !ok {
+		return fmt.Errorf("field digest in ContractBomDependency: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ContractBomDependency: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ContractBomDependency: required")
+	}
+	type Plain ContractBomDependency
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ContractBomDependency(plain)
+	return nil
+}
+
+type ContractBomEntry struct {
+	// Dependencies corresponds to the JSON schema field "dependencies".
+	Dependencies []ContractBomDependency `json:"dependencies" yaml:"dependencies" mapstructure:"dependencies"`
+
+	// Digest corresponds to the JSON schema field "digest".
+	Digest SharedPrimitivesDigest `json:"digest" yaml:"digest" mapstructure:"digest"`
+
+	// Issuer corresponds to the JSON schema field "issuer".
+	Issuer string `json:"issuer" yaml:"issuer" mapstructure:"issuer"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind ContractBomComponentKind `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// MediaType corresponds to the JSON schema field "mediaType".
+	MediaType string `json:"mediaType" yaml:"mediaType" mapstructure:"mediaType"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name ContractBomComponentName `json:"name" yaml:"name" mapstructure:"name"`
+
+	// ProvenanceDigest corresponds to the JSON schema field "provenanceDigest".
+	ProvenanceDigest SharedPrimitivesDigest `json:"provenanceDigest" yaml:"provenanceDigest" mapstructure:"provenanceDigest"`
+
+	// Size corresponds to the JSON schema field "size".
+	Size int `json:"size" yaml:"size" mapstructure:"size"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ContractBomEntry) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["dependencies"]; raw != nil && !ok {
+		return fmt.Errorf("field dependencies in ContractBomEntry: required")
+	}
+	if _, ok := raw["digest"]; raw != nil && !ok {
+		return fmt.Errorf("field digest in ContractBomEntry: required")
+	}
+	if _, ok := raw["issuer"]; raw != nil && !ok {
+		return fmt.Errorf("field issuer in ContractBomEntry: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ContractBomEntry: required")
+	}
+	if _, ok := raw["mediaType"]; raw != nil && !ok {
+		return fmt.Errorf("field mediaType in ContractBomEntry: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ContractBomEntry: required")
+	}
+	if _, ok := raw["provenanceDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field provenanceDigest in ContractBomEntry: required")
+	}
+	if _, ok := raw["size"]; raw != nil && !ok {
+		return fmt.Errorf("field size in ContractBomEntry: required")
+	}
+	type Plain ContractBomEntry
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.Dependencies) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "dependencies", 64)
+	}
+	if matched, _ := regexp.MatchString(`^urn:anvilkit:issuer:[a-z0-9][a-z0-9:-]*$`, string(plain.Issuer)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Issuer", `^urn:anvilkit:issuer:[a-z0-9][a-z0-9:-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.Issuer)) < 16 {
+		return fmt.Errorf("field %s length: must be >= %d", "issuer", 16)
+	}
+	if utf8.RuneCountInString(string(plain.Issuer)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "issuer", 256)
+	}
+	if matched, _ := regexp.MatchString(`^[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*$`, string(plain.MediaType)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "MediaType", `^[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.MediaType)) < 3 {
+		return fmt.Errorf("field %s length: must be >= %d", "mediaType", 3)
+	}
+	if utf8.RuneCountInString(string(plain.MediaType)) > 127 {
+		return fmt.Errorf("field %s length: must be <= %d", "mediaType", 127)
+	}
+	if 9007199254740991 < plain.Size {
+		return fmt.Errorf("field %s: must be <= %v", "size", 9007199254740991)
+	}
+	if 0 > plain.Size {
+		return fmt.Errorf("field %s: must be >= %v", "size", 0)
+	}
+	*j = ContractBomEntry(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ContractBom) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["components"]; raw != nil && !ok {
+		return fmt.Errorf("field components in ContractBom: required")
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in ContractBom: required")
+	}
+	if _, ok := raw["digest"]; raw != nil && !ok {
+		return fmt.Errorf("field digest in ContractBom: required")
+	}
+	if _, ok := raw["issuer"]; raw != nil && !ok {
+		return fmt.Errorf("field issuer in ContractBom: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ContractBom: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ContractBom: required")
+	}
+	if _, ok := raw["profileDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field profileDigest in ContractBom: required")
+	}
+	if _, ok := raw["registrySetDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field registrySetDigest in ContractBom: required")
+	}
+	type Plain ContractBom
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.Components != nil && len(plain.Components) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "components", 1)
+	}
+	if len(plain.Components) > 4096 {
+		return fmt.Errorf("field %s length: must be <= %d", "components", 4096)
+	}
+	if matched, _ := regexp.MatchString(`^urn:anvilkit:issuer:[a-z0-9][a-z0-9:-]*$`, string(plain.Issuer)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Issuer", `^urn:anvilkit:issuer:[a-z0-9][a-z0-9:-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.Issuer)) < 16 {
+		return fmt.Errorf("field %s length: must be >= %d", "issuer", 16)
+	}
+	if utf8.RuneCountInString(string(plain.Issuer)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "issuer", 256)
+	}
+	if matched, _ := regexp.MatchString(`^[a-z0-9][a-z0-9.-]*$`, string(plain.Name)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Name", `^[a-z0-9][a-z0-9.-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "name", 128)
+	}
+	*j = ContractBom(plain)
 	return nil
 }
 
 // Signed fail-closed key revocation snapshot with explicit freshness.
-type ContractRevocationSnapshotV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
-
+type ContractRevocationSnapshot struct {
 	// IssuedAt corresponds to the JSON schema field "issuedAt".
 	IssuedAt time.Time `json:"issuedAt" yaml:"issuedAt" mapstructure:"issuedAt"`
 
@@ -2767,13 +3588,13 @@ type ContractRevocationSnapshotV1 struct {
 	NextUpdate time.Time `json:"nextUpdate" yaml:"nextUpdate" mapstructure:"nextUpdate"`
 
 	// RevokedKeys corresponds to the JSON schema field "revokedKeys".
-	RevokedKeys []ContractRevocationSnapshotV1RevokedKeysElem `json:"revokedKeys" yaml:"revokedKeys" mapstructure:"revokedKeys"`
+	RevokedKeys []ContractRevocationSnapshotRevokedKeysElem `json:"revokedKeys" yaml:"revokedKeys" mapstructure:"revokedKeys"`
 
 	// SnapshotId corresponds to the JSON schema field "snapshotId".
 	SnapshotId string `json:"snapshotId" yaml:"snapshotId" mapstructure:"snapshotId"`
 }
 
-type ContractRevocationSnapshotV1RevokedKeysElem struct {
+type ContractRevocationSnapshotRevokedKeysElem struct {
 	// EffectiveAt corresponds to the JSON schema field "effectiveAt".
 	EffectiveAt time.Time `json:"effectiveAt" yaml:"effectiveAt" mapstructure:"effectiveAt"`
 
@@ -2785,7 +3606,7 @@ type ContractRevocationSnapshotV1RevokedKeysElem struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ContractRevocationSnapshotV1RevokedKeysElem) UnmarshalJSON(value []byte) error {
+func (j *ContractRevocationSnapshotRevokedKeysElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2794,15 +3615,15 @@ func (j *ContractRevocationSnapshotV1RevokedKeysElem) UnmarshalJSON(value []byte
 		return err
 	}
 	if _, ok := raw["effectiveAt"]; raw != nil && !ok {
-		return fmt.Errorf("field effectiveAt in ContractRevocationSnapshotV1RevokedKeysElem: required")
+		return fmt.Errorf("field effectiveAt in ContractRevocationSnapshotRevokedKeysElem: required")
 	}
 	if _, ok := raw["keyId"]; raw != nil && !ok {
-		return fmt.Errorf("field keyId in ContractRevocationSnapshotV1RevokedKeysElem: required")
+		return fmt.Errorf("field keyId in ContractRevocationSnapshotRevokedKeysElem: required")
 	}
 	if _, ok := raw["reason"]; raw != nil && !ok {
-		return fmt.Errorf("field reason in ContractRevocationSnapshotV1RevokedKeysElem: required")
+		return fmt.Errorf("field reason in ContractRevocationSnapshotRevokedKeysElem: required")
 	}
-	type Plain ContractRevocationSnapshotV1RevokedKeysElem
+	type Plain ContractRevocationSnapshotRevokedKeysElem
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -2822,12 +3643,12 @@ func (j *ContractRevocationSnapshotV1RevokedKeysElem) UnmarshalJSON(value []byte
 	if utf8.RuneCountInString(string(plain.Reason)) > 256 {
 		return fmt.Errorf("field %s length: must be <= %d", "reason", 256)
 	}
-	*j = ContractRevocationSnapshotV1RevokedKeysElem(plain)
+	*j = ContractRevocationSnapshotRevokedKeysElem(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ContractRevocationSnapshotV1) UnmarshalJSON(value []byte) error {
+func (j *ContractRevocationSnapshot) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2835,25 +3656,22 @@ func (j *ContractRevocationSnapshotV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in ContractRevocationSnapshotV1: required")
-	}
 	if _, ok := raw["issuedAt"]; raw != nil && !ok {
-		return fmt.Errorf("field issuedAt in ContractRevocationSnapshotV1: required")
+		return fmt.Errorf("field issuedAt in ContractRevocationSnapshot: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in ContractRevocationSnapshotV1: required")
+		return fmt.Errorf("field kind in ContractRevocationSnapshot: required")
 	}
 	if _, ok := raw["nextUpdate"]; raw != nil && !ok {
-		return fmt.Errorf("field nextUpdate in ContractRevocationSnapshotV1: required")
+		return fmt.Errorf("field nextUpdate in ContractRevocationSnapshot: required")
 	}
 	if _, ok := raw["revokedKeys"]; raw != nil && !ok {
-		return fmt.Errorf("field revokedKeys in ContractRevocationSnapshotV1: required")
+		return fmt.Errorf("field revokedKeys in ContractRevocationSnapshot: required")
 	}
 	if _, ok := raw["snapshotId"]; raw != nil && !ok {
-		return fmt.Errorf("field snapshotId in ContractRevocationSnapshotV1: required")
+		return fmt.Errorf("field snapshotId in ContractRevocationSnapshot: required")
 	}
-	type Plain ContractRevocationSnapshotV1
+	type Plain ContractRevocationSnapshot
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -2870,18 +3688,275 @@ func (j *ContractRevocationSnapshotV1) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.SnapshotId)) > 128 {
 		return fmt.Errorf("field %s length: must be <= %d", "snapshotId", 128)
 	}
-	*j = ContractRevocationSnapshotV1(plain)
+	*j = ContractRevocationSnapshot(plain)
+	return nil
+}
+
+// Transport-neutral Contract Runtime request governed by ADR-022. The same request
+// under the same bundle, runtime profile, and declared inputs must produce the
+// same canonical result; time, randomness, environment, and locale are unavailable
+// unless explicitly supplied as input.
+type ContractRuntimeRequest struct {
+	// BundleDigest corresponds to the JSON schema field "bundleDigest".
+	BundleDigest SharedPrimitivesDigest `json:"bundleDigest" yaml:"bundleDigest" mapstructure:"bundleDigest"`
+
+	// CanonicalInput corresponds to the JSON schema field "canonicalInput".
+	CanonicalInput string `json:"canonicalInput" yaml:"canonicalInput" mapstructure:"canonicalInput"`
+
+	// CanonicalInputDigest corresponds to the JSON schema field
+	// "canonicalInputDigest".
+	CanonicalInputDigest SharedPrimitivesDigest `json:"canonicalInputDigest" yaml:"canonicalInputDigest" mapstructure:"canonicalInputDigest"`
+
+	// Contract corresponds to the JSON schema field "contract".
+	Contract SharedPrimitivesSchemaReference `json:"contract" yaml:"contract" mapstructure:"contract"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Limits corresponds to the JSON schema field "limits".
+	Limits SharedPrimitivesResourceLimits `json:"limits" yaml:"limits" mapstructure:"limits"`
+
+	// Operation corresponds to the JSON schema field "operation".
+	Operation ContractRuntimeRequestOperation `json:"operation" yaml:"operation" mapstructure:"operation"`
+
+	// Policy corresponds to the JSON schema field "policy".
+	Policy SharedPrimitivesPolicyReference `json:"policy" yaml:"policy" mapstructure:"policy"`
+
+	// TraceContext corresponds to the JSON schema field "traceContext".
+	TraceContext *SharedPrimitivesTraceContext `json:"traceContext,omitempty,omitzero" yaml:"traceContext,omitempty" mapstructure:"traceContext,omitempty"`
+}
+
+type ContractRuntimeRequestOperation string
+
+const ContractRuntimeRequestOperationExecute ContractRuntimeRequestOperation = "execute"
+const ContractRuntimeRequestOperationValidate ContractRuntimeRequestOperation = "validate"
+
+var enumValues_ContractRuntimeRequestOperation = []interface{}{
+	"validate",
+	"execute",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ContractRuntimeRequestOperation) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ContractRuntimeRequestOperation {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ContractRuntimeRequestOperation, v)
+	}
+	*j = ContractRuntimeRequestOperation(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ContractRuntimeRequest) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["bundleDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field bundleDigest in ContractRuntimeRequest: required")
+	}
+	if _, ok := raw["canonicalInput"]; raw != nil && !ok {
+		return fmt.Errorf("field canonicalInput in ContractRuntimeRequest: required")
+	}
+	if _, ok := raw["canonicalInputDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field canonicalInputDigest in ContractRuntimeRequest: required")
+	}
+	if _, ok := raw["contract"]; raw != nil && !ok {
+		return fmt.Errorf("field contract in ContractRuntimeRequest: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ContractRuntimeRequest: required")
+	}
+	if _, ok := raw["limits"]; raw != nil && !ok {
+		return fmt.Errorf("field limits in ContractRuntimeRequest: required")
+	}
+	if _, ok := raw["operation"]; raw != nil && !ok {
+		return fmt.Errorf("field operation in ContractRuntimeRequest: required")
+	}
+	if _, ok := raw["policy"]; raw != nil && !ok {
+		return fmt.Errorf("field policy in ContractRuntimeRequest: required")
+	}
+	type Plain ContractRuntimeRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.CanonicalInput)) < 2 {
+		return fmt.Errorf("field %s length: must be >= %d", "canonicalInput", 2)
+	}
+	if utf8.RuneCountInString(string(plain.CanonicalInput)) > 262144 {
+		return fmt.Errorf("field %s length: must be <= %d", "canonicalInput", 262144)
+	}
+	*j = ContractRuntimeRequest(plain)
+	return nil
+}
+
+// Transport-neutral deterministic Contract Runtime result governed by ADR-022: a
+// canonical result or ProblemDetails, plus the bundle, schema, policy, runtime,
+// and execution digests used for execution.
+type ContractRuntimeResult struct {
+	// BundleDigest corresponds to the JSON schema field "bundleDigest".
+	BundleDigest SharedPrimitivesDigest `json:"bundleDigest" yaml:"bundleDigest" mapstructure:"bundleDigest"`
+
+	// CanonicalOutput corresponds to the JSON schema field "canonicalOutput".
+	CanonicalOutput *string `json:"canonicalOutput,omitempty,omitzero" yaml:"canonicalOutput,omitempty" mapstructure:"canonicalOutput,omitempty"`
+
+	// ExecutionDigest corresponds to the JSON schema field "executionDigest".
+	ExecutionDigest SharedPrimitivesDigest `json:"executionDigest" yaml:"executionDigest" mapstructure:"executionDigest"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Outcome corresponds to the JSON schema field "outcome".
+	Outcome ContractRuntimeResultOutcome `json:"outcome" yaml:"outcome" mapstructure:"outcome"`
+
+	// OutputDigest corresponds to the JSON schema field "outputDigest".
+	OutputDigest *SharedPrimitivesDigest `json:"outputDigest,omitempty,omitzero" yaml:"outputDigest,omitempty" mapstructure:"outputDigest,omitempty"`
+
+	// PolicyDigest corresponds to the JSON schema field "policyDigest".
+	PolicyDigest SharedPrimitivesDigest `json:"policyDigest" yaml:"policyDigest" mapstructure:"policyDigest"`
+
+	// Problem corresponds to the JSON schema field "problem".
+	Problem *ProblemDetails `json:"problem,omitempty,omitzero" yaml:"problem,omitempty" mapstructure:"problem,omitempty"`
+
+	// Runtime corresponds to the JSON schema field "runtime".
+	Runtime ContractRuntimeResultRuntime `json:"runtime" yaml:"runtime" mapstructure:"runtime"`
+
+	// SchemaDigest corresponds to the JSON schema field "schemaDigest".
+	SchemaDigest SharedPrimitivesDigest `json:"schemaDigest" yaml:"schemaDigest" mapstructure:"schemaDigest"`
+}
+
+type ContractRuntimeResultOutcome string
+
+const ContractRuntimeResultOutcomeOk ContractRuntimeResultOutcome = "ok"
+const ContractRuntimeResultOutcomeProblem ContractRuntimeResultOutcome = "problem"
+
+var enumValues_ContractRuntimeResultOutcome = []interface{}{
+	"ok",
+	"problem",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ContractRuntimeResultOutcome) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ContractRuntimeResultOutcome {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ContractRuntimeResultOutcome, v)
+	}
+	*j = ContractRuntimeResultOutcome(v)
+	return nil
+}
+
+type ContractRuntimeResultRuntime struct {
+	// BuildIdentity corresponds to the JSON schema field "buildIdentity".
+	BuildIdentity SharedPrimitivesOpaqueId `json:"buildIdentity" yaml:"buildIdentity" mapstructure:"buildIdentity"`
+
+	// RuntimeId corresponds to the JSON schema field "runtimeId".
+	RuntimeId SharedPrimitivesOpaqueId `json:"runtimeId" yaml:"runtimeId" mapstructure:"runtimeId"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ContractRuntimeResultRuntime) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["buildIdentity"]; raw != nil && !ok {
+		return fmt.Errorf("field buildIdentity in ContractRuntimeResultRuntime: required")
+	}
+	if _, ok := raw["runtimeId"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeId in ContractRuntimeResultRuntime: required")
+	}
+	type Plain ContractRuntimeResultRuntime
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ContractRuntimeResultRuntime(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ContractRuntimeResult) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["bundleDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field bundleDigest in ContractRuntimeResult: required")
+	}
+	if _, ok := raw["executionDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field executionDigest in ContractRuntimeResult: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ContractRuntimeResult: required")
+	}
+	if _, ok := raw["outcome"]; raw != nil && !ok {
+		return fmt.Errorf("field outcome in ContractRuntimeResult: required")
+	}
+	if _, ok := raw["policyDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field policyDigest in ContractRuntimeResult: required")
+	}
+	if _, ok := raw["runtime"]; raw != nil && !ok {
+		return fmt.Errorf("field runtime in ContractRuntimeResult: required")
+	}
+	if _, ok := raw["schemaDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field schemaDigest in ContractRuntimeResult: required")
+	}
+	type Plain ContractRuntimeResult
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.CanonicalOutput != nil && utf8.RuneCountInString(string(*plain.CanonicalOutput)) < 2 {
+		return fmt.Errorf("field %s length: must be >= %d", "canonicalOutput", 2)
+	}
+	if plain.CanonicalOutput != nil && utf8.RuneCountInString(string(*plain.CanonicalOutput)) > 262144 {
+		return fmt.Errorf("field %s length: must be <= %d", "canonicalOutput", 262144)
+	}
+	*j = ContractRuntimeResult(plain)
 	return nil
 }
 
 // Canonical context-bound statement carried by a standard single-signature DSSE
 // envelope.
-type ContractSignatureStatementV1 struct {
+type ContractSignatureStatement struct {
 	// Algorithm corresponds to the JSON schema field "algorithm".
 	Algorithm interface{} `json:"algorithm" yaml:"algorithm" mapstructure:"algorithm"`
-
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
 
 	// Audience corresponds to the JSON schema field "audience".
 	Audience interface{} `json:"audience" yaml:"audience" mapstructure:"audience"`
@@ -2908,10 +3983,10 @@ type ContractSignatureStatementV1 struct {
 	NotBefore time.Time `json:"notBefore" yaml:"notBefore" mapstructure:"notBefore"`
 
 	// Subject corresponds to the JSON schema field "subject".
-	Subject ContractSignatureStatementV1Subject `json:"subject" yaml:"subject" mapstructure:"subject"`
+	Subject ContractSignatureStatementSubject `json:"subject" yaml:"subject" mapstructure:"subject"`
 }
 
-type ContractSignatureStatementV1Subject struct {
+type ContractSignatureStatementSubject struct {
 	// Digest corresponds to the JSON schema field "digest".
 	Digest string `json:"digest" yaml:"digest" mapstructure:"digest"`
 
@@ -2926,7 +4001,7 @@ type ContractSignatureStatementV1Subject struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ContractSignatureStatementV1Subject) UnmarshalJSON(value []byte) error {
+func (j *ContractSignatureStatementSubject) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2935,18 +4010,18 @@ func (j *ContractSignatureStatementV1Subject) UnmarshalJSON(value []byte) error 
 		return err
 	}
 	if _, ok := raw["digest"]; raw != nil && !ok {
-		return fmt.Errorf("field digest in ContractSignatureStatementV1Subject: required")
+		return fmt.Errorf("field digest in ContractSignatureStatementSubject: required")
 	}
 	if _, ok := raw["mediaType"]; raw != nil && !ok {
-		return fmt.Errorf("field mediaType in ContractSignatureStatementV1Subject: required")
+		return fmt.Errorf("field mediaType in ContractSignatureStatementSubject: required")
 	}
 	if _, ok := raw["purpose"]; raw != nil && !ok {
-		return fmt.Errorf("field purpose in ContractSignatureStatementV1Subject: required")
+		return fmt.Errorf("field purpose in ContractSignatureStatementSubject: required")
 	}
 	if _, ok := raw["size"]; raw != nil && !ok {
-		return fmt.Errorf("field size in ContractSignatureStatementV1Subject: required")
+		return fmt.Errorf("field size in ContractSignatureStatementSubject: required")
 	}
-	type Plain ContractSignatureStatementV1Subject
+	type Plain ContractSignatureStatementSubject
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -2984,12 +4059,12 @@ func (j *ContractSignatureStatementV1Subject) UnmarshalJSON(value []byte) error 
 	if 0 > plain.Size {
 		return fmt.Errorf("field %s: must be >= %v", "size", 0)
 	}
-	*j = ContractSignatureStatementV1Subject(plain)
+	*j = ContractSignatureStatementSubject(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ContractSignatureStatementV1) UnmarshalJSON(value []byte) error {
+func (j *ContractSignatureStatement) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -2998,39 +4073,36 @@ func (j *ContractSignatureStatementV1) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["algorithm"]; raw != nil && !ok {
-		return fmt.Errorf("field algorithm in ContractSignatureStatementV1: required")
-	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in ContractSignatureStatementV1: required")
+		return fmt.Errorf("field algorithm in ContractSignatureStatement: required")
 	}
 	if _, ok := raw["audience"]; raw != nil && !ok {
-		return fmt.Errorf("field audience in ContractSignatureStatementV1: required")
+		return fmt.Errorf("field audience in ContractSignatureStatement: required")
 	}
 	if _, ok := raw["contractBomDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field contractBomDigest in ContractSignatureStatementV1: required")
+		return fmt.Errorf("field contractBomDigest in ContractSignatureStatement: required")
 	}
 	if _, ok := raw["expiresAt"]; raw != nil && !ok {
-		return fmt.Errorf("field expiresAt in ContractSignatureStatementV1: required")
+		return fmt.Errorf("field expiresAt in ContractSignatureStatement: required")
 	}
 	if _, ok := raw["issuedAt"]; raw != nil && !ok {
-		return fmt.Errorf("field issuedAt in ContractSignatureStatementV1: required")
+		return fmt.Errorf("field issuedAt in ContractSignatureStatement: required")
 	}
 	if _, ok := raw["issuer"]; raw != nil && !ok {
-		return fmt.Errorf("field issuer in ContractSignatureStatementV1: required")
+		return fmt.Errorf("field issuer in ContractSignatureStatement: required")
 	}
 	if _, ok := raw["keyId"]; raw != nil && !ok {
-		return fmt.Errorf("field keyId in ContractSignatureStatementV1: required")
+		return fmt.Errorf("field keyId in ContractSignatureStatement: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in ContractSignatureStatementV1: required")
+		return fmt.Errorf("field kind in ContractSignatureStatement: required")
 	}
 	if _, ok := raw["notBefore"]; raw != nil && !ok {
-		return fmt.Errorf("field notBefore in ContractSignatureStatementV1: required")
+		return fmt.Errorf("field notBefore in ContractSignatureStatement: required")
 	}
 	if _, ok := raw["subject"]; raw != nil && !ok {
-		return fmt.Errorf("field subject in ContractSignatureStatementV1: required")
+		return fmt.Errorf("field subject in ContractSignatureStatement: required")
 	}
-	type Plain ContractSignatureStatementV1
+	type Plain ContractSignatureStatement
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -3053,21 +4125,18 @@ func (j *ContractSignatureStatementV1) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.KeyId)) > 256 {
 		return fmt.Errorf("field %s length: must be <= %d", "keyId", 256)
 	}
-	*j = ContractSignatureStatementV1(plain)
+	*j = ContractSignatureStatement(plain)
 	return nil
 }
 
 // Pinned public trust snapshot for contract release and apply-authorization
 // verification.
-type ContractTrustRootV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
-
+type ContractTrustRoot struct {
 	// IssuedAt corresponds to the JSON schema field "issuedAt".
 	IssuedAt time.Time `json:"issuedAt" yaml:"issuedAt" mapstructure:"issuedAt"`
 
 	// Keys corresponds to the JSON schema field "keys".
-	Keys []ContractTrustRootV1KeysElem `json:"keys" yaml:"keys" mapstructure:"keys"`
+	Keys []ContractTrustRootKeysElem `json:"keys" yaml:"keys" mapstructure:"keys"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
@@ -3083,9 +4152,9 @@ type ContractTrustRootV1 struct {
 	SnapshotId string `json:"snapshotId" yaml:"snapshotId" mapstructure:"snapshotId"`
 }
 
-type ContractTrustRootV1KeysElem struct {
+type ContractTrustRootKeysElem struct {
 	// Algorithms corresponds to the JSON schema field "algorithms".
-	Algorithms []ContractTrustRootV1KeysElemAlgorithmsElem `json:"algorithms" yaml:"algorithms" mapstructure:"algorithms"`
+	Algorithms []ContractTrustRootKeysElemAlgorithmsElem `json:"algorithms" yaml:"algorithms" mapstructure:"algorithms"`
 
 	// Audiences corresponds to the JSON schema field "audiences".
 	Audiences []string `json:"audiences" yaml:"audiences" mapstructure:"audiences"`
@@ -3103,24 +4172,24 @@ type ContractTrustRootV1KeysElem struct {
 	NotBefore time.Time `json:"notBefore" yaml:"notBefore" mapstructure:"notBefore"`
 
 	// PublicKeyJwk corresponds to the JSON schema field "publicKeyJwk".
-	PublicKeyJwk ContractTrustRootV1KeysElemPublicKeyJwk `json:"publicKeyJwk" yaml:"publicKeyJwk" mapstructure:"publicKeyJwk"`
+	PublicKeyJwk ContractTrustRootKeysElemPublicKeyJwk `json:"publicKeyJwk" yaml:"publicKeyJwk" mapstructure:"publicKeyJwk"`
 
 	// Status corresponds to the JSON schema field "status".
-	Status ContractTrustRootV1KeysElemStatus `json:"status" yaml:"status" mapstructure:"status"`
+	Status ContractTrustRootKeysElemStatus `json:"status" yaml:"status" mapstructure:"status"`
 }
 
-type ContractTrustRootV1KeysElemAlgorithmsElem string
+type ContractTrustRootKeysElemAlgorithmsElem string
 
-const ContractTrustRootV1KeysElemAlgorithmsElemDsseEd25519V1 ContractTrustRootV1KeysElemAlgorithmsElem = "dsse-ed25519-v1"
-const ContractTrustRootV1KeysElemAlgorithmsElemJwsEddsaV1 ContractTrustRootV1KeysElemAlgorithmsElem = "jws-eddsa-v1"
+const ContractTrustRootKeysElemAlgorithmsElemDsseEd25519V1 ContractTrustRootKeysElemAlgorithmsElem = "dsse-ed25519-v1"
+const ContractTrustRootKeysElemAlgorithmsElemJwsEddsaV1 ContractTrustRootKeysElemAlgorithmsElem = "jws-eddsa-v1"
 
-var enumValues_ContractTrustRootV1KeysElemAlgorithmsElem = []interface{}{
+var enumValues_ContractTrustRootKeysElemAlgorithmsElem = []interface{}{
 	"dsse-ed25519-v1",
 	"jws-eddsa-v1",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ContractTrustRootV1KeysElemAlgorithmsElem) UnmarshalJSON(value []byte) error {
+func (j *ContractTrustRootKeysElemAlgorithmsElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3129,20 +4198,20 @@ func (j *ContractTrustRootV1KeysElemAlgorithmsElem) UnmarshalJSON(value []byte) 
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ContractTrustRootV1KeysElemAlgorithmsElem {
+	for _, expected := range enumValues_ContractTrustRootKeysElemAlgorithmsElem {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ContractTrustRootV1KeysElemAlgorithmsElem, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ContractTrustRootKeysElemAlgorithmsElem, v)
 	}
-	*j = ContractTrustRootV1KeysElemAlgorithmsElem(v)
+	*j = ContractTrustRootKeysElemAlgorithmsElem(v)
 	return nil
 }
 
-type ContractTrustRootV1KeysElemPublicKeyJwk struct {
+type ContractTrustRootKeysElemPublicKeyJwk struct {
 	// Crv corresponds to the JSON schema field "crv".
 	Crv interface{} `json:"crv" yaml:"crv" mapstructure:"crv"`
 
@@ -3154,7 +4223,7 @@ type ContractTrustRootV1KeysElemPublicKeyJwk struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ContractTrustRootV1KeysElemPublicKeyJwk) UnmarshalJSON(value []byte) error {
+func (j *ContractTrustRootKeysElemPublicKeyJwk) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3163,15 +4232,15 @@ func (j *ContractTrustRootV1KeysElemPublicKeyJwk) UnmarshalJSON(value []byte) er
 		return err
 	}
 	if _, ok := raw["crv"]; raw != nil && !ok {
-		return fmt.Errorf("field crv in ContractTrustRootV1KeysElemPublicKeyJwk: required")
+		return fmt.Errorf("field crv in ContractTrustRootKeysElemPublicKeyJwk: required")
 	}
 	if _, ok := raw["kty"]; raw != nil && !ok {
-		return fmt.Errorf("field kty in ContractTrustRootV1KeysElemPublicKeyJwk: required")
+		return fmt.Errorf("field kty in ContractTrustRootKeysElemPublicKeyJwk: required")
 	}
 	if _, ok := raw["x"]; raw != nil && !ok {
-		return fmt.Errorf("field x in ContractTrustRootV1KeysElemPublicKeyJwk: required")
+		return fmt.Errorf("field x in ContractTrustRootKeysElemPublicKeyJwk: required")
 	}
-	type Plain ContractTrustRootV1KeysElemPublicKeyJwk
+	type Plain ContractTrustRootKeysElemPublicKeyJwk
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -3185,18 +4254,18 @@ func (j *ContractTrustRootV1KeysElemPublicKeyJwk) UnmarshalJSON(value []byte) er
 	if utf8.RuneCountInString(string(plain.X)) > 43 {
 		return fmt.Errorf("field %s length: must be <= %d", "x", 43)
 	}
-	*j = ContractTrustRootV1KeysElemPublicKeyJwk(plain)
+	*j = ContractTrustRootKeysElemPublicKeyJwk(plain)
 	return nil
 }
 
-type ContractTrustRootV1KeysElemStatus string
+type ContractTrustRootKeysElemStatus string
 
-const ContractTrustRootV1KeysElemStatusActive ContractTrustRootV1KeysElemStatus = "active"
-const ContractTrustRootV1KeysElemStatusOverlap ContractTrustRootV1KeysElemStatus = "overlap"
-const ContractTrustRootV1KeysElemStatusRetired ContractTrustRootV1KeysElemStatus = "retired"
-const ContractTrustRootV1KeysElemStatusRevoked ContractTrustRootV1KeysElemStatus = "revoked"
+const ContractTrustRootKeysElemStatusActive ContractTrustRootKeysElemStatus = "active"
+const ContractTrustRootKeysElemStatusOverlap ContractTrustRootKeysElemStatus = "overlap"
+const ContractTrustRootKeysElemStatusRetired ContractTrustRootKeysElemStatus = "retired"
+const ContractTrustRootKeysElemStatusRevoked ContractTrustRootKeysElemStatus = "revoked"
 
-var enumValues_ContractTrustRootV1KeysElemStatus = []interface{}{
+var enumValues_ContractTrustRootKeysElemStatus = []interface{}{
 	"active",
 	"overlap",
 	"retired",
@@ -3204,7 +4273,7 @@ var enumValues_ContractTrustRootV1KeysElemStatus = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ContractTrustRootV1KeysElemStatus) UnmarshalJSON(value []byte) error {
+func (j *ContractTrustRootKeysElemStatus) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3213,21 +4282,21 @@ func (j *ContractTrustRootV1KeysElemStatus) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ContractTrustRootV1KeysElemStatus {
+	for _, expected := range enumValues_ContractTrustRootKeysElemStatus {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ContractTrustRootV1KeysElemStatus, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ContractTrustRootKeysElemStatus, v)
 	}
-	*j = ContractTrustRootV1KeysElemStatus(v)
+	*j = ContractTrustRootKeysElemStatus(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ContractTrustRootV1KeysElem) UnmarshalJSON(value []byte) error {
+func (j *ContractTrustRootKeysElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3236,30 +4305,30 @@ func (j *ContractTrustRootV1KeysElem) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["algorithms"]; raw != nil && !ok {
-		return fmt.Errorf("field algorithms in ContractTrustRootV1KeysElem: required")
+		return fmt.Errorf("field algorithms in ContractTrustRootKeysElem: required")
 	}
 	if _, ok := raw["audiences"]; raw != nil && !ok {
-		return fmt.Errorf("field audiences in ContractTrustRootV1KeysElem: required")
+		return fmt.Errorf("field audiences in ContractTrustRootKeysElem: required")
 	}
 	if _, ok := raw["issuer"]; raw != nil && !ok {
-		return fmt.Errorf("field issuer in ContractTrustRootV1KeysElem: required")
+		return fmt.Errorf("field issuer in ContractTrustRootKeysElem: required")
 	}
 	if _, ok := raw["keyId"]; raw != nil && !ok {
-		return fmt.Errorf("field keyId in ContractTrustRootV1KeysElem: required")
+		return fmt.Errorf("field keyId in ContractTrustRootKeysElem: required")
 	}
 	if _, ok := raw["notAfter"]; raw != nil && !ok {
-		return fmt.Errorf("field notAfter in ContractTrustRootV1KeysElem: required")
+		return fmt.Errorf("field notAfter in ContractTrustRootKeysElem: required")
 	}
 	if _, ok := raw["notBefore"]; raw != nil && !ok {
-		return fmt.Errorf("field notBefore in ContractTrustRootV1KeysElem: required")
+		return fmt.Errorf("field notBefore in ContractTrustRootKeysElem: required")
 	}
 	if _, ok := raw["publicKeyJwk"]; raw != nil && !ok {
-		return fmt.Errorf("field publicKeyJwk in ContractTrustRootV1KeysElem: required")
+		return fmt.Errorf("field publicKeyJwk in ContractTrustRootKeysElem: required")
 	}
 	if _, ok := raw["status"]; raw != nil && !ok {
-		return fmt.Errorf("field status in ContractTrustRootV1KeysElem: required")
+		return fmt.Errorf("field status in ContractTrustRootKeysElem: required")
 	}
-	type Plain ContractTrustRootV1KeysElem
+	type Plain ContractTrustRootKeysElem
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -3294,12 +4363,12 @@ func (j *ContractTrustRootV1KeysElem) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.KeyId)) > 256 {
 		return fmt.Errorf("field %s length: must be <= %d", "keyId", 256)
 	}
-	*j = ContractTrustRootV1KeysElem(plain)
+	*j = ContractTrustRootKeysElem(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ContractTrustRootV1) UnmarshalJSON(value []byte) error {
+func (j *ContractTrustRoot) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3307,28 +4376,25 @@ func (j *ContractTrustRootV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in ContractTrustRootV1: required")
-	}
 	if _, ok := raw["issuedAt"]; raw != nil && !ok {
-		return fmt.Errorf("field issuedAt in ContractTrustRootV1: required")
+		return fmt.Errorf("field issuedAt in ContractTrustRoot: required")
 	}
 	if _, ok := raw["keys"]; raw != nil && !ok {
-		return fmt.Errorf("field keys in ContractTrustRootV1: required")
+		return fmt.Errorf("field keys in ContractTrustRoot: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in ContractTrustRootV1: required")
+		return fmt.Errorf("field kind in ContractTrustRoot: required")
 	}
 	if _, ok := raw["maximumClockSkewSeconds"]; raw != nil && !ok {
-		return fmt.Errorf("field maximumClockSkewSeconds in ContractTrustRootV1: required")
+		return fmt.Errorf("field maximumClockSkewSeconds in ContractTrustRoot: required")
 	}
 	if _, ok := raw["nextUpdate"]; raw != nil && !ok {
-		return fmt.Errorf("field nextUpdate in ContractTrustRootV1: required")
+		return fmt.Errorf("field nextUpdate in ContractTrustRoot: required")
 	}
 	if _, ok := raw["snapshotId"]; raw != nil && !ok {
-		return fmt.Errorf("field snapshotId in ContractTrustRootV1: required")
+		return fmt.Errorf("field snapshotId in ContractTrustRoot: required")
 	}
-	type Plain ContractTrustRootV1
+	type Plain ContractTrustRoot
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -3354,138 +4420,196 @@ func (j *ContractTrustRootV1) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.SnapshotId)) > 128 {
 		return fmt.Errorf("field %s length: must be <= %d", "snapshotId", 128)
 	}
-	*j = ContractTrustRootV1(plain)
+	*j = ContractTrustRoot(plain)
 	return nil
 }
 
 type ContractsBundleJson struct {
-	// AgentArtifactV1 corresponds to the JSON schema field "AgentArtifactV1".
-	AgentArtifactV1 *AgentArtifactV1 `json:"AgentArtifactV1,omitempty,omitzero" yaml:"AgentArtifactV1,omitempty" mapstructure:"AgentArtifactV1,omitempty"`
+	// AgentArtifact corresponds to the JSON schema field "AgentArtifact".
+	AgentArtifact *AgentArtifact `json:"AgentArtifact,omitempty,omitzero" yaml:"AgentArtifact,omitempty" mapstructure:"AgentArtifact,omitempty"`
 
-	// AgentBudgetV1 corresponds to the JSON schema field "AgentBudgetV1".
-	AgentBudgetV1 *AgentBudgetV1 `json:"AgentBudgetV1,omitempty,omitzero" yaml:"AgentBudgetV1,omitempty" mapstructure:"AgentBudgetV1,omitempty"`
+	// AgentBudget corresponds to the JSON schema field "AgentBudget".
+	AgentBudget *AgentBudget `json:"AgentBudget,omitempty,omitzero" yaml:"AgentBudget,omitempty" mapstructure:"AgentBudget,omitempty"`
 
-	// AgentDefinitionV1 corresponds to the JSON schema field "AgentDefinitionV1".
-	AgentDefinitionV1 *AgentDefinitionV1 `json:"AgentDefinitionV1,omitempty,omitzero" yaml:"AgentDefinitionV1,omitempty" mapstructure:"AgentDefinitionV1,omitempty"`
+	// AgentDefinition corresponds to the JSON schema field "AgentDefinition".
+	AgentDefinition *AgentDefinition `json:"AgentDefinition,omitempty,omitzero" yaml:"AgentDefinition,omitempty" mapstructure:"AgentDefinition,omitempty"`
 
-	// AgentEventV1 corresponds to the JSON schema field "AgentEventV1".
-	AgentEventV1 *AgentEventV1 `json:"AgentEventV1,omitempty,omitzero" yaml:"AgentEventV1,omitempty" mapstructure:"AgentEventV1,omitempty"`
+	// AgentEvent corresponds to the JSON schema field "AgentEvent".
+	AgentEvent *AgentEvent `json:"AgentEvent,omitempty,omitzero" yaml:"AgentEvent,omitempty" mapstructure:"AgentEvent,omitempty"`
 
-	// AgentRunV1 corresponds to the JSON schema field "AgentRunV1".
-	AgentRunV1 *AgentRunV1 `json:"AgentRunV1,omitempty,omitzero" yaml:"AgentRunV1,omitempty" mapstructure:"AgentRunV1,omitempty"`
+	// AgentEvidence corresponds to the JSON schema field "AgentEvidence".
+	AgentEvidence *AgentEvidence `json:"AgentEvidence,omitempty,omitzero" yaml:"AgentEvidence,omitempty" mapstructure:"AgentEvidence,omitempty"`
 
-	// AgentTaskV1 corresponds to the JSON schema field "AgentTaskV1".
-	AgentTaskV1 *AgentTaskV1 `json:"AgentTaskV1,omitempty,omitzero" yaml:"AgentTaskV1,omitempty" mapstructure:"AgentTaskV1,omitempty"`
+	// AgentRun corresponds to the JSON schema field "AgentRun".
+	AgentRun *AgentRun `json:"AgentRun,omitempty,omitzero" yaml:"AgentRun,omitempty" mapstructure:"AgentRun,omitempty"`
 
-	// ApplyAuthorizationV1 corresponds to the JSON schema field
-	// "ApplyAuthorizationV1".
-	ApplyAuthorizationV1 *ApplyAuthorizationV1 `json:"ApplyAuthorizationV1,omitempty,omitzero" yaml:"ApplyAuthorizationV1,omitempty" mapstructure:"ApplyAuthorizationV1,omitempty"`
+	// AgentStreamDelta corresponds to the JSON schema field "AgentStreamDelta".
+	AgentStreamDelta *AgentStreamDelta `json:"AgentStreamDelta,omitempty,omitzero" yaml:"AgentStreamDelta,omitempty" mapstructure:"AgentStreamDelta,omitempty"`
 
-	// ApprovalRequestV1 corresponds to the JSON schema field "ApprovalRequestV1".
-	ApprovalRequestV1 *ApprovalRequestV1 `json:"ApprovalRequestV1,omitempty,omitzero" yaml:"ApprovalRequestV1,omitempty" mapstructure:"ApprovalRequestV1,omitempty"`
+	// AgentTask corresponds to the JSON schema field "AgentTask".
+	AgentTask *AgentTask `json:"AgentTask,omitempty,omitzero" yaml:"AgentTask,omitempty" mapstructure:"AgentTask,omitempty"`
 
-	// CompiledContextV1 corresponds to the JSON schema field "CompiledContextV1".
-	CompiledContextV1 *CompiledContextV1 `json:"CompiledContextV1,omitempty,omitzero" yaml:"CompiledContextV1,omitempty" mapstructure:"CompiledContextV1,omitempty"`
+	// ApplyAuthorization corresponds to the JSON schema field "ApplyAuthorization".
+	ApplyAuthorization *ApplyAuthorization `json:"ApplyAuthorization,omitempty,omitzero" yaml:"ApplyAuthorization,omitempty" mapstructure:"ApplyAuthorization,omitempty"`
 
-	// ComponentPackageSpecV1 corresponds to the JSON schema field
-	// "ComponentPackageSpecV1".
-	ComponentPackageSpecV1 *ComponentPackageSpecV1 `json:"ComponentPackageSpecV1,omitempty,omitzero" yaml:"ComponentPackageSpecV1,omitempty" mapstructure:"ComponentPackageSpecV1,omitempty"`
+	// ApprovalRequest corresponds to the JSON schema field "ApprovalRequest".
+	ApprovalRequest *ApprovalRequest `json:"ApprovalRequest,omitempty,omitzero" yaml:"ApprovalRequest,omitempty" mapstructure:"ApprovalRequest,omitempty"`
 
-	// ContractRevocationSnapshotV1 corresponds to the JSON schema field
-	// "ContractRevocationSnapshotV1".
-	ContractRevocationSnapshotV1 *ContractRevocationSnapshotV1 `json:"ContractRevocationSnapshotV1,omitempty,omitzero" yaml:"ContractRevocationSnapshotV1,omitempty" mapstructure:"ContractRevocationSnapshotV1,omitempty"`
+	// CompiledContext corresponds to the JSON schema field "CompiledContext".
+	CompiledContext *CompiledContext `json:"CompiledContext,omitempty,omitzero" yaml:"CompiledContext,omitempty" mapstructure:"CompiledContext,omitempty"`
 
-	// ContractSignatureStatementV1 corresponds to the JSON schema field
-	// "ContractSignatureStatementV1".
-	ContractSignatureStatementV1 *ContractSignatureStatementV1 `json:"ContractSignatureStatementV1,omitempty,omitzero" yaml:"ContractSignatureStatementV1,omitempty" mapstructure:"ContractSignatureStatementV1,omitempty"`
+	// ComponentPackageSpec corresponds to the JSON schema field
+	// "ComponentPackageSpec".
+	ComponentPackageSpec *ComponentPackageSpec `json:"ComponentPackageSpec,omitempty,omitzero" yaml:"ComponentPackageSpec,omitempty" mapstructure:"ComponentPackageSpec,omitempty"`
 
-	// ContractTrustRootV1 corresponds to the JSON schema field "ContractTrustRootV1".
-	ContractTrustRootV1 *ContractTrustRootV1 `json:"ContractTrustRootV1,omitempty,omitzero" yaml:"ContractTrustRootV1,omitempty" mapstructure:"ContractTrustRootV1,omitempty"`
+	// ContractBom corresponds to the JSON schema field "ContractBom".
+	ContractBom *ContractBom `json:"ContractBom,omitempty,omitzero" yaml:"ContractBom,omitempty" mapstructure:"ContractBom,omitempty"`
 
-	// ImageOperationPlanV1 corresponds to the JSON schema field
-	// "ImageOperationPlanV1".
-	ImageOperationPlanV1 *ImageOperationPlanV1 `json:"ImageOperationPlanV1,omitempty,omitzero" yaml:"ImageOperationPlanV1,omitempty" mapstructure:"ImageOperationPlanV1,omitempty"`
+	// ContractRevocationSnapshot corresponds to the JSON schema field
+	// "ContractRevocationSnapshot".
+	ContractRevocationSnapshot *ContractRevocationSnapshot `json:"ContractRevocationSnapshot,omitempty,omitzero" yaml:"ContractRevocationSnapshot,omitempty" mapstructure:"ContractRevocationSnapshot,omitempty"`
 
-	// InputRequestV1 corresponds to the JSON schema field "InputRequestV1".
-	InputRequestV1 *InputRequestV1 `json:"InputRequestV1,omitempty,omitzero" yaml:"InputRequestV1,omitempty" mapstructure:"InputRequestV1,omitempty"`
+	// ContractRuntimeRequest corresponds to the JSON schema field
+	// "ContractRuntimeRequest".
+	ContractRuntimeRequest *ContractRuntimeRequest `json:"ContractRuntimeRequest,omitempty,omitzero" yaml:"ContractRuntimeRequest,omitempty" mapstructure:"ContractRuntimeRequest,omitempty"`
 
-	// ProblemDetailsV1 corresponds to the JSON schema field "ProblemDetailsV1".
-	ProblemDetailsV1 *ProblemDetailsV1 `json:"ProblemDetailsV1,omitempty,omitzero" yaml:"ProblemDetailsV1,omitempty" mapstructure:"ProblemDetailsV1,omitempty"`
+	// ContractRuntimeResult corresponds to the JSON schema field
+	// "ContractRuntimeResult".
+	ContractRuntimeResult *ContractRuntimeResult `json:"ContractRuntimeResult,omitempty,omitzero" yaml:"ContractRuntimeResult,omitempty" mapstructure:"ContractRuntimeResult,omitempty"`
 
-	// ProviderContinuationV1 corresponds to the JSON schema field
-	// "ProviderContinuationV1".
-	ProviderContinuationV1 *ProviderContinuationV1 `json:"ProviderContinuationV1,omitempty,omitzero" yaml:"ProviderContinuationV1,omitempty" mapstructure:"ProviderContinuationV1,omitempty"`
+	// ContractSignatureStatement corresponds to the JSON schema field
+	// "ContractSignatureStatement".
+	ContractSignatureStatement *ContractSignatureStatement `json:"ContractSignatureStatement,omitempty,omitzero" yaml:"ContractSignatureStatement,omitempty" mapstructure:"ContractSignatureStatement,omitempty"`
 
-	// SharedPrimitivesV1 corresponds to the JSON schema field "SharedPrimitivesV1".
-	SharedPrimitivesV1 *SharedPrimitivesV1 `json:"SharedPrimitivesV1,omitempty,omitzero" yaml:"SharedPrimitivesV1,omitempty" mapstructure:"SharedPrimitivesV1,omitempty"`
+	// ContractTrustRoot corresponds to the JSON schema field "ContractTrustRoot".
+	ContractTrustRoot *ContractTrustRoot `json:"ContractTrustRoot,omitempty,omitzero" yaml:"ContractTrustRoot,omitempty" mapstructure:"ContractTrustRoot,omitempty"`
 
-	// TargetSnapshotV1 corresponds to the JSON schema field "TargetSnapshotV1".
-	TargetSnapshotV1 *TargetSnapshotV1 `json:"TargetSnapshotV1,omitempty,omitzero" yaml:"TargetSnapshotV1,omitempty" mapstructure:"TargetSnapshotV1,omitempty"`
+	// CreateAgentRunRequest corresponds to the JSON schema field
+	// "CreateAgentRunRequest".
+	CreateAgentRunRequest *CreateAgentRunRequest `json:"CreateAgentRunRequest,omitempty,omitzero" yaml:"CreateAgentRunRequest,omitempty" mapstructure:"CreateAgentRunRequest,omitempty"`
 
-	// ToolDefinitionV1 corresponds to the JSON schema field "ToolDefinitionV1".
-	ToolDefinitionV1 *ToolDefinitionV1 `json:"ToolDefinitionV1,omitempty,omitzero" yaml:"ToolDefinitionV1,omitempty" mapstructure:"ToolDefinitionV1,omitempty"`
+	// ImageOperationPlan corresponds to the JSON schema field "ImageOperationPlan".
+	ImageOperationPlan *ImageOperationPlan `json:"ImageOperationPlan,omitempty,omitzero" yaml:"ImageOperationPlan,omitempty" mapstructure:"ImageOperationPlan,omitempty"`
 
-	// UsageObservationV1 corresponds to the JSON schema field "UsageObservationV1".
-	UsageObservationV1 *UsageObservationV1 `json:"UsageObservationV1,omitempty,omitzero" yaml:"UsageObservationV1,omitempty" mapstructure:"UsageObservationV1,omitempty"`
+	// InputRequest corresponds to the JSON schema field "InputRequest".
+	InputRequest *InputRequest `json:"InputRequest,omitempty,omitzero" yaml:"InputRequest,omitempty" mapstructure:"InputRequest,omitempty"`
 
-	// WorkerLeaseV1 corresponds to the JSON schema field "WorkerLeaseV1".
-	WorkerLeaseV1 *WorkerLeaseV1 `json:"WorkerLeaseV1,omitempty,omitzero" yaml:"WorkerLeaseV1,omitempty" mapstructure:"WorkerLeaseV1,omitempty"`
+	// IssueApplyAuthorizationRequest corresponds to the JSON schema field
+	// "IssueApplyAuthorizationRequest".
+	IssueApplyAuthorizationRequest *IssueApplyAuthorizationRequest `json:"IssueApplyAuthorizationRequest,omitempty,omitzero" yaml:"IssueApplyAuthorizationRequest,omitempty" mapstructure:"IssueApplyAuthorizationRequest,omitempty"`
 
-	// WorkerResultV1 corresponds to the JSON schema field "WorkerResultV1".
-	WorkerResultV1 *WorkerResultV1 `json:"WorkerResultV1,omitempty,omitzero" yaml:"WorkerResultV1,omitempty" mapstructure:"WorkerResultV1,omitempty"`
+	// IssuedApplyAuthorization corresponds to the JSON schema field
+	// "IssuedApplyAuthorization".
+	IssuedApplyAuthorization *IssuedApplyAuthorization `json:"IssuedApplyAuthorization,omitempty,omitzero" yaml:"IssuedApplyAuthorization,omitempty" mapstructure:"IssuedApplyAuthorization,omitempty"`
+
+	// ProblemDetails corresponds to the JSON schema field "ProblemDetails".
+	ProblemDetails *ProblemDetails `json:"ProblemDetails,omitempty,omitzero" yaml:"ProblemDetails,omitempty" mapstructure:"ProblemDetails,omitempty"`
+
+	// ProviderContinuation corresponds to the JSON schema field
+	// "ProviderContinuation".
+	ProviderContinuation *ProviderContinuation `json:"ProviderContinuation,omitempty,omitzero" yaml:"ProviderContinuation,omitempty" mapstructure:"ProviderContinuation,omitempty"`
+
+	// SharedPrimitives corresponds to the JSON schema field "SharedPrimitives".
+	SharedPrimitives *SharedPrimitives `json:"SharedPrimitives,omitempty,omitzero" yaml:"SharedPrimitives,omitempty" mapstructure:"SharedPrimitives,omitempty"`
+
+	// SubmitApprovalDecisionRequest corresponds to the JSON schema field
+	// "SubmitApprovalDecisionRequest".
+	SubmitApprovalDecisionRequest *SubmitApprovalDecisionRequest `json:"SubmitApprovalDecisionRequest,omitempty,omitzero" yaml:"SubmitApprovalDecisionRequest,omitempty" mapstructure:"SubmitApprovalDecisionRequest,omitempty"`
+
+	// SubmitInputResponseRequest corresponds to the JSON schema field
+	// "SubmitInputResponseRequest".
+	SubmitInputResponseRequest *SubmitInputResponseRequest `json:"SubmitInputResponseRequest,omitempty,omitzero" yaml:"SubmitInputResponseRequest,omitempty" mapstructure:"SubmitInputResponseRequest,omitempty"`
+
+	// TargetSnapshot corresponds to the JSON schema field "TargetSnapshot".
+	TargetSnapshot *TargetSnapshot `json:"TargetSnapshot,omitempty,omitzero" yaml:"TargetSnapshot,omitempty" mapstructure:"TargetSnapshot,omitempty"`
+
+	// ToolDefinition corresponds to the JSON schema field "ToolDefinition".
+	ToolDefinition *ToolDefinition `json:"ToolDefinition,omitempty,omitzero" yaml:"ToolDefinition,omitempty" mapstructure:"ToolDefinition,omitempty"`
+
+	// UsageObservation corresponds to the JSON schema field "UsageObservation".
+	UsageObservation *UsageObservation `json:"UsageObservation,omitempty,omitzero" yaml:"UsageObservation,omitempty" mapstructure:"UsageObservation,omitempty"`
+
+	// WorkerLease corresponds to the JSON schema field "WorkerLease".
+	WorkerLease *WorkerLease `json:"WorkerLease,omitempty,omitzero" yaml:"WorkerLease,omitempty" mapstructure:"WorkerLease,omitempty"`
+
+	// WorkerResult corresponds to the JSON schema field "WorkerResult".
+	WorkerResult *WorkerResult `json:"WorkerResult,omitempty,omitzero" yaml:"WorkerResult,omitempty" mapstructure:"WorkerResult,omitempty"`
 }
 
-// Bounded ImageOperationPlanV1 wire contract governed by PRD 0012.
-type ImageOperationPlanV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
+// Intent-only AgentRun creation command governed by ADR-021. The caller declares
+// only authorized intent; run identity, workspace, actor, state, revision, digest
+// bindings, timestamps, sequence, and signatures are resolved or generated by
+// Agent Service and are structurally absent from this command.
+type CreateAgentRunRequest struct {
+	// Definition corresponds to the JSON schema field "definition".
+	Definition SharedPrimitivesDefinitionReference `json:"definition" yaml:"definition" mapstructure:"definition"`
 
-	// Inputs corresponds to the JSON schema field "inputs".
-	Inputs []SharedPrimitivesV1ArtifactReference `json:"inputs" yaml:"inputs" mapstructure:"inputs"`
+	// Input corresponds to the JSON schema field "input".
+	Input *CreateAgentRunRequestInput `json:"input,omitempty,omitzero" yaml:"input,omitempty" mapstructure:"input,omitempty"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
-	// Limits corresponds to the JSON schema field "limits".
-	Limits SharedPrimitivesV1ResourceLimits `json:"limits" yaml:"limits" mapstructure:"limits"`
+	// Labels corresponds to the JSON schema field "labels".
+	Labels SharedPrimitivesBoundedStringMap `json:"labels,omitempty,omitzero" yaml:"labels,omitempty" mapstructure:"labels,omitempty"`
 
-	// Operations corresponds to the JSON schema field "operations".
-	Operations []ImageOperationPlanV1OperationsElem `json:"operations" yaml:"operations" mapstructure:"operations"`
+	// Operation corresponds to the JSON schema field "operation".
+	Operation CreateAgentRunRequestOperation `json:"operation" yaml:"operation" mapstructure:"operation"`
 
-	// Outputs corresponds to the JSON schema field "outputs".
-	Outputs []ImageOperationPlanV1OutputsElem `json:"outputs" yaml:"outputs" mapstructure:"outputs"`
-
-	// ValidationPolicy corresponds to the JSON schema field "validationPolicy".
-	ValidationPolicy SharedPrimitivesV1PolicyReference `json:"validationPolicy" yaml:"validationPolicy" mapstructure:"validationPolicy"`
+	// Target corresponds to the JSON schema field "target".
+	Target SharedPrimitivesTargetReference `json:"target" yaml:"target" mapstructure:"target"`
 }
 
-type ImageOperationPlanV1OperationsElem struct {
-	// OperationId corresponds to the JSON schema field "operationId".
-	OperationId SharedPrimitivesV1OpaqueId `json:"operationId" yaml:"operationId" mapstructure:"operationId"`
+type CreateAgentRunRequestInput struct {
+	// ArtifactInputs corresponds to the JSON schema field "artifactInputs".
+	ArtifactInputs []SharedPrimitivesArtifactReference `json:"artifactInputs,omitempty,omitzero" yaml:"artifactInputs,omitempty" mapstructure:"artifactInputs,omitempty"`
 
-	// OperationType corresponds to the JSON schema field "operationType".
-	OperationType ImageOperationPlanV1OperationsElemOperationType `json:"operationType" yaml:"operationType" mapstructure:"operationType"`
-
-	// Parameters corresponds to the JSON schema field "parameters".
-	Parameters SharedPrimitivesV1BoundedStringMap `json:"parameters" yaml:"parameters" mapstructure:"parameters"`
-}
-
-type ImageOperationPlanV1OperationsElemOperationType string
-
-const ImageOperationPlanV1OperationsElemOperationTypeComposite ImageOperationPlanV1OperationsElemOperationType = "composite"
-const ImageOperationPlanV1OperationsElemOperationTypeCrop ImageOperationPlanV1OperationsElemOperationType = "crop"
-const ImageOperationPlanV1OperationsElemOperationTypeEncode ImageOperationPlanV1OperationsElemOperationType = "encode"
-const ImageOperationPlanV1OperationsElemOperationTypeResize ImageOperationPlanV1OperationsElemOperationType = "resize"
-
-var enumValues_ImageOperationPlanV1OperationsElemOperationType = []interface{}{
-	"crop",
-	"resize",
-	"composite",
-	"encode",
+	// UserInput corresponds to the JSON schema field "userInput".
+	UserInput *string `json:"userInput,omitempty,omitzero" yaml:"userInput,omitempty" mapstructure:"userInput,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ImageOperationPlanV1OperationsElemOperationType) UnmarshalJSON(value []byte) error {
+func (j *CreateAgentRunRequestInput) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	type Plain CreateAgentRunRequestInput
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.ArtifactInputs != nil && len(plain.ArtifactInputs) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "artifactInputs", 1)
+	}
+	if len(plain.ArtifactInputs) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "artifactInputs", 32)
+	}
+	if plain.UserInput != nil && utf8.RuneCountInString(string(*plain.UserInput)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "userInput", 1)
+	}
+	if plain.UserInput != nil && utf8.RuneCountInString(string(*plain.UserInput)) > 16384 {
+		return fmt.Errorf("field %s length: must be <= %d", "userInput", 16384)
+	}
+	*j = CreateAgentRunRequestInput(plain)
+	return nil
+}
+
+type CreateAgentRunRequestOperation string
+
+const CreateAgentRunRequestOperationArtifactValidation CreateAgentRunRequestOperation = "artifact-validation"
+const CreateAgentRunRequestOperationComponentPackage CreateAgentRunRequestOperation = "component-package"
+const CreateAgentRunRequestOperationImageOperation CreateAgentRunRequestOperation = "image-operation"
+const CreateAgentRunRequestOperationPageChange CreateAgentRunRequestOperation = "page-change"
+
+var enumValues_CreateAgentRunRequestOperation = []interface{}{
+	"page-change",
+	"artifact-validation",
+	"image-operation",
+	"component-package",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CreateAgentRunRequestOperation) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3494,21 +4618,120 @@ func (j *ImageOperationPlanV1OperationsElemOperationType) UnmarshalJSON(value []
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ImageOperationPlanV1OperationsElemOperationType {
+	for _, expected := range enumValues_CreateAgentRunRequestOperation {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ImageOperationPlanV1OperationsElemOperationType, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CreateAgentRunRequestOperation, v)
 	}
-	*j = ImageOperationPlanV1OperationsElemOperationType(v)
+	*j = CreateAgentRunRequestOperation(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ImageOperationPlanV1OperationsElem) UnmarshalJSON(value []byte) error {
+func (j *CreateAgentRunRequest) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["definition"]; raw != nil && !ok {
+		return fmt.Errorf("field definition in CreateAgentRunRequest: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in CreateAgentRunRequest: required")
+	}
+	if _, ok := raw["operation"]; raw != nil && !ok {
+		return fmt.Errorf("field operation in CreateAgentRunRequest: required")
+	}
+	if _, ok := raw["target"]; raw != nil && !ok {
+		return fmt.Errorf("field target in CreateAgentRunRequest: required")
+	}
+	type Plain CreateAgentRunRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = CreateAgentRunRequest(plain)
+	return nil
+}
+
+// Bounded ImageOperationPlan wire contract governed by PRD 0012.
+type ImageOperationPlan struct {
+	// Inputs corresponds to the JSON schema field "inputs".
+	Inputs []SharedPrimitivesArtifactReference `json:"inputs" yaml:"inputs" mapstructure:"inputs"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Limits corresponds to the JSON schema field "limits".
+	Limits SharedPrimitivesResourceLimits `json:"limits" yaml:"limits" mapstructure:"limits"`
+
+	// Operations corresponds to the JSON schema field "operations".
+	Operations []ImageOperationPlanOperationsElem `json:"operations" yaml:"operations" mapstructure:"operations"`
+
+	// Outputs corresponds to the JSON schema field "outputs".
+	Outputs []ImageOperationPlanOutputsElem `json:"outputs" yaml:"outputs" mapstructure:"outputs"`
+
+	// ValidationPolicy corresponds to the JSON schema field "validationPolicy".
+	ValidationPolicy SharedPrimitivesPolicyReference `json:"validationPolicy" yaml:"validationPolicy" mapstructure:"validationPolicy"`
+}
+
+type ImageOperationPlanOperationsElem struct {
+	// OperationId corresponds to the JSON schema field "operationId".
+	OperationId SharedPrimitivesOpaqueId `json:"operationId" yaml:"operationId" mapstructure:"operationId"`
+
+	// OperationType corresponds to the JSON schema field "operationType".
+	OperationType ImageOperationPlanOperationsElemOperationType `json:"operationType" yaml:"operationType" mapstructure:"operationType"`
+
+	// Parameters corresponds to the JSON schema field "parameters".
+	Parameters SharedPrimitivesBoundedStringMap `json:"parameters" yaml:"parameters" mapstructure:"parameters"`
+}
+
+type ImageOperationPlanOperationsElemOperationType string
+
+const ImageOperationPlanOperationsElemOperationTypeComposite ImageOperationPlanOperationsElemOperationType = "composite"
+const ImageOperationPlanOperationsElemOperationTypeCrop ImageOperationPlanOperationsElemOperationType = "crop"
+const ImageOperationPlanOperationsElemOperationTypeEncode ImageOperationPlanOperationsElemOperationType = "encode"
+const ImageOperationPlanOperationsElemOperationTypeResize ImageOperationPlanOperationsElemOperationType = "resize"
+
+var enumValues_ImageOperationPlanOperationsElemOperationType = []interface{}{
+	"crop",
+	"resize",
+	"composite",
+	"encode",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ImageOperationPlanOperationsElemOperationType) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ImageOperationPlanOperationsElemOperationType {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ImageOperationPlanOperationsElemOperationType, v)
+	}
+	*j = ImageOperationPlanOperationsElemOperationType(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ImageOperationPlanOperationsElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3517,24 +4740,24 @@ func (j *ImageOperationPlanV1OperationsElem) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["operationId"]; raw != nil && !ok {
-		return fmt.Errorf("field operationId in ImageOperationPlanV1OperationsElem: required")
+		return fmt.Errorf("field operationId in ImageOperationPlanOperationsElem: required")
 	}
 	if _, ok := raw["operationType"]; raw != nil && !ok {
-		return fmt.Errorf("field operationType in ImageOperationPlanV1OperationsElem: required")
+		return fmt.Errorf("field operationType in ImageOperationPlanOperationsElem: required")
 	}
 	if _, ok := raw["parameters"]; raw != nil && !ok {
-		return fmt.Errorf("field parameters in ImageOperationPlanV1OperationsElem: required")
+		return fmt.Errorf("field parameters in ImageOperationPlanOperationsElem: required")
 	}
-	type Plain ImageOperationPlanV1OperationsElem
+	type Plain ImageOperationPlanOperationsElem
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	*j = ImageOperationPlanV1OperationsElem(plain)
+	*j = ImageOperationPlanOperationsElem(plain)
 	return nil
 }
 
-type ImageOperationPlanV1OutputsElem struct {
+type ImageOperationPlanOutputsElem struct {
 	// MaximumBytes corresponds to the JSON schema field "maximumBytes".
 	MaximumBytes int `json:"maximumBytes" yaml:"maximumBytes" mapstructure:"maximumBytes"`
 
@@ -3546,7 +4769,7 @@ type ImageOperationPlanV1OutputsElem struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ImageOperationPlanV1OutputsElem) UnmarshalJSON(value []byte) error {
+func (j *ImageOperationPlanOutputsElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3555,15 +4778,15 @@ func (j *ImageOperationPlanV1OutputsElem) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["maximumBytes"]; raw != nil && !ok {
-		return fmt.Errorf("field maximumBytes in ImageOperationPlanV1OutputsElem: required")
+		return fmt.Errorf("field maximumBytes in ImageOperationPlanOutputsElem: required")
 	}
 	if _, ok := raw["mediaType"]; raw != nil && !ok {
-		return fmt.Errorf("field mediaType in ImageOperationPlanV1OutputsElem: required")
+		return fmt.Errorf("field mediaType in ImageOperationPlanOutputsElem: required")
 	}
 	if _, ok := raw["name"]; raw != nil && !ok {
-		return fmt.Errorf("field name in ImageOperationPlanV1OutputsElem: required")
+		return fmt.Errorf("field name in ImageOperationPlanOutputsElem: required")
 	}
-	type Plain ImageOperationPlanV1OutputsElem
+	type Plain ImageOperationPlanOutputsElem
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -3592,12 +4815,12 @@ func (j *ImageOperationPlanV1OutputsElem) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.Name)) > 128 {
 		return fmt.Errorf("field %s length: must be <= %d", "name", 128)
 	}
-	*j = ImageOperationPlanV1OutputsElem(plain)
+	*j = ImageOperationPlanOutputsElem(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ImageOperationPlanV1) UnmarshalJSON(value []byte) error {
+func (j *ImageOperationPlan) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3605,28 +4828,25 @@ func (j *ImageOperationPlanV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in ImageOperationPlanV1: required")
-	}
 	if _, ok := raw["inputs"]; raw != nil && !ok {
-		return fmt.Errorf("field inputs in ImageOperationPlanV1: required")
+		return fmt.Errorf("field inputs in ImageOperationPlan: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in ImageOperationPlanV1: required")
+		return fmt.Errorf("field kind in ImageOperationPlan: required")
 	}
 	if _, ok := raw["limits"]; raw != nil && !ok {
-		return fmt.Errorf("field limits in ImageOperationPlanV1: required")
+		return fmt.Errorf("field limits in ImageOperationPlan: required")
 	}
 	if _, ok := raw["operations"]; raw != nil && !ok {
-		return fmt.Errorf("field operations in ImageOperationPlanV1: required")
+		return fmt.Errorf("field operations in ImageOperationPlan: required")
 	}
 	if _, ok := raw["outputs"]; raw != nil && !ok {
-		return fmt.Errorf("field outputs in ImageOperationPlanV1: required")
+		return fmt.Errorf("field outputs in ImageOperationPlan: required")
 	}
 	if _, ok := raw["validationPolicy"]; raw != nil && !ok {
-		return fmt.Errorf("field validationPolicy in ImageOperationPlanV1: required")
+		return fmt.Errorf("field validationPolicy in ImageOperationPlan: required")
 	}
-	type Plain ImageOperationPlanV1
+	type Plain ImageOperationPlan
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -3649,17 +4869,14 @@ func (j *ImageOperationPlanV1) UnmarshalJSON(value []byte) error {
 	if len(plain.Outputs) > 32 {
 		return fmt.Errorf("field %s length: must be <= %d", "outputs", 32)
 	}
-	*j = ImageOperationPlanV1(plain)
+	*j = ImageOperationPlan(plain)
 	return nil
 }
 
-// Bounded InputRequestV1 wire contract governed by PRD 0012.
-type InputRequestV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
-
+// Bounded InputRequest wire contract governed by PRD 0012.
+type InputRequest struct {
 	// ExpiresAt corresponds to the JSON schema field "expiresAt".
-	ExpiresAt SharedPrimitivesV1Timestamp `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
+	ExpiresAt SharedPrimitivesTimestamp `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
@@ -3668,42 +4885,42 @@ type InputRequestV1 struct {
 	Question string `json:"question" yaml:"question" mapstructure:"question"`
 
 	// RequestId corresponds to the JSON schema field "requestId".
-	RequestId SharedPrimitivesV1OpaqueId `json:"requestId" yaml:"requestId" mapstructure:"requestId"`
+	RequestId SharedPrimitivesOpaqueId `json:"requestId" yaml:"requestId" mapstructure:"requestId"`
 
 	// ResponseSchema corresponds to the JSON schema field "responseSchema".
-	ResponseSchema SharedPrimitivesV1SchemaReference `json:"responseSchema" yaml:"responseSchema" mapstructure:"responseSchema"`
+	ResponseSchema SharedPrimitivesSchemaReference `json:"responseSchema" yaml:"responseSchema" mapstructure:"responseSchema"`
 
 	// ResumeState corresponds to the JSON schema field "resumeState".
-	ResumeState InputRequestV1ResumeState `json:"resumeState" yaml:"resumeState" mapstructure:"resumeState"`
+	ResumeState InputRequestResumeState `json:"resumeState" yaml:"resumeState" mapstructure:"resumeState"`
 
 	// RunId corresponds to the JSON schema field "runId".
-	RunId SharedPrimitivesV1OpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
+	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
 
 	// Version corresponds to the JSON schema field "version".
 	Version int `json:"version" yaml:"version" mapstructure:"version"`
 }
 
-type InputRequestV1ResumeState string
+type InputRequestResumeState string
 
-const InputRequestV1ResumeStateAwaitingApproval InputRequestV1ResumeState = "awaiting_approval"
-const InputRequestV1ResumeStateAwaitingDomainConfirmation InputRequestV1ResumeState = "awaiting_domain_confirmation"
-const InputRequestV1ResumeStateAwaitingInput InputRequestV1ResumeState = "awaiting_input"
-const InputRequestV1ResumeStateAwaitingReview InputRequestV1ResumeState = "awaiting_review"
-const InputRequestV1ResumeStateCancelled InputRequestV1ResumeState = "cancelled"
-const InputRequestV1ResumeStateCancelling InputRequestV1ResumeState = "cancelling"
-const InputRequestV1ResumeStateCommitting InputRequestV1ResumeState = "committing"
-const InputRequestV1ResumeStateCompleted InputRequestV1ResumeState = "completed"
-const InputRequestV1ResumeStateConflict InputRequestV1ResumeState = "conflict"
-const InputRequestV1ResumeStateCreated InputRequestV1ResumeState = "created"
-const InputRequestV1ResumeStateDiscarded InputRequestV1ResumeState = "discarded"
-const InputRequestV1ResumeStateExecuting InputRequestV1ResumeState = "executing"
-const InputRequestV1ResumeStateFailed InputRequestV1ResumeState = "failed"
-const InputRequestV1ResumeStatePlanning InputRequestV1ResumeState = "planning"
-const InputRequestV1ResumeStatePreparing InputRequestV1ResumeState = "preparing"
-const InputRequestV1ResumeStateRefused InputRequestV1ResumeState = "refused"
-const InputRequestV1ResumeStateValidating InputRequestV1ResumeState = "validating"
+const InputRequestResumeStateAwaitingApproval InputRequestResumeState = "awaiting_approval"
+const InputRequestResumeStateAwaitingDomainConfirmation InputRequestResumeState = "awaiting_domain_confirmation"
+const InputRequestResumeStateAwaitingInput InputRequestResumeState = "awaiting_input"
+const InputRequestResumeStateAwaitingReview InputRequestResumeState = "awaiting_review"
+const InputRequestResumeStateCancelled InputRequestResumeState = "cancelled"
+const InputRequestResumeStateCancelling InputRequestResumeState = "cancelling"
+const InputRequestResumeStateCommitting InputRequestResumeState = "committing"
+const InputRequestResumeStateCompleted InputRequestResumeState = "completed"
+const InputRequestResumeStateConflict InputRequestResumeState = "conflict"
+const InputRequestResumeStateCreated InputRequestResumeState = "created"
+const InputRequestResumeStateDiscarded InputRequestResumeState = "discarded"
+const InputRequestResumeStateExecuting InputRequestResumeState = "executing"
+const InputRequestResumeStateFailed InputRequestResumeState = "failed"
+const InputRequestResumeStatePlanning InputRequestResumeState = "planning"
+const InputRequestResumeStatePreparing InputRequestResumeState = "preparing"
+const InputRequestResumeStateRefused InputRequestResumeState = "refused"
+const InputRequestResumeStateValidating InputRequestResumeState = "validating"
 
-var enumValues_InputRequestV1ResumeState = []interface{}{
+var enumValues_InputRequestResumeState = []interface{}{
 	"created",
 	"preparing",
 	"planning",
@@ -3724,7 +4941,7 @@ var enumValues_InputRequestV1ResumeState = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *InputRequestV1ResumeState) UnmarshalJSON(value []byte) error {
+func (j *InputRequestResumeState) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3733,21 +4950,21 @@ func (j *InputRequestV1ResumeState) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_InputRequestV1ResumeState {
+	for _, expected := range enumValues_InputRequestResumeState {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_InputRequestV1ResumeState, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_InputRequestResumeState, v)
 	}
-	*j = InputRequestV1ResumeState(v)
+	*j = InputRequestResumeState(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *InputRequestV1) UnmarshalJSON(value []byte) error {
+func (j *InputRequest) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3755,34 +4972,31 @@ func (j *InputRequestV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in InputRequestV1: required")
-	}
 	if _, ok := raw["expiresAt"]; raw != nil && !ok {
-		return fmt.Errorf("field expiresAt in InputRequestV1: required")
+		return fmt.Errorf("field expiresAt in InputRequest: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in InputRequestV1: required")
+		return fmt.Errorf("field kind in InputRequest: required")
 	}
 	if _, ok := raw["question"]; raw != nil && !ok {
-		return fmt.Errorf("field question in InputRequestV1: required")
+		return fmt.Errorf("field question in InputRequest: required")
 	}
 	if _, ok := raw["requestId"]; raw != nil && !ok {
-		return fmt.Errorf("field requestId in InputRequestV1: required")
+		return fmt.Errorf("field requestId in InputRequest: required")
 	}
 	if _, ok := raw["responseSchema"]; raw != nil && !ok {
-		return fmt.Errorf("field responseSchema in InputRequestV1: required")
+		return fmt.Errorf("field responseSchema in InputRequest: required")
 	}
 	if _, ok := raw["resumeState"]; raw != nil && !ok {
-		return fmt.Errorf("field resumeState in InputRequestV1: required")
+		return fmt.Errorf("field resumeState in InputRequest: required")
 	}
 	if _, ok := raw["runId"]; raw != nil && !ok {
-		return fmt.Errorf("field runId in InputRequestV1: required")
+		return fmt.Errorf("field runId in InputRequest: required")
 	}
 	if _, ok := raw["version"]; raw != nil && !ok {
-		return fmt.Errorf("field version in InputRequestV1: required")
+		return fmt.Errorf("field version in InputRequest: required")
 	}
-	type Plain InputRequestV1
+	type Plain InputRequest
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -3799,20 +5013,182 @@ func (j *InputRequestV1) UnmarshalJSON(value []byte) error {
 	if 1 > plain.Version {
 		return fmt.Errorf("field %s: must be >= %v", "version", 1)
 	}
-	*j = InputRequestV1(plain)
+	*j = InputRequest(plain)
 	return nil
 }
 
-// Bounded ProblemDetailsV1 wire contract governed by PRD 0012.
-type ProblemDetailsV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
+// Intent-only Apply Authorization issuance command governed by ADR-021. Issuer,
+// subject, audience, key identity, times, final digest bindings, and replay
+// protection are server-owned and structurally absent from this command.
+type IssueApplyAuthorizationRequest struct {
+	// ActionDigest corresponds to the JSON schema field "actionDigest".
+	ActionDigest SharedPrimitivesDigest `json:"actionDigest" yaml:"actionDigest" mapstructure:"actionDigest"`
 
+	// ApprovalReference corresponds to the JSON schema field "approvalReference".
+	ApprovalReference IssueApplyAuthorizationRequestApprovalReference `json:"approvalReference" yaml:"approvalReference" mapstructure:"approvalReference"`
+
+	// Artifact corresponds to the JSON schema field "artifact".
+	Artifact SharedPrimitivesArtifactReference `json:"artifact" yaml:"artifact" mapstructure:"artifact"`
+
+	// BaseRevision corresponds to the JSON schema field "baseRevision".
+	BaseRevision SharedPrimitivesOpaqueId `json:"baseRevision" yaml:"baseRevision" mapstructure:"baseRevision"`
+
+	// ExpectedRunRevision corresponds to the JSON schema field "expectedRunRevision".
+	ExpectedRunRevision int `json:"expectedRunRevision" yaml:"expectedRunRevision" mapstructure:"expectedRunRevision"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// RunId corresponds to the JSON schema field "runId".
+	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
+
+	// Target corresponds to the JSON schema field "target".
+	Target SharedPrimitivesTargetReference `json:"target" yaml:"target" mapstructure:"target"`
+}
+
+type IssueApplyAuthorizationRequestApprovalReference struct {
+	// DecisionVersion corresponds to the JSON schema field "decisionVersion".
+	DecisionVersion int `json:"decisionVersion" yaml:"decisionVersion" mapstructure:"decisionVersion"`
+
+	// RequestId corresponds to the JSON schema field "requestId".
+	RequestId SharedPrimitivesOpaqueId `json:"requestId" yaml:"requestId" mapstructure:"requestId"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *IssueApplyAuthorizationRequestApprovalReference) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["decisionVersion"]; raw != nil && !ok {
+		return fmt.Errorf("field decisionVersion in IssueApplyAuthorizationRequestApprovalReference: required")
+	}
+	if _, ok := raw["requestId"]; raw != nil && !ok {
+		return fmt.Errorf("field requestId in IssueApplyAuthorizationRequestApprovalReference: required")
+	}
+	type Plain IssueApplyAuthorizationRequestApprovalReference
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 9007199254740991 < plain.DecisionVersion {
+		return fmt.Errorf("field %s: must be <= %v", "decisionVersion", 9007199254740991)
+	}
+	if 1 > plain.DecisionVersion {
+		return fmt.Errorf("field %s: must be >= %v", "decisionVersion", 1)
+	}
+	*j = IssueApplyAuthorizationRequestApprovalReference(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *IssueApplyAuthorizationRequest) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["actionDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field actionDigest in IssueApplyAuthorizationRequest: required")
+	}
+	if _, ok := raw["approvalReference"]; raw != nil && !ok {
+		return fmt.Errorf("field approvalReference in IssueApplyAuthorizationRequest: required")
+	}
+	if _, ok := raw["artifact"]; raw != nil && !ok {
+		return fmt.Errorf("field artifact in IssueApplyAuthorizationRequest: required")
+	}
+	if _, ok := raw["baseRevision"]; raw != nil && !ok {
+		return fmt.Errorf("field baseRevision in IssueApplyAuthorizationRequest: required")
+	}
+	if _, ok := raw["expectedRunRevision"]; raw != nil && !ok {
+		return fmt.Errorf("field expectedRunRevision in IssueApplyAuthorizationRequest: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in IssueApplyAuthorizationRequest: required")
+	}
+	if _, ok := raw["runId"]; raw != nil && !ok {
+		return fmt.Errorf("field runId in IssueApplyAuthorizationRequest: required")
+	}
+	if _, ok := raw["target"]; raw != nil && !ok {
+		return fmt.Errorf("field target in IssueApplyAuthorizationRequest: required")
+	}
+	type Plain IssueApplyAuthorizationRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 9007199254740991 < plain.ExpectedRunRevision {
+		return fmt.Errorf("field %s: must be <= %v", "expectedRunRevision", 9007199254740991)
+	}
+	if 0 > plain.ExpectedRunRevision {
+		return fmt.Errorf("field %s: must be >= %v", "expectedRunRevision", 0)
+	}
+	*j = IssueApplyAuthorizationRequest(plain)
+	return nil
+}
+
+// Issued Apply Authorization response governed by ADR-021: the canonical
+// ApplyAuthorization document plus its compact JWS carrier. The document must be
+// byte-equivalent to the decoded JWS payload after canonicalization.
+type IssuedApplyAuthorization struct {
+	// Authorization corresponds to the JSON schema field "authorization".
+	Authorization ApplyAuthorization `json:"authorization" yaml:"authorization" mapstructure:"authorization"`
+
+	// CompactJws corresponds to the JSON schema field "compactJws".
+	CompactJws string `json:"compactJws" yaml:"compactJws" mapstructure:"compactJws"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *IssuedApplyAuthorization) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["authorization"]; raw != nil && !ok {
+		return fmt.Errorf("field authorization in IssuedApplyAuthorization: required")
+	}
+	if _, ok := raw["compactJws"]; raw != nil && !ok {
+		return fmt.Errorf("field compactJws in IssuedApplyAuthorization: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in IssuedApplyAuthorization: required")
+	}
+	type Plain IssuedApplyAuthorization
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`, string(plain.CompactJws)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "CompactJws", `^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.CompactJws)) < 32 {
+		return fmt.Errorf("field %s length: must be >= %d", "compactJws", 32)
+	}
+	if utf8.RuneCountInString(string(plain.CompactJws)) > 16384 {
+		return fmt.Errorf("field %s length: must be <= %d", "compactJws", 16384)
+	}
+	*j = IssuedApplyAuthorization(plain)
+	return nil
+}
+
+// Bounded ProblemDetails wire contract governed by PRD 0012.
+type ProblemDetails struct {
 	// Code corresponds to the JSON schema field "code".
 	Code string `json:"code" yaml:"code" mapstructure:"code"`
 
 	// FieldErrors corresponds to the JSON schema field "fieldErrors".
-	FieldErrors []ProblemDetailsV1FieldErrorsElem `json:"fieldErrors" yaml:"fieldErrors" mapstructure:"fieldErrors"`
+	FieldErrors []ProblemDetailsFieldErrorsElem `json:"fieldErrors" yaml:"fieldErrors" mapstructure:"fieldErrors"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
@@ -3821,10 +5197,10 @@ type ProblemDetailsV1 struct {
 	Message string `json:"message" yaml:"message" mapstructure:"message"`
 
 	// Retryability corresponds to the JSON schema field "retryability".
-	Retryability ProblemDetailsV1Retryability `json:"retryability" yaml:"retryability" mapstructure:"retryability"`
+	Retryability ProblemDetailsRetryability `json:"retryability" yaml:"retryability" mapstructure:"retryability"`
 
 	// RunId corresponds to the JSON schema field "runId".
-	RunId *SharedPrimitivesV1OpaqueId `json:"runId,omitempty,omitzero" yaml:"runId,omitempty" mapstructure:"runId,omitempty"`
+	RunId *SharedPrimitivesOpaqueId `json:"runId,omitempty,omitzero" yaml:"runId,omitempty" mapstructure:"runId,omitempty"`
 
 	// Stage corresponds to the JSON schema field "stage".
 	Stage *string `json:"stage,omitempty,omitzero" yaml:"stage,omitempty" mapstructure:"stage,omitempty"`
@@ -3833,7 +5209,7 @@ type ProblemDetailsV1 struct {
 	TraceId *string `json:"traceId,omitempty,omitzero" yaml:"traceId,omitempty" mapstructure:"traceId,omitempty"`
 }
 
-type ProblemDetailsV1FieldErrorsElem struct {
+type ProblemDetailsFieldErrorsElem struct {
 	// Code corresponds to the JSON schema field "code".
 	Code string `json:"code" yaml:"code" mapstructure:"code"`
 
@@ -3848,7 +5224,7 @@ type ProblemDetailsV1FieldErrorsElem struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ProblemDetailsV1FieldErrorsElem) UnmarshalJSON(value []byte) error {
+func (j *ProblemDetailsFieldErrorsElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3857,18 +5233,18 @@ func (j *ProblemDetailsV1FieldErrorsElem) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["code"]; raw != nil && !ok {
-		return fmt.Errorf("field code in ProblemDetailsV1FieldErrorsElem: required")
+		return fmt.Errorf("field code in ProblemDetailsFieldErrorsElem: required")
 	}
 	if _, ok := raw["instancePath"]; raw != nil && !ok {
-		return fmt.Errorf("field instancePath in ProblemDetailsV1FieldErrorsElem: required")
+		return fmt.Errorf("field instancePath in ProblemDetailsFieldErrorsElem: required")
 	}
 	if _, ok := raw["message"]; raw != nil && !ok {
-		return fmt.Errorf("field message in ProblemDetailsV1FieldErrorsElem: required")
+		return fmt.Errorf("field message in ProblemDetailsFieldErrorsElem: required")
 	}
 	if _, ok := raw["schemaPath"]; raw != nil && !ok {
-		return fmt.Errorf("field schemaPath in ProblemDetailsV1FieldErrorsElem: required")
+		return fmt.Errorf("field schemaPath in ProblemDetailsFieldErrorsElem: required")
 	}
-	type Plain ProblemDetailsV1FieldErrorsElem
+	type Plain ProblemDetailsFieldErrorsElem
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -3906,21 +5282,21 @@ func (j *ProblemDetailsV1FieldErrorsElem) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.SchemaPath)) > 512 {
 		return fmt.Errorf("field %s length: must be <= %d", "schemaPath", 512)
 	}
-	*j = ProblemDetailsV1FieldErrorsElem(plain)
+	*j = ProblemDetailsFieldErrorsElem(plain)
 	return nil
 }
 
-type ProblemDetailsV1Retryability string
+type ProblemDetailsRetryability string
 
-const ProblemDetailsV1RetryabilityAfterApproval ProblemDetailsV1Retryability = "after-approval"
-const ProblemDetailsV1RetryabilityAfterInput ProblemDetailsV1Retryability = "after-input"
-const ProblemDetailsV1RetryabilityAfterRebase ProblemDetailsV1Retryability = "after-rebase"
-const ProblemDetailsV1RetryabilityNever ProblemDetailsV1Retryability = "never"
-const ProblemDetailsV1RetryabilityOperatorAction ProblemDetailsV1Retryability = "operator-action"
-const ProblemDetailsV1RetryabilitySafeAfterBackoff ProblemDetailsV1Retryability = "safe-after-backoff"
-const ProblemDetailsV1RetryabilitySafeImmediate ProblemDetailsV1Retryability = "safe-immediate"
+const ProblemDetailsRetryabilityAfterApproval ProblemDetailsRetryability = "after-approval"
+const ProblemDetailsRetryabilityAfterInput ProblemDetailsRetryability = "after-input"
+const ProblemDetailsRetryabilityAfterRebase ProblemDetailsRetryability = "after-rebase"
+const ProblemDetailsRetryabilityNever ProblemDetailsRetryability = "never"
+const ProblemDetailsRetryabilityOperatorAction ProblemDetailsRetryability = "operator-action"
+const ProblemDetailsRetryabilitySafeAfterBackoff ProblemDetailsRetryability = "safe-after-backoff"
+const ProblemDetailsRetryabilitySafeImmediate ProblemDetailsRetryability = "safe-immediate"
 
-var enumValues_ProblemDetailsV1Retryability = []interface{}{
+var enumValues_ProblemDetailsRetryability = []interface{}{
 	"never",
 	"safe-immediate",
 	"safe-after-backoff",
@@ -3931,7 +5307,7 @@ var enumValues_ProblemDetailsV1Retryability = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ProblemDetailsV1Retryability) UnmarshalJSON(value []byte) error {
+func (j *ProblemDetailsRetryability) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3940,21 +5316,21 @@ func (j *ProblemDetailsV1Retryability) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ProblemDetailsV1Retryability {
+	for _, expected := range enumValues_ProblemDetailsRetryability {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ProblemDetailsV1Retryability, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ProblemDetailsRetryability, v)
 	}
-	*j = ProblemDetailsV1Retryability(v)
+	*j = ProblemDetailsRetryability(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ProblemDetailsV1) UnmarshalJSON(value []byte) error {
+func (j *ProblemDetails) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -3962,25 +5338,22 @@ func (j *ProblemDetailsV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in ProblemDetailsV1: required")
-	}
 	if _, ok := raw["code"]; raw != nil && !ok {
-		return fmt.Errorf("field code in ProblemDetailsV1: required")
+		return fmt.Errorf("field code in ProblemDetails: required")
 	}
 	if _, ok := raw["fieldErrors"]; raw != nil && !ok {
-		return fmt.Errorf("field fieldErrors in ProblemDetailsV1: required")
+		return fmt.Errorf("field fieldErrors in ProblemDetails: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in ProblemDetailsV1: required")
+		return fmt.Errorf("field kind in ProblemDetails: required")
 	}
 	if _, ok := raw["message"]; raw != nil && !ok {
-		return fmt.Errorf("field message in ProblemDetailsV1: required")
+		return fmt.Errorf("field message in ProblemDetails: required")
 	}
 	if _, ok := raw["retryability"]; raw != nil && !ok {
-		return fmt.Errorf("field retryability in ProblemDetailsV1: required")
+		return fmt.Errorf("field retryability in ProblemDetails: required")
 	}
-	type Plain ProblemDetailsV1
+	type Plain ProblemDetails
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4025,48 +5398,45 @@ func (j *ProblemDetailsV1) UnmarshalJSON(value []byte) error {
 	if plain.TraceId != nil && utf8.RuneCountInString(string(*plain.TraceId)) > 32 {
 		return fmt.Errorf("field %s length: must be <= %d", "traceId", 32)
 	}
-	*j = ProblemDetailsV1(plain)
+	*j = ProblemDetails(plain)
 	return nil
 }
 
-// Bounded ProviderContinuationV1 wire contract governed by PRD 0012.
-type ProviderContinuationV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
-
+// Bounded ProviderContinuation wire contract governed by PRD 0012.
+type ProviderContinuation struct {
 	// BindingDigest corresponds to the JSON schema field "bindingDigest".
-	BindingDigest SharedPrimitivesV1Digest `json:"bindingDigest" yaml:"bindingDigest" mapstructure:"bindingDigest"`
+	BindingDigest SharedPrimitivesDigest `json:"bindingDigest" yaml:"bindingDigest" mapstructure:"bindingDigest"`
 
 	// EncryptedBinding corresponds to the JSON schema field "encryptedBinding".
 	EncryptedBinding string `json:"encryptedBinding" yaml:"encryptedBinding" mapstructure:"encryptedBinding"`
 
 	// ExpiresAt corresponds to the JSON schema field "expiresAt".
-	ExpiresAt SharedPrimitivesV1Timestamp `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
+	ExpiresAt SharedPrimitivesTimestamp `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// Provider corresponds to the JSON schema field "provider".
-	Provider SharedPrimitivesV1OpaqueId `json:"provider" yaml:"provider" mapstructure:"provider"`
+	Provider SharedPrimitivesOpaqueId `json:"provider" yaml:"provider" mapstructure:"provider"`
 
 	// RestartPolicy corresponds to the JSON schema field "restartPolicy".
-	RestartPolicy ProviderContinuationV1RestartPolicy `json:"restartPolicy" yaml:"restartPolicy" mapstructure:"restartPolicy"`
+	RestartPolicy ProviderContinuationRestartPolicy `json:"restartPolicy" yaml:"restartPolicy" mapstructure:"restartPolicy"`
 }
 
-type ProviderContinuationV1RestartPolicy string
+type ProviderContinuationRestartPolicy string
 
-const ProviderContinuationV1RestartPolicyRestartRun ProviderContinuationV1RestartPolicy = "restart-run"
-const ProviderContinuationV1RestartPolicyRestartStage ProviderContinuationV1RestartPolicy = "restart-stage"
-const ProviderContinuationV1RestartPolicyResumeIfValid ProviderContinuationV1RestartPolicy = "resume-if-valid"
+const ProviderContinuationRestartPolicyRestartRun ProviderContinuationRestartPolicy = "restart-run"
+const ProviderContinuationRestartPolicyRestartStage ProviderContinuationRestartPolicy = "restart-stage"
+const ProviderContinuationRestartPolicyResumeIfValid ProviderContinuationRestartPolicy = "resume-if-valid"
 
-var enumValues_ProviderContinuationV1RestartPolicy = []interface{}{
+var enumValues_ProviderContinuationRestartPolicy = []interface{}{
 	"resume-if-valid",
 	"restart-stage",
 	"restart-run",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ProviderContinuationV1RestartPolicy) UnmarshalJSON(value []byte) error {
+func (j *ProviderContinuationRestartPolicy) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4075,21 +5445,21 @@ func (j *ProviderContinuationV1RestartPolicy) UnmarshalJSON(value []byte) error 
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ProviderContinuationV1RestartPolicy {
+	for _, expected := range enumValues_ProviderContinuationRestartPolicy {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ProviderContinuationV1RestartPolicy, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ProviderContinuationRestartPolicy, v)
 	}
-	*j = ProviderContinuationV1RestartPolicy(v)
+	*j = ProviderContinuationRestartPolicy(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ProviderContinuationV1) UnmarshalJSON(value []byte) error {
+func (j *ProviderContinuation) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4097,28 +5467,25 @@ func (j *ProviderContinuationV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in ProviderContinuationV1: required")
-	}
 	if _, ok := raw["bindingDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field bindingDigest in ProviderContinuationV1: required")
+		return fmt.Errorf("field bindingDigest in ProviderContinuation: required")
 	}
 	if _, ok := raw["encryptedBinding"]; raw != nil && !ok {
-		return fmt.Errorf("field encryptedBinding in ProviderContinuationV1: required")
+		return fmt.Errorf("field encryptedBinding in ProviderContinuation: required")
 	}
 	if _, ok := raw["expiresAt"]; raw != nil && !ok {
-		return fmt.Errorf("field expiresAt in ProviderContinuationV1: required")
+		return fmt.Errorf("field expiresAt in ProviderContinuation: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in ProviderContinuationV1: required")
+		return fmt.Errorf("field kind in ProviderContinuation: required")
 	}
 	if _, ok := raw["provider"]; raw != nil && !ok {
-		return fmt.Errorf("field provider in ProviderContinuationV1: required")
+		return fmt.Errorf("field provider in ProviderContinuation: required")
 	}
 	if _, ok := raw["restartPolicy"]; raw != nil && !ok {
-		return fmt.Errorf("field restartPolicy in ProviderContinuationV1: required")
+		return fmt.Errorf("field restartPolicy in ProviderContinuation: required")
 	}
-	type Plain ProviderContinuationV1
+	type Plain ProviderContinuation
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4132,22 +5499,22 @@ func (j *ProviderContinuationV1) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.EncryptedBinding)) > 24576 {
 		return fmt.Errorf("field %s length: must be <= %d", "encryptedBinding", 24576)
 	}
-	*j = ProviderContinuationV1(plain)
+	*j = ProviderContinuation(plain)
 	return nil
 }
 
 // Bounded reusable wire primitives for the Agent contract catalog.
-type SharedPrimitivesV1 struct {
+type SharedPrimitives struct {
 	// Defs corresponds to the JSON schema field "$defs".
-	Defs SharedPrimitivesV1DefinitionSet `json:"$defs" yaml:"$defs" mapstructure:"$defs"`
+	Defs SharedPrimitivesDefinitionSet `json:"$defs" yaml:"$defs" mapstructure:"$defs"`
 }
 
-type SharedPrimitivesV1ArtifactReference struct {
+type SharedPrimitivesArtifactReference struct {
 	// ArtifactId corresponds to the JSON schema field "artifactId".
-	ArtifactId SharedPrimitivesV1OpaqueId `json:"artifactId" yaml:"artifactId" mapstructure:"artifactId"`
+	ArtifactId SharedPrimitivesOpaqueId `json:"artifactId" yaml:"artifactId" mapstructure:"artifactId"`
 
 	// Digest corresponds to the JSON schema field "digest".
-	Digest SharedPrimitivesV1Digest `json:"digest" yaml:"digest" mapstructure:"digest"`
+	Digest SharedPrimitivesDigest `json:"digest" yaml:"digest" mapstructure:"digest"`
 
 	// MediaType corresponds to the JSON schema field "mediaType".
 	MediaType string `json:"mediaType" yaml:"mediaType" mapstructure:"mediaType"`
@@ -4157,7 +5524,7 @@ type SharedPrimitivesV1ArtifactReference struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1ArtifactReference) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesArtifactReference) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4166,18 +5533,18 @@ func (j *SharedPrimitivesV1ArtifactReference) UnmarshalJSON(value []byte) error 
 		return err
 	}
 	if _, ok := raw["artifactId"]; raw != nil && !ok {
-		return fmt.Errorf("field artifactId in SharedPrimitivesV1ArtifactReference: required")
+		return fmt.Errorf("field artifactId in SharedPrimitivesArtifactReference: required")
 	}
 	if _, ok := raw["digest"]; raw != nil && !ok {
-		return fmt.Errorf("field digest in SharedPrimitivesV1ArtifactReference: required")
+		return fmt.Errorf("field digest in SharedPrimitivesArtifactReference: required")
 	}
 	if _, ok := raw["mediaType"]; raw != nil && !ok {
-		return fmt.Errorf("field mediaType in SharedPrimitivesV1ArtifactReference: required")
+		return fmt.Errorf("field mediaType in SharedPrimitivesArtifactReference: required")
 	}
 	if _, ok := raw["sizeBytes"]; raw != nil && !ok {
-		return fmt.Errorf("field sizeBytes in SharedPrimitivesV1ArtifactReference: required")
+		return fmt.Errorf("field sizeBytes in SharedPrimitivesArtifactReference: required")
 	}
-	type Plain SharedPrimitivesV1ArtifactReference
+	type Plain SharedPrimitivesArtifactReference
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4197,29 +5564,29 @@ func (j *SharedPrimitivesV1ArtifactReference) UnmarshalJSON(value []byte) error 
 	if 0 > plain.SizeBytes {
 		return fmt.Errorf("field %s: must be >= %v", "sizeBytes", 0)
 	}
-	*j = SharedPrimitivesV1ArtifactReference(plain)
+	*j = SharedPrimitivesArtifactReference(plain)
 	return nil
 }
 
-type SharedPrimitivesV1BoundedStringMap map[string]string
+type SharedPrimitivesBoundedStringMap map[string]string
 
-type SharedPrimitivesV1ContractBomReferenceV1 struct {
+type SharedPrimitivesContractBomReference struct {
 	// BomDigest corresponds to the JSON schema field "bomDigest".
-	BomDigest SharedPrimitivesV1Digest `json:"bomDigest" yaml:"bomDigest" mapstructure:"bomDigest"`
+	BomDigest SharedPrimitivesDigest `json:"bomDigest" yaml:"bomDigest" mapstructure:"bomDigest"`
 
 	// EvidenceManifestDigest corresponds to the JSON schema field
 	// "evidenceManifestDigest".
-	EvidenceManifestDigest SharedPrimitivesV1Digest `json:"evidenceManifestDigest" yaml:"evidenceManifestDigest" mapstructure:"evidenceManifestDigest"`
+	EvidenceManifestDigest SharedPrimitivesDigest `json:"evidenceManifestDigest" yaml:"evidenceManifestDigest" mapstructure:"evidenceManifestDigest"`
 
 	// OciManifestDigest corresponds to the JSON schema field "ociManifestDigest".
-	OciManifestDigest SharedPrimitivesV1Digest `json:"ociManifestDigest" yaml:"ociManifestDigest" mapstructure:"ociManifestDigest"`
+	OciManifestDigest SharedPrimitivesDigest `json:"ociManifestDigest" yaml:"ociManifestDigest" mapstructure:"ociManifestDigest"`
 
 	// Repository corresponds to the JSON schema field "repository".
 	Repository string `json:"repository" yaml:"repository" mapstructure:"repository"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1ContractBomReferenceV1) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesContractBomReference) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4228,18 +5595,18 @@ func (j *SharedPrimitivesV1ContractBomReferenceV1) UnmarshalJSON(value []byte) e
 		return err
 	}
 	if _, ok := raw["bomDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field bomDigest in SharedPrimitivesV1ContractBomReferenceV1: required")
+		return fmt.Errorf("field bomDigest in SharedPrimitivesContractBomReference: required")
 	}
 	if _, ok := raw["evidenceManifestDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field evidenceManifestDigest in SharedPrimitivesV1ContractBomReferenceV1: required")
+		return fmt.Errorf("field evidenceManifestDigest in SharedPrimitivesContractBomReference: required")
 	}
 	if _, ok := raw["ociManifestDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field ociManifestDigest in SharedPrimitivesV1ContractBomReferenceV1: required")
+		return fmt.Errorf("field ociManifestDigest in SharedPrimitivesContractBomReference: required")
 	}
 	if _, ok := raw["repository"]; raw != nil && !ok {
-		return fmt.Errorf("field repository in SharedPrimitivesV1ContractBomReferenceV1: required")
+		return fmt.Errorf("field repository in SharedPrimitivesContractBomReference: required")
 	}
-	type Plain SharedPrimitivesV1ContractBomReferenceV1
+	type Plain SharedPrimitivesContractBomReference
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4253,20 +5620,20 @@ func (j *SharedPrimitivesV1ContractBomReferenceV1) UnmarshalJSON(value []byte) e
 	if utf8.RuneCountInString(string(plain.Repository)) > 256 {
 		return fmt.Errorf("field %s length: must be <= %d", "repository", 256)
 	}
-	*j = SharedPrimitivesV1ContractBomReferenceV1(plain)
+	*j = SharedPrimitivesContractBomReference(plain)
 	return nil
 }
 
-type SharedPrimitivesV1Cost struct {
+type SharedPrimitivesCost struct {
 	// Amount corresponds to the JSON schema field "amount".
-	Amount SharedPrimitivesV1DecimalString `json:"amount" yaml:"amount" mapstructure:"amount"`
+	Amount SharedPrimitivesDecimalString `json:"amount" yaml:"amount" mapstructure:"amount"`
 
 	// Currency corresponds to the JSON schema field "currency".
 	Currency string `json:"currency" yaml:"currency" mapstructure:"currency"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1Cost) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesCost) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4275,12 +5642,12 @@ func (j *SharedPrimitivesV1Cost) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["amount"]; raw != nil && !ok {
-		return fmt.Errorf("field amount in SharedPrimitivesV1Cost: required")
+		return fmt.Errorf("field amount in SharedPrimitivesCost: required")
 	}
 	if _, ok := raw["currency"]; raw != nil && !ok {
-		return fmt.Errorf("field currency in SharedPrimitivesV1Cost: required")
+		return fmt.Errorf("field currency in SharedPrimitivesCost: required")
 	}
-	type Plain SharedPrimitivesV1Cost
+	type Plain SharedPrimitivesCost
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4294,18 +5661,18 @@ func (j *SharedPrimitivesV1Cost) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.Currency)) > 3 {
 		return fmt.Errorf("field %s length: must be <= %d", "currency", 3)
 	}
-	*j = SharedPrimitivesV1Cost(plain)
+	*j = SharedPrimitivesCost(plain)
 	return nil
 }
 
-type SharedPrimitivesV1Cursor string
+type SharedPrimitivesCursor string
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1Cursor) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesCursor) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
-	type Plain SharedPrimitivesV1Cursor
+	type Plain SharedPrimitivesCursor
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4319,18 +5686,18 @@ func (j *SharedPrimitivesV1Cursor) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain)) > 256 {
 		return fmt.Errorf("field %s length: must be <= %d", "", 256)
 	}
-	*j = SharedPrimitivesV1Cursor(plain)
+	*j = SharedPrimitivesCursor(plain)
 	return nil
 }
 
-type SharedPrimitivesV1DecimalString string
+type SharedPrimitivesDecimalString string
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1DecimalString) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesDecimalString) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
-	type Plain SharedPrimitivesV1DecimalString
+	type Plain SharedPrimitivesDecimalString
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4344,105 +5711,140 @@ func (j *SharedPrimitivesV1DecimalString) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain)) > 96 {
 		return fmt.Errorf("field %s length: must be <= %d", "", 96)
 	}
-	*j = SharedPrimitivesV1DecimalString(plain)
+	*j = SharedPrimitivesDecimalString(plain)
 	return nil
 }
 
-type SharedPrimitivesV1DefinitionSet struct {
-	// ActorId corresponds to the JSON schema field "ActorId".
-	ActorId SharedPrimitivesV1OpaqueId `json:"ActorId" yaml:"ActorId" mapstructure:"ActorId"`
+type SharedPrimitivesDefinitionReference struct {
+	// DefinitionDigest corresponds to the JSON schema field "definitionDigest".
+	DefinitionDigest SharedPrimitivesDigest `json:"definitionDigest" yaml:"definitionDigest" mapstructure:"definitionDigest"`
 
-	// ArtifactId corresponds to the JSON schema field "ArtifactId".
-	ArtifactId SharedPrimitivesV1OpaqueId `json:"ArtifactId" yaml:"ArtifactId" mapstructure:"ArtifactId"`
-
-	// ArtifactReference corresponds to the JSON schema field "ArtifactReference".
-	ArtifactReference SharedPrimitivesV1ArtifactReference `json:"ArtifactReference" yaml:"ArtifactReference" mapstructure:"ArtifactReference"`
-
-	// AuthorizationId corresponds to the JSON schema field "AuthorizationId".
-	AuthorizationId SharedPrimitivesV1OpaqueId `json:"AuthorizationId" yaml:"AuthorizationId" mapstructure:"AuthorizationId"`
-
-	// BoundedStringMap corresponds to the JSON schema field "BoundedStringMap".
-	BoundedStringMap SharedPrimitivesV1BoundedStringMap `json:"BoundedStringMap" yaml:"BoundedStringMap" mapstructure:"BoundedStringMap"`
-
-	// BuildId corresponds to the JSON schema field "BuildId".
-	BuildId SharedPrimitivesV1OpaqueId `json:"BuildId" yaml:"BuildId" mapstructure:"BuildId"`
-
-	// ContractBomReferenceV1 corresponds to the JSON schema field
-	// "ContractBomReferenceV1".
-	ContractBomReferenceV1 SharedPrimitivesV1ContractBomReferenceV1 `json:"ContractBomReferenceV1" yaml:"ContractBomReferenceV1" mapstructure:"ContractBomReferenceV1"`
-
-	// Cost corresponds to the JSON schema field "Cost".
-	Cost SharedPrimitivesV1Cost `json:"Cost" yaml:"Cost" mapstructure:"Cost"`
-
-	// Cursor corresponds to the JSON schema field "Cursor".
-	Cursor SharedPrimitivesV1Cursor `json:"Cursor" yaml:"Cursor" mapstructure:"Cursor"`
-
-	// DecimalString corresponds to the JSON schema field "DecimalString".
-	DecimalString SharedPrimitivesV1DecimalString `json:"DecimalString" yaml:"DecimalString" mapstructure:"DecimalString"`
-
-	// Digest corresponds to the JSON schema field "Digest".
-	Digest SharedPrimitivesV1Digest `json:"Digest" yaml:"Digest" mapstructure:"Digest"`
-
-	// Idempotency corresponds to the JSON schema field "Idempotency".
-	Idempotency SharedPrimitivesV1Idempotency `json:"Idempotency" yaml:"Idempotency" mapstructure:"Idempotency"`
-
-	// IntegerString corresponds to the JSON schema field "IntegerString".
-	IntegerString SharedPrimitivesV1IntegerString `json:"IntegerString" yaml:"IntegerString" mapstructure:"IntegerString"`
-
-	// OpaqueId corresponds to the JSON schema field "OpaqueId".
-	OpaqueId SharedPrimitivesV1OpaqueId `json:"OpaqueId" yaml:"OpaqueId" mapstructure:"OpaqueId"`
-
-	// PageInfo corresponds to the JSON schema field "PageInfo".
-	PageInfo SharedPrimitivesV1PageInfo `json:"PageInfo" yaml:"PageInfo" mapstructure:"PageInfo"`
-
-	// PhysicalAttemptId corresponds to the JSON schema field "PhysicalAttemptId".
-	PhysicalAttemptId SharedPrimitivesV1OpaqueId `json:"PhysicalAttemptId" yaml:"PhysicalAttemptId" mapstructure:"PhysicalAttemptId"`
-
-	// PolicyId corresponds to the JSON schema field "PolicyId".
-	PolicyId SharedPrimitivesV1OpaqueId `json:"PolicyId" yaml:"PolicyId" mapstructure:"PolicyId"`
-
-	// PolicyReference corresponds to the JSON schema field "PolicyReference".
-	PolicyReference SharedPrimitivesV1PolicyReference `json:"PolicyReference" yaml:"PolicyReference" mapstructure:"PolicyReference"`
-
-	// RequestId corresponds to the JSON schema field "RequestId".
-	RequestId SharedPrimitivesV1OpaqueId `json:"RequestId" yaml:"RequestId" mapstructure:"RequestId"`
-
-	// ReservationId corresponds to the JSON schema field "ReservationId".
-	ReservationId SharedPrimitivesV1OpaqueId `json:"ReservationId" yaml:"ReservationId" mapstructure:"ReservationId"`
-
-	// ResourceLimits corresponds to the JSON schema field "ResourceLimits".
-	ResourceLimits SharedPrimitivesV1ResourceLimits `json:"ResourceLimits" yaml:"ResourceLimits" mapstructure:"ResourceLimits"`
-
-	// RunId corresponds to the JSON schema field "RunId".
-	RunId SharedPrimitivesV1OpaqueId `json:"RunId" yaml:"RunId" mapstructure:"RunId"`
-
-	// SchemaReference corresponds to the JSON schema field "SchemaReference".
-	SchemaReference SharedPrimitivesV1SchemaReference `json:"SchemaReference" yaml:"SchemaReference" mapstructure:"SchemaReference"`
-
-	// TargetReference corresponds to the JSON schema field "TargetReference".
-	TargetReference SharedPrimitivesV1TargetReference `json:"TargetReference" yaml:"TargetReference" mapstructure:"TargetReference"`
-
-	// TaskId corresponds to the JSON schema field "TaskId".
-	TaskId SharedPrimitivesV1OpaqueId `json:"TaskId" yaml:"TaskId" mapstructure:"TaskId"`
-
-	// TenantId corresponds to the JSON schema field "TenantId".
-	TenantId SharedPrimitivesV1OpaqueId `json:"TenantId" yaml:"TenantId" mapstructure:"TenantId"`
-
-	// Timestamp corresponds to the JSON schema field "Timestamp".
-	Timestamp SharedPrimitivesV1Timestamp `json:"Timestamp" yaml:"Timestamp" mapstructure:"Timestamp"`
-
-	// TraceAndScope corresponds to the JSON schema field "TraceAndScope".
-	TraceAndScope SharedPrimitivesV1TraceAndScope `json:"TraceAndScope" yaml:"TraceAndScope" mapstructure:"TraceAndScope"`
-
-	// TraceContext corresponds to the JSON schema field "TraceContext".
-	TraceContext SharedPrimitivesV1TraceContext `json:"TraceContext" yaml:"TraceContext" mapstructure:"TraceContext"`
-
-	// WorkspaceId corresponds to the JSON schema field "WorkspaceId".
-	WorkspaceId SharedPrimitivesV1OpaqueId `json:"WorkspaceId" yaml:"WorkspaceId" mapstructure:"WorkspaceId"`
+	// DefinitionId corresponds to the JSON schema field "definitionId".
+	DefinitionId SharedPrimitivesOpaqueId `json:"definitionId" yaml:"definitionId" mapstructure:"definitionId"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1DefinitionSet) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesDefinitionReference) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["definitionDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field definitionDigest in SharedPrimitivesDefinitionReference: required")
+	}
+	if _, ok := raw["definitionId"]; raw != nil && !ok {
+		return fmt.Errorf("field definitionId in SharedPrimitivesDefinitionReference: required")
+	}
+	type Plain SharedPrimitivesDefinitionReference
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = SharedPrimitivesDefinitionReference(plain)
+	return nil
+}
+
+type SharedPrimitivesDefinitionSet struct {
+	// ActorId corresponds to the JSON schema field "ActorId".
+	ActorId SharedPrimitivesOpaqueId `json:"ActorId" yaml:"ActorId" mapstructure:"ActorId"`
+
+	// ArtifactId corresponds to the JSON schema field "ArtifactId".
+	ArtifactId SharedPrimitivesOpaqueId `json:"ArtifactId" yaml:"ArtifactId" mapstructure:"ArtifactId"`
+
+	// ArtifactReference corresponds to the JSON schema field "ArtifactReference".
+	ArtifactReference SharedPrimitivesArtifactReference `json:"ArtifactReference" yaml:"ArtifactReference" mapstructure:"ArtifactReference"`
+
+	// AuthorizationId corresponds to the JSON schema field "AuthorizationId".
+	AuthorizationId SharedPrimitivesOpaqueId `json:"AuthorizationId" yaml:"AuthorizationId" mapstructure:"AuthorizationId"`
+
+	// BoundedStringMap corresponds to the JSON schema field "BoundedStringMap".
+	BoundedStringMap SharedPrimitivesBoundedStringMap `json:"BoundedStringMap" yaml:"BoundedStringMap" mapstructure:"BoundedStringMap"`
+
+	// BuildId corresponds to the JSON schema field "BuildId".
+	BuildId SharedPrimitivesOpaqueId `json:"BuildId" yaml:"BuildId" mapstructure:"BuildId"`
+
+	// ContractBomReference corresponds to the JSON schema field
+	// "ContractBomReference".
+	ContractBomReference SharedPrimitivesContractBomReference `json:"ContractBomReference" yaml:"ContractBomReference" mapstructure:"ContractBomReference"`
+
+	// Cost corresponds to the JSON schema field "Cost".
+	Cost SharedPrimitivesCost `json:"Cost" yaml:"Cost" mapstructure:"Cost"`
+
+	// Cursor corresponds to the JSON schema field "Cursor".
+	Cursor SharedPrimitivesCursor `json:"Cursor" yaml:"Cursor" mapstructure:"Cursor"`
+
+	// DecimalString corresponds to the JSON schema field "DecimalString".
+	DecimalString SharedPrimitivesDecimalString `json:"DecimalString" yaml:"DecimalString" mapstructure:"DecimalString"`
+
+	// DefinitionReference corresponds to the JSON schema field "DefinitionReference".
+	DefinitionReference SharedPrimitivesDefinitionReference `json:"DefinitionReference" yaml:"DefinitionReference" mapstructure:"DefinitionReference"`
+
+	// Digest corresponds to the JSON schema field "Digest".
+	Digest SharedPrimitivesDigest `json:"Digest" yaml:"Digest" mapstructure:"Digest"`
+
+	// Idempotency corresponds to the JSON schema field "Idempotency".
+	Idempotency SharedPrimitivesIdempotency `json:"Idempotency" yaml:"Idempotency" mapstructure:"Idempotency"`
+
+	// IntegerString corresponds to the JSON schema field "IntegerString".
+	IntegerString SharedPrimitivesIntegerString `json:"IntegerString" yaml:"IntegerString" mapstructure:"IntegerString"`
+
+	// OpaqueId corresponds to the JSON schema field "OpaqueId".
+	OpaqueId SharedPrimitivesOpaqueId `json:"OpaqueId" yaml:"OpaqueId" mapstructure:"OpaqueId"`
+
+	// PageInfo corresponds to the JSON schema field "PageInfo".
+	PageInfo SharedPrimitivesPageInfo `json:"PageInfo" yaml:"PageInfo" mapstructure:"PageInfo"`
+
+	// PhysicalAttemptId corresponds to the JSON schema field "PhysicalAttemptId".
+	PhysicalAttemptId SharedPrimitivesOpaqueId `json:"PhysicalAttemptId" yaml:"PhysicalAttemptId" mapstructure:"PhysicalAttemptId"`
+
+	// PolicyId corresponds to the JSON schema field "PolicyId".
+	PolicyId SharedPrimitivesOpaqueId `json:"PolicyId" yaml:"PolicyId" mapstructure:"PolicyId"`
+
+	// PolicyReference corresponds to the JSON schema field "PolicyReference".
+	PolicyReference SharedPrimitivesPolicyReference `json:"PolicyReference" yaml:"PolicyReference" mapstructure:"PolicyReference"`
+
+	// ProjectId corresponds to the JSON schema field "ProjectId".
+	ProjectId SharedPrimitivesOpaqueId `json:"ProjectId" yaml:"ProjectId" mapstructure:"ProjectId"`
+
+	// RequestId corresponds to the JSON schema field "RequestId".
+	RequestId SharedPrimitivesOpaqueId `json:"RequestId" yaml:"RequestId" mapstructure:"RequestId"`
+
+	// ReservationId corresponds to the JSON schema field "ReservationId".
+	ReservationId SharedPrimitivesOpaqueId `json:"ReservationId" yaml:"ReservationId" mapstructure:"ReservationId"`
+
+	// ResourceLimits corresponds to the JSON schema field "ResourceLimits".
+	ResourceLimits SharedPrimitivesResourceLimits `json:"ResourceLimits" yaml:"ResourceLimits" mapstructure:"ResourceLimits"`
+
+	// RunId corresponds to the JSON schema field "RunId".
+	RunId SharedPrimitivesOpaqueId `json:"RunId" yaml:"RunId" mapstructure:"RunId"`
+
+	// SchemaReference corresponds to the JSON schema field "SchemaReference".
+	SchemaReference SharedPrimitivesSchemaReference `json:"SchemaReference" yaml:"SchemaReference" mapstructure:"SchemaReference"`
+
+	// TargetReference corresponds to the JSON schema field "TargetReference".
+	TargetReference SharedPrimitivesTargetReference `json:"TargetReference" yaml:"TargetReference" mapstructure:"TargetReference"`
+
+	// TaskId corresponds to the JSON schema field "TaskId".
+	TaskId SharedPrimitivesOpaqueId `json:"TaskId" yaml:"TaskId" mapstructure:"TaskId"`
+
+	// Timestamp corresponds to the JSON schema field "Timestamp".
+	Timestamp SharedPrimitivesTimestamp `json:"Timestamp" yaml:"Timestamp" mapstructure:"Timestamp"`
+
+	// TraceAndScope corresponds to the JSON schema field "TraceAndScope".
+	TraceAndScope SharedPrimitivesTraceAndScope `json:"TraceAndScope" yaml:"TraceAndScope" mapstructure:"TraceAndScope"`
+
+	// TraceContext corresponds to the JSON schema field "TraceContext".
+	TraceContext SharedPrimitivesTraceContext `json:"TraceContext" yaml:"TraceContext" mapstructure:"TraceContext"`
+
+	// WorkspaceId corresponds to the JSON schema field "WorkspaceId".
+	WorkspaceId SharedPrimitivesOpaqueId `json:"WorkspaceId" yaml:"WorkspaceId" mapstructure:"WorkspaceId"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SharedPrimitivesDefinitionSet) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4451,112 +5853,115 @@ func (j *SharedPrimitivesV1DefinitionSet) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["ActorId"]; raw != nil && !ok {
-		return fmt.Errorf("field ActorId in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field ActorId in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["ArtifactId"]; raw != nil && !ok {
-		return fmt.Errorf("field ArtifactId in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field ArtifactId in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["ArtifactReference"]; raw != nil && !ok {
-		return fmt.Errorf("field ArtifactReference in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field ArtifactReference in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["AuthorizationId"]; raw != nil && !ok {
-		return fmt.Errorf("field AuthorizationId in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field AuthorizationId in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["BoundedStringMap"]; raw != nil && !ok {
-		return fmt.Errorf("field BoundedStringMap in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field BoundedStringMap in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["BuildId"]; raw != nil && !ok {
-		return fmt.Errorf("field BuildId in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field BuildId in SharedPrimitivesDefinitionSet: required")
 	}
-	if _, ok := raw["ContractBomReferenceV1"]; raw != nil && !ok {
-		return fmt.Errorf("field ContractBomReferenceV1 in SharedPrimitivesV1DefinitionSet: required")
+	if _, ok := raw["ContractBomReference"]; raw != nil && !ok {
+		return fmt.Errorf("field ContractBomReference in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["Cost"]; raw != nil && !ok {
-		return fmt.Errorf("field Cost in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field Cost in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["Cursor"]; raw != nil && !ok {
-		return fmt.Errorf("field Cursor in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field Cursor in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["DecimalString"]; raw != nil && !ok {
-		return fmt.Errorf("field DecimalString in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field DecimalString in SharedPrimitivesDefinitionSet: required")
+	}
+	if _, ok := raw["DefinitionReference"]; raw != nil && !ok {
+		return fmt.Errorf("field DefinitionReference in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["Digest"]; raw != nil && !ok {
-		return fmt.Errorf("field Digest in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field Digest in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["Idempotency"]; raw != nil && !ok {
-		return fmt.Errorf("field Idempotency in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field Idempotency in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["IntegerString"]; raw != nil && !ok {
-		return fmt.Errorf("field IntegerString in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field IntegerString in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["OpaqueId"]; raw != nil && !ok {
-		return fmt.Errorf("field OpaqueId in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field OpaqueId in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["PageInfo"]; raw != nil && !ok {
-		return fmt.Errorf("field PageInfo in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field PageInfo in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["PhysicalAttemptId"]; raw != nil && !ok {
-		return fmt.Errorf("field PhysicalAttemptId in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field PhysicalAttemptId in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["PolicyId"]; raw != nil && !ok {
-		return fmt.Errorf("field PolicyId in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field PolicyId in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["PolicyReference"]; raw != nil && !ok {
-		return fmt.Errorf("field PolicyReference in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field PolicyReference in SharedPrimitivesDefinitionSet: required")
+	}
+	if _, ok := raw["ProjectId"]; raw != nil && !ok {
+		return fmt.Errorf("field ProjectId in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["RequestId"]; raw != nil && !ok {
-		return fmt.Errorf("field RequestId in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field RequestId in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["ReservationId"]; raw != nil && !ok {
-		return fmt.Errorf("field ReservationId in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field ReservationId in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["ResourceLimits"]; raw != nil && !ok {
-		return fmt.Errorf("field ResourceLimits in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field ResourceLimits in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["RunId"]; raw != nil && !ok {
-		return fmt.Errorf("field RunId in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field RunId in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["SchemaReference"]; raw != nil && !ok {
-		return fmt.Errorf("field SchemaReference in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field SchemaReference in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["TargetReference"]; raw != nil && !ok {
-		return fmt.Errorf("field TargetReference in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field TargetReference in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["TaskId"]; raw != nil && !ok {
-		return fmt.Errorf("field TaskId in SharedPrimitivesV1DefinitionSet: required")
-	}
-	if _, ok := raw["TenantId"]; raw != nil && !ok {
-		return fmt.Errorf("field TenantId in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field TaskId in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["Timestamp"]; raw != nil && !ok {
-		return fmt.Errorf("field Timestamp in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field Timestamp in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["TraceAndScope"]; raw != nil && !ok {
-		return fmt.Errorf("field TraceAndScope in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field TraceAndScope in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["TraceContext"]; raw != nil && !ok {
-		return fmt.Errorf("field TraceContext in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field TraceContext in SharedPrimitivesDefinitionSet: required")
 	}
 	if _, ok := raw["WorkspaceId"]; raw != nil && !ok {
-		return fmt.Errorf("field WorkspaceId in SharedPrimitivesV1DefinitionSet: required")
+		return fmt.Errorf("field WorkspaceId in SharedPrimitivesDefinitionSet: required")
 	}
-	type Plain SharedPrimitivesV1DefinitionSet
+	type Plain SharedPrimitivesDefinitionSet
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	*j = SharedPrimitivesV1DefinitionSet(plain)
+	*j = SharedPrimitivesDefinitionSet(plain)
 	return nil
 }
 
-type SharedPrimitivesV1Digest string
+type SharedPrimitivesDigest string
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1Digest) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesDigest) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
-	type Plain SharedPrimitivesV1Digest
+	type Plain SharedPrimitivesDigest
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4570,14 +5975,14 @@ func (j *SharedPrimitivesV1Digest) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain)) > 71 {
 		return fmt.Errorf("field %s length: must be <= %d", "", 71)
 	}
-	*j = SharedPrimitivesV1Digest(plain)
+	*j = SharedPrimitivesDigest(plain)
 	return nil
 }
 
-type SharedPrimitivesV1Idempotency struct {
+type SharedPrimitivesIdempotency struct {
 	// CanonicalRequestDigest corresponds to the JSON schema field
 	// "canonicalRequestDigest".
-	CanonicalRequestDigest SharedPrimitivesV1Digest `json:"canonicalRequestDigest" yaml:"canonicalRequestDigest" mapstructure:"canonicalRequestDigest"`
+	CanonicalRequestDigest SharedPrimitivesDigest `json:"canonicalRequestDigest" yaml:"canonicalRequestDigest" mapstructure:"canonicalRequestDigest"`
 
 	// Key corresponds to the JSON schema field "key".
 	Key string `json:"key" yaml:"key" mapstructure:"key"`
@@ -4587,7 +5992,7 @@ type SharedPrimitivesV1Idempotency struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1Idempotency) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesIdempotency) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4596,15 +6001,15 @@ func (j *SharedPrimitivesV1Idempotency) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["canonicalRequestDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field canonicalRequestDigest in SharedPrimitivesV1Idempotency: required")
+		return fmt.Errorf("field canonicalRequestDigest in SharedPrimitivesIdempotency: required")
 	}
 	if _, ok := raw["key"]; raw != nil && !ok {
-		return fmt.Errorf("field key in SharedPrimitivesV1Idempotency: required")
+		return fmt.Errorf("field key in SharedPrimitivesIdempotency: required")
 	}
 	if _, ok := raw["scope"]; raw != nil && !ok {
-		return fmt.Errorf("field scope in SharedPrimitivesV1Idempotency: required")
+		return fmt.Errorf("field scope in SharedPrimitivesIdempotency: required")
 	}
-	type Plain SharedPrimitivesV1Idempotency
+	type Plain SharedPrimitivesIdempotency
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4627,18 +6032,18 @@ func (j *SharedPrimitivesV1Idempotency) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.Scope)) > 128 {
 		return fmt.Errorf("field %s length: must be <= %d", "scope", 128)
 	}
-	*j = SharedPrimitivesV1Idempotency(plain)
+	*j = SharedPrimitivesIdempotency(plain)
 	return nil
 }
 
-type SharedPrimitivesV1IntegerString string
+type SharedPrimitivesIntegerString string
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1IntegerString) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesIntegerString) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
-	type Plain SharedPrimitivesV1IntegerString
+	type Plain SharedPrimitivesIntegerString
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4652,18 +6057,18 @@ func (j *SharedPrimitivesV1IntegerString) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain)) > 64 {
 		return fmt.Errorf("field %s length: must be <= %d", "", 64)
 	}
-	*j = SharedPrimitivesV1IntegerString(plain)
+	*j = SharedPrimitivesIntegerString(plain)
 	return nil
 }
 
-type SharedPrimitivesV1OpaqueId string
+type SharedPrimitivesOpaqueId string
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1OpaqueId) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesOpaqueId) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
-	type Plain SharedPrimitivesV1OpaqueId
+	type Plain SharedPrimitivesOpaqueId
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4677,11 +6082,11 @@ func (j *SharedPrimitivesV1OpaqueId) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain)) > 128 {
 		return fmt.Errorf("field %s length: must be <= %d", "", 128)
 	}
-	*j = SharedPrimitivesV1OpaqueId(plain)
+	*j = SharedPrimitivesOpaqueId(plain)
 	return nil
 }
 
-type SharedPrimitivesV1PageInfo struct {
+type SharedPrimitivesPageInfo struct {
 	// HasMore corresponds to the JSON schema field "hasMore".
 	HasMore bool `json:"hasMore" yaml:"hasMore" mapstructure:"hasMore"`
 
@@ -4689,11 +6094,11 @@ type SharedPrimitivesV1PageInfo struct {
 	Limit int `json:"limit" yaml:"limit" mapstructure:"limit"`
 
 	// NextCursor corresponds to the JSON schema field "nextCursor".
-	NextCursor *SharedPrimitivesV1Cursor `json:"nextCursor,omitempty,omitzero" yaml:"nextCursor,omitempty" mapstructure:"nextCursor,omitempty"`
+	NextCursor *SharedPrimitivesCursor `json:"nextCursor,omitempty,omitzero" yaml:"nextCursor,omitempty" mapstructure:"nextCursor,omitempty"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1PageInfo) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesPageInfo) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4702,12 +6107,12 @@ func (j *SharedPrimitivesV1PageInfo) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["hasMore"]; raw != nil && !ok {
-		return fmt.Errorf("field hasMore in SharedPrimitivesV1PageInfo: required")
+		return fmt.Errorf("field hasMore in SharedPrimitivesPageInfo: required")
 	}
 	if _, ok := raw["limit"]; raw != nil && !ok {
-		return fmt.Errorf("field limit in SharedPrimitivesV1PageInfo: required")
+		return fmt.Errorf("field limit in SharedPrimitivesPageInfo: required")
 	}
-	type Plain SharedPrimitivesV1PageInfo
+	type Plain SharedPrimitivesPageInfo
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4718,23 +6123,23 @@ func (j *SharedPrimitivesV1PageInfo) UnmarshalJSON(value []byte) error {
 	if 1 > plain.Limit {
 		return fmt.Errorf("field %s: must be >= %v", "limit", 1)
 	}
-	*j = SharedPrimitivesV1PageInfo(plain)
+	*j = SharedPrimitivesPageInfo(plain)
 	return nil
 }
 
-type SharedPrimitivesV1PolicyReference struct {
+type SharedPrimitivesPolicyReference struct {
 	// Digest corresponds to the JSON schema field "digest".
-	Digest SharedPrimitivesV1Digest `json:"digest" yaml:"digest" mapstructure:"digest"`
+	Digest SharedPrimitivesDigest `json:"digest" yaml:"digest" mapstructure:"digest"`
 
 	// PolicyId corresponds to the JSON schema field "policyId".
-	PolicyId SharedPrimitivesV1OpaqueId `json:"policyId" yaml:"policyId" mapstructure:"policyId"`
+	PolicyId SharedPrimitivesOpaqueId `json:"policyId" yaml:"policyId" mapstructure:"policyId"`
 
 	// Version corresponds to the JSON schema field "version".
 	Version string `json:"version" yaml:"version" mapstructure:"version"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1PolicyReference) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesPolicyReference) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4743,15 +6148,15 @@ func (j *SharedPrimitivesV1PolicyReference) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["digest"]; raw != nil && !ok {
-		return fmt.Errorf("field digest in SharedPrimitivesV1PolicyReference: required")
+		return fmt.Errorf("field digest in SharedPrimitivesPolicyReference: required")
 	}
 	if _, ok := raw["policyId"]; raw != nil && !ok {
-		return fmt.Errorf("field policyId in SharedPrimitivesV1PolicyReference: required")
+		return fmt.Errorf("field policyId in SharedPrimitivesPolicyReference: required")
 	}
 	if _, ok := raw["version"]; raw != nil && !ok {
-		return fmt.Errorf("field version in SharedPrimitivesV1PolicyReference: required")
+		return fmt.Errorf("field version in SharedPrimitivesPolicyReference: required")
 	}
-	type Plain SharedPrimitivesV1PolicyReference
+	type Plain SharedPrimitivesPolicyReference
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4765,11 +6170,11 @@ func (j *SharedPrimitivesV1PolicyReference) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.Version)) > 64 {
 		return fmt.Errorf("field %s length: must be <= %d", "version", 64)
 	}
-	*j = SharedPrimitivesV1PolicyReference(plain)
+	*j = SharedPrimitivesPolicyReference(plain)
 	return nil
 }
 
-type SharedPrimitivesV1ResourceLimits struct {
+type SharedPrimitivesResourceLimits struct {
 	// CpuMillis corresponds to the JSON schema field "cpuMillis".
 	CpuMillis int `json:"cpuMillis" yaml:"cpuMillis" mapstructure:"cpuMillis"`
 
@@ -4787,7 +6192,7 @@ type SharedPrimitivesV1ResourceLimits struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1ResourceLimits) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesResourceLimits) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4796,21 +6201,21 @@ func (j *SharedPrimitivesV1ResourceLimits) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["cpuMillis"]; raw != nil && !ok {
-		return fmt.Errorf("field cpuMillis in SharedPrimitivesV1ResourceLimits: required")
+		return fmt.Errorf("field cpuMillis in SharedPrimitivesResourceLimits: required")
 	}
 	if _, ok := raw["gpuMillis"]; raw != nil && !ok {
-		return fmt.Errorf("field gpuMillis in SharedPrimitivesV1ResourceLimits: required")
+		return fmt.Errorf("field gpuMillis in SharedPrimitivesResourceLimits: required")
 	}
 	if _, ok := raw["memoryBytes"]; raw != nil && !ok {
-		return fmt.Errorf("field memoryBytes in SharedPrimitivesV1ResourceLimits: required")
+		return fmt.Errorf("field memoryBytes in SharedPrimitivesResourceLimits: required")
 	}
 	if _, ok := raw["outputBytes"]; raw != nil && !ok {
-		return fmt.Errorf("field outputBytes in SharedPrimitivesV1ResourceLimits: required")
+		return fmt.Errorf("field outputBytes in SharedPrimitivesResourceLimits: required")
 	}
 	if _, ok := raw["timeoutMilliseconds"]; raw != nil && !ok {
-		return fmt.Errorf("field timeoutMilliseconds in SharedPrimitivesV1ResourceLimits: required")
+		return fmt.Errorf("field timeoutMilliseconds in SharedPrimitivesResourceLimits: required")
 	}
-	type Plain SharedPrimitivesV1ResourceLimits
+	type Plain SharedPrimitivesResourceLimits
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4845,23 +6250,20 @@ func (j *SharedPrimitivesV1ResourceLimits) UnmarshalJSON(value []byte) error {
 	if 1 > plain.TimeoutMilliseconds {
 		return fmt.Errorf("field %s: must be >= %v", "timeoutMilliseconds", 1)
 	}
-	*j = SharedPrimitivesV1ResourceLimits(plain)
+	*j = SharedPrimitivesResourceLimits(plain)
 	return nil
 }
 
-type SharedPrimitivesV1SchemaReference struct {
+type SharedPrimitivesSchemaReference struct {
 	// ComponentName corresponds to the JSON schema field "componentName".
 	ComponentName string `json:"componentName" yaml:"componentName" mapstructure:"componentName"`
 
 	// Digest corresponds to the JSON schema field "digest".
-	Digest SharedPrimitivesV1Digest `json:"digest" yaml:"digest" mapstructure:"digest"`
-
-	// Version corresponds to the JSON schema field "version".
-	Version string `json:"version" yaml:"version" mapstructure:"version"`
+	Digest SharedPrimitivesDigest `json:"digest" yaml:"digest" mapstructure:"digest"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1SchemaReference) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesSchemaReference) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4870,21 +6272,18 @@ func (j *SharedPrimitivesV1SchemaReference) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["componentName"]; raw != nil && !ok {
-		return fmt.Errorf("field componentName in SharedPrimitivesV1SchemaReference: required")
+		return fmt.Errorf("field componentName in SharedPrimitivesSchemaReference: required")
 	}
 	if _, ok := raw["digest"]; raw != nil && !ok {
-		return fmt.Errorf("field digest in SharedPrimitivesV1SchemaReference: required")
+		return fmt.Errorf("field digest in SharedPrimitivesSchemaReference: required")
 	}
-	if _, ok := raw["version"]; raw != nil && !ok {
-		return fmt.Errorf("field version in SharedPrimitivesV1SchemaReference: required")
-	}
-	type Plain SharedPrimitivesV1SchemaReference
+	type Plain SharedPrimitivesSchemaReference
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	if matched, _ := regexp.MatchString(`^anvilkit\.[a-z0-9][a-z0-9.-]*\.v[1-9][0-9]*$`, string(plain.ComponentName)); !matched {
-		return fmt.Errorf("field %s pattern match: must match %s", "ComponentName", `^anvilkit\.[a-z0-9][a-z0-9.-]*\.v[1-9][0-9]*$`)
+	if matched, _ := regexp.MatchString(`^anvilkit\.[a-z0-9][a-z0-9.-]*$`, string(plain.ComponentName)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentName", `^anvilkit\.[a-z0-9][a-z0-9.-]*$`)
 	}
 	if utf8.RuneCountInString(string(plain.ComponentName)) < 8 {
 		return fmt.Errorf("field %s length: must be >= %d", "componentName", 8)
@@ -4892,32 +6291,26 @@ func (j *SharedPrimitivesV1SchemaReference) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.ComponentName)) > 160 {
 		return fmt.Errorf("field %s length: must be <= %d", "componentName", 160)
 	}
-	if matched, _ := regexp.MatchString(`^[1-9][0-9]*\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`, string(plain.Version)); !matched {
-		return fmt.Errorf("field %s pattern match: must match %s", "Version", `^[1-9][0-9]*\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
-	}
-	if utf8.RuneCountInString(string(plain.Version)) < 5 {
-		return fmt.Errorf("field %s length: must be >= %d", "version", 5)
-	}
-	if utf8.RuneCountInString(string(plain.Version)) > 32 {
-		return fmt.Errorf("field %s length: must be <= %d", "version", 32)
-	}
-	*j = SharedPrimitivesV1SchemaReference(plain)
+	*j = SharedPrimitivesSchemaReference(plain)
 	return nil
 }
 
-type SharedPrimitivesV1TargetReference struct {
+type SharedPrimitivesTargetReference struct {
+	// ProjectId corresponds to the JSON schema field "projectId".
+	ProjectId SharedPrimitivesOpaqueId `json:"projectId" yaml:"projectId" mapstructure:"projectId"`
+
 	// TargetId corresponds to the JSON schema field "targetId".
-	TargetId SharedPrimitivesV1OpaqueId `json:"targetId" yaml:"targetId" mapstructure:"targetId"`
+	TargetId SharedPrimitivesOpaqueId `json:"targetId" yaml:"targetId" mapstructure:"targetId"`
 
 	// TargetType corresponds to the JSON schema field "targetType".
 	TargetType string `json:"targetType" yaml:"targetType" mapstructure:"targetType"`
 
 	// WorkspaceId corresponds to the JSON schema field "workspaceId".
-	WorkspaceId SharedPrimitivesV1OpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
+	WorkspaceId SharedPrimitivesOpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1TargetReference) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesTargetReference) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4925,16 +6318,19 @@ func (j *SharedPrimitivesV1TargetReference) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
+	if _, ok := raw["projectId"]; raw != nil && !ok {
+		return fmt.Errorf("field projectId in SharedPrimitivesTargetReference: required")
+	}
 	if _, ok := raw["targetId"]; raw != nil && !ok {
-		return fmt.Errorf("field targetId in SharedPrimitivesV1TargetReference: required")
+		return fmt.Errorf("field targetId in SharedPrimitivesTargetReference: required")
 	}
 	if _, ok := raw["targetType"]; raw != nil && !ok {
-		return fmt.Errorf("field targetType in SharedPrimitivesV1TargetReference: required")
+		return fmt.Errorf("field targetType in SharedPrimitivesTargetReference: required")
 	}
 	if _, ok := raw["workspaceId"]; raw != nil && !ok {
-		return fmt.Errorf("field workspaceId in SharedPrimitivesV1TargetReference: required")
+		return fmt.Errorf("field workspaceId in SharedPrimitivesTargetReference: required")
 	}
-	type Plain SharedPrimitivesV1TargetReference
+	type Plain SharedPrimitivesTargetReference
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -4948,28 +6344,25 @@ func (j *SharedPrimitivesV1TargetReference) UnmarshalJSON(value []byte) error {
 	if utf8.RuneCountInString(string(plain.TargetType)) > 64 {
 		return fmt.Errorf("field %s length: must be <= %d", "targetType", 64)
 	}
-	*j = SharedPrimitivesV1TargetReference(plain)
+	*j = SharedPrimitivesTargetReference(plain)
 	return nil
 }
 
-type SharedPrimitivesV1Timestamp time.Time
+type SharedPrimitivesTimestamp time.Time
 
-type SharedPrimitivesV1TraceAndScope struct {
+type SharedPrimitivesTraceAndScope struct {
 	// ActorId corresponds to the JSON schema field "actorId".
-	ActorId SharedPrimitivesV1OpaqueId `json:"actorId" yaml:"actorId" mapstructure:"actorId"`
-
-	// TenantId corresponds to the JSON schema field "tenantId".
-	TenantId SharedPrimitivesV1OpaqueId `json:"tenantId" yaml:"tenantId" mapstructure:"tenantId"`
+	ActorId SharedPrimitivesOpaqueId `json:"actorId" yaml:"actorId" mapstructure:"actorId"`
 
 	// TraceContext corresponds to the JSON schema field "traceContext".
-	TraceContext SharedPrimitivesV1TraceContext `json:"traceContext" yaml:"traceContext" mapstructure:"traceContext"`
+	TraceContext SharedPrimitivesTraceContext `json:"traceContext" yaml:"traceContext" mapstructure:"traceContext"`
 
 	// WorkspaceId corresponds to the JSON schema field "workspaceId".
-	WorkspaceId SharedPrimitivesV1OpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
+	WorkspaceId SharedPrimitivesOpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1TraceAndScope) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesTraceAndScope) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -4978,27 +6371,24 @@ func (j *SharedPrimitivesV1TraceAndScope) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["actorId"]; raw != nil && !ok {
-		return fmt.Errorf("field actorId in SharedPrimitivesV1TraceAndScope: required")
-	}
-	if _, ok := raw["tenantId"]; raw != nil && !ok {
-		return fmt.Errorf("field tenantId in SharedPrimitivesV1TraceAndScope: required")
+		return fmt.Errorf("field actorId in SharedPrimitivesTraceAndScope: required")
 	}
 	if _, ok := raw["traceContext"]; raw != nil && !ok {
-		return fmt.Errorf("field traceContext in SharedPrimitivesV1TraceAndScope: required")
+		return fmt.Errorf("field traceContext in SharedPrimitivesTraceAndScope: required")
 	}
 	if _, ok := raw["workspaceId"]; raw != nil && !ok {
-		return fmt.Errorf("field workspaceId in SharedPrimitivesV1TraceAndScope: required")
+		return fmt.Errorf("field workspaceId in SharedPrimitivesTraceAndScope: required")
 	}
-	type Plain SharedPrimitivesV1TraceAndScope
+	type Plain SharedPrimitivesTraceAndScope
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	*j = SharedPrimitivesV1TraceAndScope(plain)
+	*j = SharedPrimitivesTraceAndScope(plain)
 	return nil
 }
 
-type SharedPrimitivesV1TraceContext struct {
+type SharedPrimitivesTraceContext struct {
 	// Traceparent corresponds to the JSON schema field "traceparent".
 	Traceparent string `json:"traceparent" yaml:"traceparent" mapstructure:"traceparent"`
 
@@ -5007,7 +6397,7 @@ type SharedPrimitivesV1TraceContext struct {
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1TraceContext) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesTraceContext) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5016,9 +6406,9 @@ func (j *SharedPrimitivesV1TraceContext) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["traceparent"]; raw != nil && !ok {
-		return fmt.Errorf("field traceparent in SharedPrimitivesV1TraceContext: required")
+		return fmt.Errorf("field traceparent in SharedPrimitivesTraceContext: required")
 	}
-	type Plain SharedPrimitivesV1TraceContext
+	type Plain SharedPrimitivesTraceContext
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -5043,12 +6433,12 @@ func (j *SharedPrimitivesV1TraceContext) UnmarshalJSON(value []byte) error {
 	if plain.Tracestate != nil && utf8.RuneCountInString(string(*plain.Tracestate)) > 512 {
 		return fmt.Errorf("field %s length: must be <= %d", "tracestate", 512)
 	}
-	*j = SharedPrimitivesV1TraceContext(plain)
+	*j = SharedPrimitivesTraceContext(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *SharedPrimitivesV1) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitives) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5057,46 +6447,74 @@ func (j *SharedPrimitivesV1) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["$defs"]; raw != nil && !ok {
-		return fmt.Errorf("field $defs in SharedPrimitivesV1: required")
+		return fmt.Errorf("field $defs in SharedPrimitives: required")
 	}
-	type Plain SharedPrimitivesV1
+	type Plain SharedPrimitives
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	*j = SharedPrimitivesV1(plain)
+	*j = SharedPrimitives(plain)
 	return nil
 }
 
-// Bounded TargetSnapshotV1 wire contract governed by PRD 0012.
-type TargetSnapshotV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
+// Intent-only approval decision command governed by ADR-021. The decision binds
+// the current ApprovalRequest decision revision and the exact action digest being
+// approved.
+type SubmitApprovalDecisionRequest struct {
+	// ActionDigest corresponds to the JSON schema field "actionDigest".
+	ActionDigest SharedPrimitivesDigest `json:"actionDigest" yaml:"actionDigest" mapstructure:"actionDigest"`
 
-	// BaseRevision corresponds to the JSON schema field "baseRevision".
-	BaseRevision SharedPrimitivesV1OpaqueId `json:"baseRevision" yaml:"baseRevision" mapstructure:"baseRevision"`
+	// Comment corresponds to the JSON schema field "comment".
+	Comment *string `json:"comment,omitempty,omitzero" yaml:"comment,omitempty" mapstructure:"comment,omitempty"`
 
-	// CapturedAt corresponds to the JSON schema field "capturedAt".
-	CapturedAt SharedPrimitivesV1Timestamp `json:"capturedAt" yaml:"capturedAt" mapstructure:"capturedAt"`
+	// Decision corresponds to the JSON schema field "decision".
+	Decision SubmitApprovalDecisionRequestDecision `json:"decision" yaml:"decision" mapstructure:"decision"`
 
-	// CatalogDigest corresponds to the JSON schema field "catalogDigest".
-	CatalogDigest SharedPrimitivesV1Digest `json:"catalogDigest" yaml:"catalogDigest" mapstructure:"catalogDigest"`
-
-	// ContractBomDigest corresponds to the JSON schema field "contractBomDigest".
-	ContractBomDigest SharedPrimitivesV1Digest `json:"contractBomDigest" yaml:"contractBomDigest" mapstructure:"contractBomDigest"`
+	// DecisionVersion corresponds to the JSON schema field "decisionVersion".
+	DecisionVersion int `json:"decisionVersion" yaml:"decisionVersion" mapstructure:"decisionVersion"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+}
 
-	// Snapshot corresponds to the JSON schema field "snapshot".
-	Snapshot SharedPrimitivesV1ArtifactReference `json:"snapshot" yaml:"snapshot" mapstructure:"snapshot"`
+type SubmitApprovalDecisionRequestDecision string
 
-	// Target corresponds to the JSON schema field "target".
-	Target SharedPrimitivesV1TargetReference `json:"target" yaml:"target" mapstructure:"target"`
+const SubmitApprovalDecisionRequestDecisionApprove SubmitApprovalDecisionRequestDecision = "approve"
+const SubmitApprovalDecisionRequestDecisionReject SubmitApprovalDecisionRequestDecision = "reject"
+const SubmitApprovalDecisionRequestDecisionRequestChanges SubmitApprovalDecisionRequestDecision = "request-changes"
+
+var enumValues_SubmitApprovalDecisionRequestDecision = []interface{}{
+	"approve",
+	"reject",
+	"request-changes",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *TargetSnapshotV1) UnmarshalJSON(value []byte) error {
+func (j *SubmitApprovalDecisionRequestDecision) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_SubmitApprovalDecisionRequestDecision {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_SubmitApprovalDecisionRequestDecision, v)
+	}
+	*j = SubmitApprovalDecisionRequestDecision(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SubmitApprovalDecisionRequest) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5104,89 +6522,193 @@ func (j *TargetSnapshotV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in TargetSnapshotV1: required")
+	if _, ok := raw["actionDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field actionDigest in SubmitApprovalDecisionRequest: required")
 	}
-	if _, ok := raw["baseRevision"]; raw != nil && !ok {
-		return fmt.Errorf("field baseRevision in TargetSnapshotV1: required")
+	if _, ok := raw["decision"]; raw != nil && !ok {
+		return fmt.Errorf("field decision in SubmitApprovalDecisionRequest: required")
 	}
-	if _, ok := raw["capturedAt"]; raw != nil && !ok {
-		return fmt.Errorf("field capturedAt in TargetSnapshotV1: required")
-	}
-	if _, ok := raw["catalogDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field catalogDigest in TargetSnapshotV1: required")
-	}
-	if _, ok := raw["contractBomDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field contractBomDigest in TargetSnapshotV1: required")
+	if _, ok := raw["decisionVersion"]; raw != nil && !ok {
+		return fmt.Errorf("field decisionVersion in SubmitApprovalDecisionRequest: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in TargetSnapshotV1: required")
+		return fmt.Errorf("field kind in SubmitApprovalDecisionRequest: required")
 	}
-	if _, ok := raw["snapshot"]; raw != nil && !ok {
-		return fmt.Errorf("field snapshot in TargetSnapshotV1: required")
-	}
-	if _, ok := raw["target"]; raw != nil && !ok {
-		return fmt.Errorf("field target in TargetSnapshotV1: required")
-	}
-	type Plain TargetSnapshotV1
+	type Plain SubmitApprovalDecisionRequest
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	*j = TargetSnapshotV1(plain)
+	if plain.Comment != nil && utf8.RuneCountInString(string(*plain.Comment)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "comment", 1)
+	}
+	if plain.Comment != nil && utf8.RuneCountInString(string(*plain.Comment)) > 2048 {
+		return fmt.Errorf("field %s length: must be <= %d", "comment", 2048)
+	}
+	if 9007199254740991 < plain.DecisionVersion {
+		return fmt.Errorf("field %s: must be <= %v", "decisionVersion", 9007199254740991)
+	}
+	if 1 > plain.DecisionVersion {
+		return fmt.Errorf("field %s: must be >= %v", "decisionVersion", 1)
+	}
+	*j = SubmitApprovalDecisionRequest(plain)
 	return nil
 }
 
-// Bounded ToolDefinitionV1 wire contract governed by PRD 0012.
-type ToolDefinitionV1 struct {
-	// AcceptedDataClasses corresponds to the JSON schema field "acceptedDataClasses".
-	AcceptedDataClasses []ToolDefinitionV1AcceptedDataClassesElem `json:"acceptedDataClasses" yaml:"acceptedDataClasses" mapstructure:"acceptedDataClasses"`
+// Intent-only input response command governed by ADR-021. The response binds the
+// current InputRequest revision; the payload is additionally validated against the
+// InputRequest response schema by Agent Service.
+type SubmitInputResponseRequest struct {
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
+	// RequestVersion corresponds to the JSON schema field "requestVersion".
+	RequestVersion int `json:"requestVersion" yaml:"requestVersion" mapstructure:"requestVersion"`
+
+	// ResponsePayload corresponds to the JSON schema field "responsePayload".
+	ResponsePayload SharedPrimitivesBoundedStringMap `json:"responsePayload" yaml:"responsePayload" mapstructure:"responsePayload"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *SubmitInputResponseRequest) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in SubmitInputResponseRequest: required")
+	}
+	if _, ok := raw["requestVersion"]; raw != nil && !ok {
+		return fmt.Errorf("field requestVersion in SubmitInputResponseRequest: required")
+	}
+	if _, ok := raw["responsePayload"]; raw != nil && !ok {
+		return fmt.Errorf("field responsePayload in SubmitInputResponseRequest: required")
+	}
+	type Plain SubmitInputResponseRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 9007199254740991 < plain.RequestVersion {
+		return fmt.Errorf("field %s: must be <= %v", "requestVersion", 9007199254740991)
+	}
+	if 1 > plain.RequestVersion {
+		return fmt.Errorf("field %s: must be >= %v", "requestVersion", 1)
+	}
+	*j = SubmitInputResponseRequest(plain)
+	return nil
+}
+
+// Bounded TargetSnapshot wire contract governed by PRD 0012.
+type TargetSnapshot struct {
+	// BaseRevision corresponds to the JSON schema field "baseRevision".
+	BaseRevision SharedPrimitivesOpaqueId `json:"baseRevision" yaml:"baseRevision" mapstructure:"baseRevision"`
+
+	// CapturedAt corresponds to the JSON schema field "capturedAt".
+	CapturedAt SharedPrimitivesTimestamp `json:"capturedAt" yaml:"capturedAt" mapstructure:"capturedAt"`
+
+	// CatalogDigest corresponds to the JSON schema field "catalogDigest".
+	CatalogDigest SharedPrimitivesDigest `json:"catalogDigest" yaml:"catalogDigest" mapstructure:"catalogDigest"`
+
+	// ContractBomDigest corresponds to the JSON schema field "contractBomDigest".
+	ContractBomDigest SharedPrimitivesDigest `json:"contractBomDigest" yaml:"contractBomDigest" mapstructure:"contractBomDigest"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Snapshot corresponds to the JSON schema field "snapshot".
+	Snapshot SharedPrimitivesArtifactReference `json:"snapshot" yaml:"snapshot" mapstructure:"snapshot"`
+
+	// Target corresponds to the JSON schema field "target".
+	Target SharedPrimitivesTargetReference `json:"target" yaml:"target" mapstructure:"target"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *TargetSnapshot) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["baseRevision"]; raw != nil && !ok {
+		return fmt.Errorf("field baseRevision in TargetSnapshot: required")
+	}
+	if _, ok := raw["capturedAt"]; raw != nil && !ok {
+		return fmt.Errorf("field capturedAt in TargetSnapshot: required")
+	}
+	if _, ok := raw["catalogDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field catalogDigest in TargetSnapshot: required")
+	}
+	if _, ok := raw["contractBomDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field contractBomDigest in TargetSnapshot: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in TargetSnapshot: required")
+	}
+	if _, ok := raw["snapshot"]; raw != nil && !ok {
+		return fmt.Errorf("field snapshot in TargetSnapshot: required")
+	}
+	if _, ok := raw["target"]; raw != nil && !ok {
+		return fmt.Errorf("field target in TargetSnapshot: required")
+	}
+	type Plain TargetSnapshot
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = TargetSnapshot(plain)
+	return nil
+}
+
+// Bounded ToolDefinition wire contract governed by PRD 0012.
+type ToolDefinition struct {
+	// AcceptedDataClasses corresponds to the JSON schema field "acceptedDataClasses".
+	AcceptedDataClasses []ToolDefinitionAcceptedDataClassesElem `json:"acceptedDataClasses" yaml:"acceptedDataClasses" mapstructure:"acceptedDataClasses"`
 
 	// ApprovalPolicy corresponds to the JSON schema field "approvalPolicy".
-	ApprovalPolicy SharedPrimitivesV1PolicyReference `json:"approvalPolicy" yaml:"approvalPolicy" mapstructure:"approvalPolicy"`
+	ApprovalPolicy SharedPrimitivesPolicyReference `json:"approvalPolicy" yaml:"approvalPolicy" mapstructure:"approvalPolicy"`
 
 	// Capability corresponds to the JSON schema field "capability".
-	Capability ToolDefinitionV1Capability `json:"capability" yaml:"capability" mapstructure:"capability"`
-
-	// CapabilityVersion corresponds to the JSON schema field "capabilityVersion".
-	CapabilityVersion ToolDefinitionV1CapabilityVersion `json:"capabilityVersion" yaml:"capabilityVersion" mapstructure:"capabilityVersion"`
+	Capability ToolDefinitionCapability `json:"capability" yaml:"capability" mapstructure:"capability"`
 
 	// InputSchema corresponds to the JSON schema field "inputSchema".
-	InputSchema SharedPrimitivesV1SchemaReference `json:"inputSchema" yaml:"inputSchema" mapstructure:"inputSchema"`
+	InputSchema SharedPrimitivesSchemaReference `json:"inputSchema" yaml:"inputSchema" mapstructure:"inputSchema"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// OutputSchema corresponds to the JSON schema field "outputSchema".
-	OutputSchema SharedPrimitivesV1SchemaReference `json:"outputSchema" yaml:"outputSchema" mapstructure:"outputSchema"`
+	OutputSchema SharedPrimitivesSchemaReference `json:"outputSchema" yaml:"outputSchema" mapstructure:"outputSchema"`
 
 	// RetryPolicy corresponds to the JSON schema field "retryPolicy".
-	RetryPolicy ToolDefinitionV1RetryPolicy `json:"retryPolicy" yaml:"retryPolicy" mapstructure:"retryPolicy"`
+	RetryPolicy ToolDefinitionRetryPolicy `json:"retryPolicy" yaml:"retryPolicy" mapstructure:"retryPolicy"`
 
 	// RiskClass corresponds to the JSON schema field "riskClass".
-	RiskClass ToolDefinitionV1RiskClass `json:"riskClass" yaml:"riskClass" mapstructure:"riskClass"`
+	RiskClass ToolDefinitionRiskClass `json:"riskClass" yaml:"riskClass" mapstructure:"riskClass"`
 
 	// SideEffectClass corresponds to the JSON schema field "sideEffectClass".
-	SideEffectClass ToolDefinitionV1SideEffectClass `json:"sideEffectClass" yaml:"sideEffectClass" mapstructure:"sideEffectClass"`
+	SideEffectClass ToolDefinitionSideEffectClass `json:"sideEffectClass" yaml:"sideEffectClass" mapstructure:"sideEffectClass"`
 
 	// TimeoutPolicy corresponds to the JSON schema field "timeoutPolicy".
-	TimeoutPolicy ToolDefinitionV1TimeoutPolicy `json:"timeoutPolicy" yaml:"timeoutPolicy" mapstructure:"timeoutPolicy"`
+	TimeoutPolicy ToolDefinitionTimeoutPolicy `json:"timeoutPolicy" yaml:"timeoutPolicy" mapstructure:"timeoutPolicy"`
 
 	// ToolId corresponds to the JSON schema field "toolId".
-	ToolId SharedPrimitivesV1OpaqueId `json:"toolId" yaml:"toolId" mapstructure:"toolId"`
+	ToolId SharedPrimitivesOpaqueId `json:"toolId" yaml:"toolId" mapstructure:"toolId"`
 }
 
-type ToolDefinitionV1AcceptedDataClassesElem string
+type ToolDefinitionAcceptedDataClassesElem string
 
-const ToolDefinitionV1AcceptedDataClassesElemConfidential ToolDefinitionV1AcceptedDataClassesElem = "confidential"
-const ToolDefinitionV1AcceptedDataClassesElemInternal ToolDefinitionV1AcceptedDataClassesElem = "internal"
-const ToolDefinitionV1AcceptedDataClassesElemPublic ToolDefinitionV1AcceptedDataClassesElem = "public"
-const ToolDefinitionV1AcceptedDataClassesElemRestricted ToolDefinitionV1AcceptedDataClassesElem = "restricted"
+const ToolDefinitionAcceptedDataClassesElemConfidential ToolDefinitionAcceptedDataClassesElem = "confidential"
+const ToolDefinitionAcceptedDataClassesElemInternal ToolDefinitionAcceptedDataClassesElem = "internal"
+const ToolDefinitionAcceptedDataClassesElemPublic ToolDefinitionAcceptedDataClassesElem = "public"
+const ToolDefinitionAcceptedDataClassesElemRestricted ToolDefinitionAcceptedDataClassesElem = "restricted"
 
-var enumValues_ToolDefinitionV1AcceptedDataClassesElem = []interface{}{
+var enumValues_ToolDefinitionAcceptedDataClassesElem = []interface{}{
 	"public",
 	"internal",
 	"confidential",
@@ -5194,7 +6716,7 @@ var enumValues_ToolDefinitionV1AcceptedDataClassesElem = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ToolDefinitionV1AcceptedDataClassesElem) UnmarshalJSON(value []byte) error {
+func (j *ToolDefinitionAcceptedDataClassesElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5203,64 +6725,27 @@ func (j *ToolDefinitionV1AcceptedDataClassesElem) UnmarshalJSON(value []byte) er
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ToolDefinitionV1AcceptedDataClassesElem {
+	for _, expected := range enumValues_ToolDefinitionAcceptedDataClassesElem {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ToolDefinitionV1AcceptedDataClassesElem, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ToolDefinitionAcceptedDataClassesElem, v)
 	}
-	*j = ToolDefinitionV1AcceptedDataClassesElem(v)
+	*j = ToolDefinitionAcceptedDataClassesElem(v)
 	return nil
 }
 
-type ToolDefinitionV1Capability string
+type ToolDefinitionCapability string
 
-const ToolDefinitionV1CapabilityArtifactScan ToolDefinitionV1Capability = "artifact.scan"
-const ToolDefinitionV1CapabilityContractValidate ToolDefinitionV1Capability = "contract.validate"
-const ToolDefinitionV1CapabilityFakeExecute ToolDefinitionV1Capability = "fake.execute"
-const ToolDefinitionV1CapabilityProviderInvoke ToolDefinitionV1Capability = "provider.invoke"
+const ToolDefinitionCapabilityArtifactScan ToolDefinitionCapability = "artifact.scan"
+const ToolDefinitionCapabilityContractValidate ToolDefinitionCapability = "contract.validate"
+const ToolDefinitionCapabilityFakeExecute ToolDefinitionCapability = "fake.execute"
+const ToolDefinitionCapabilityProviderInvoke ToolDefinitionCapability = "provider.invoke"
 
-type ToolDefinitionV1CapabilityVersion string
-
-const ToolDefinitionV1CapabilityVersionArtifactScanV1 ToolDefinitionV1CapabilityVersion = "artifact.scan/v1"
-const ToolDefinitionV1CapabilityVersionContractValidateV1 ToolDefinitionV1CapabilityVersion = "contract.validate/v1"
-const ToolDefinitionV1CapabilityVersionFakeExecuteV1 ToolDefinitionV1CapabilityVersion = "fake.execute/v1"
-const ToolDefinitionV1CapabilityVersionProviderInvokeV1 ToolDefinitionV1CapabilityVersion = "provider.invoke/v1"
-
-var enumValues_ToolDefinitionV1CapabilityVersion = []interface{}{
-	"provider.invoke/v1",
-	"contract.validate/v1",
-	"artifact.scan/v1",
-	"fake.execute/v1",
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (j *ToolDefinitionV1CapabilityVersion) UnmarshalJSON(value []byte) error {
-	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
-		return err
-	}
-	var v string
-	if err := json.Unmarshal(value, &v); err != nil {
-		return err
-	}
-	var ok bool
-	for _, expected := range enumValues_ToolDefinitionV1CapabilityVersion {
-		if reflect.DeepEqual(v, expected) {
-			ok = true
-			break
-		}
-	}
-	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ToolDefinitionV1CapabilityVersion, v)
-	}
-	*j = ToolDefinitionV1CapabilityVersion(v)
-	return nil
-}
-
-var enumValues_ToolDefinitionV1Capability = []interface{}{
+var enumValues_ToolDefinitionCapability = []interface{}{
 	"provider.invoke",
 	"contract.validate",
 	"artifact.scan",
@@ -5268,7 +6753,7 @@ var enumValues_ToolDefinitionV1Capability = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ToolDefinitionV1Capability) UnmarshalJSON(value []byte) error {
+func (j *ToolDefinitionCapability) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5277,20 +6762,20 @@ func (j *ToolDefinitionV1Capability) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ToolDefinitionV1Capability {
+	for _, expected := range enumValues_ToolDefinitionCapability {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ToolDefinitionV1Capability, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ToolDefinitionCapability, v)
 	}
-	*j = ToolDefinitionV1Capability(v)
+	*j = ToolDefinitionCapability(v)
 	return nil
 }
 
-type ToolDefinitionV1RetryPolicy struct {
+type ToolDefinitionRetryPolicy struct {
 	// BackoffMilliseconds corresponds to the JSON schema field "backoffMilliseconds".
 	BackoffMilliseconds int `json:"backoffMilliseconds" yaml:"backoffMilliseconds" mapstructure:"backoffMilliseconds"`
 
@@ -5298,23 +6783,23 @@ type ToolDefinitionV1RetryPolicy struct {
 	MaximumAttempts int `json:"maximumAttempts" yaml:"maximumAttempts" mapstructure:"maximumAttempts"`
 
 	// Retryability corresponds to the JSON schema field "retryability".
-	Retryability []ToolDefinitionV1RetryPolicyRetryabilityElem `json:"retryability" yaml:"retryability" mapstructure:"retryability"`
+	Retryability []ToolDefinitionRetryPolicyRetryabilityElem `json:"retryability" yaml:"retryability" mapstructure:"retryability"`
 }
 
-type ToolDefinitionV1RetryPolicyRetryabilityElem string
+type ToolDefinitionRetryPolicyRetryabilityElem string
 
-const ToolDefinitionV1RetryPolicyRetryabilityElemOperatorAction ToolDefinitionV1RetryPolicyRetryabilityElem = "operator-action"
-const ToolDefinitionV1RetryPolicyRetryabilityElemSafeAfterBackoff ToolDefinitionV1RetryPolicyRetryabilityElem = "safe-after-backoff"
-const ToolDefinitionV1RetryPolicyRetryabilityElemSafeImmediate ToolDefinitionV1RetryPolicyRetryabilityElem = "safe-immediate"
+const ToolDefinitionRetryPolicyRetryabilityElemOperatorAction ToolDefinitionRetryPolicyRetryabilityElem = "operator-action"
+const ToolDefinitionRetryPolicyRetryabilityElemSafeAfterBackoff ToolDefinitionRetryPolicyRetryabilityElem = "safe-after-backoff"
+const ToolDefinitionRetryPolicyRetryabilityElemSafeImmediate ToolDefinitionRetryPolicyRetryabilityElem = "safe-immediate"
 
-var enumValues_ToolDefinitionV1RetryPolicyRetryabilityElem = []interface{}{
+var enumValues_ToolDefinitionRetryPolicyRetryabilityElem = []interface{}{
 	"safe-immediate",
 	"safe-after-backoff",
 	"operator-action",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ToolDefinitionV1RetryPolicyRetryabilityElem) UnmarshalJSON(value []byte) error {
+func (j *ToolDefinitionRetryPolicyRetryabilityElem) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5323,21 +6808,21 @@ func (j *ToolDefinitionV1RetryPolicyRetryabilityElem) UnmarshalJSON(value []byte
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ToolDefinitionV1RetryPolicyRetryabilityElem {
+	for _, expected := range enumValues_ToolDefinitionRetryPolicyRetryabilityElem {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ToolDefinitionV1RetryPolicyRetryabilityElem, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ToolDefinitionRetryPolicyRetryabilityElem, v)
 	}
-	*j = ToolDefinitionV1RetryPolicyRetryabilityElem(v)
+	*j = ToolDefinitionRetryPolicyRetryabilityElem(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ToolDefinitionV1RetryPolicy) UnmarshalJSON(value []byte) error {
+func (j *ToolDefinitionRetryPolicy) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5346,15 +6831,15 @@ func (j *ToolDefinitionV1RetryPolicy) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["backoffMilliseconds"]; raw != nil && !ok {
-		return fmt.Errorf("field backoffMilliseconds in ToolDefinitionV1RetryPolicy: required")
+		return fmt.Errorf("field backoffMilliseconds in ToolDefinitionRetryPolicy: required")
 	}
 	if _, ok := raw["maximumAttempts"]; raw != nil && !ok {
-		return fmt.Errorf("field maximumAttempts in ToolDefinitionV1RetryPolicy: required")
+		return fmt.Errorf("field maximumAttempts in ToolDefinitionRetryPolicy: required")
 	}
 	if _, ok := raw["retryability"]; raw != nil && !ok {
-		return fmt.Errorf("field retryability in ToolDefinitionV1RetryPolicy: required")
+		return fmt.Errorf("field retryability in ToolDefinitionRetryPolicy: required")
 	}
-	type Plain ToolDefinitionV1RetryPolicy
+	type Plain ToolDefinitionRetryPolicy
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -5374,18 +6859,18 @@ func (j *ToolDefinitionV1RetryPolicy) UnmarshalJSON(value []byte) error {
 	if len(plain.Retryability) > 3 {
 		return fmt.Errorf("field %s length: must be <= %d", "retryability", 3)
 	}
-	*j = ToolDefinitionV1RetryPolicy(plain)
+	*j = ToolDefinitionRetryPolicy(plain)
 	return nil
 }
 
-type ToolDefinitionV1RiskClass string
+type ToolDefinitionRiskClass string
 
-const ToolDefinitionV1RiskClassCritical ToolDefinitionV1RiskClass = "critical"
-const ToolDefinitionV1RiskClassHigh ToolDefinitionV1RiskClass = "high"
-const ToolDefinitionV1RiskClassLow ToolDefinitionV1RiskClass = "low"
-const ToolDefinitionV1RiskClassMedium ToolDefinitionV1RiskClass = "medium"
+const ToolDefinitionRiskClassCritical ToolDefinitionRiskClass = "critical"
+const ToolDefinitionRiskClassHigh ToolDefinitionRiskClass = "high"
+const ToolDefinitionRiskClassLow ToolDefinitionRiskClass = "low"
+const ToolDefinitionRiskClassMedium ToolDefinitionRiskClass = "medium"
 
-var enumValues_ToolDefinitionV1RiskClass = []interface{}{
+var enumValues_ToolDefinitionRiskClass = []interface{}{
 	"low",
 	"medium",
 	"high",
@@ -5393,7 +6878,7 @@ var enumValues_ToolDefinitionV1RiskClass = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ToolDefinitionV1RiskClass) UnmarshalJSON(value []byte) error {
+func (j *ToolDefinitionRiskClass) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5402,27 +6887,27 @@ func (j *ToolDefinitionV1RiskClass) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ToolDefinitionV1RiskClass {
+	for _, expected := range enumValues_ToolDefinitionRiskClass {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ToolDefinitionV1RiskClass, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ToolDefinitionRiskClass, v)
 	}
-	*j = ToolDefinitionV1RiskClass(v)
+	*j = ToolDefinitionRiskClass(v)
 	return nil
 }
 
-type ToolDefinitionV1SideEffectClass string
+type ToolDefinitionSideEffectClass string
 
-const ToolDefinitionV1SideEffectClassArtifactWrite ToolDefinitionV1SideEffectClass = "artifact-write"
-const ToolDefinitionV1SideEffectClassDomainEffect ToolDefinitionV1SideEffectClass = "domain-effect"
-const ToolDefinitionV1SideEffectClassNone ToolDefinitionV1SideEffectClass = "none"
-const ToolDefinitionV1SideEffectClassRead ToolDefinitionV1SideEffectClass = "read"
+const ToolDefinitionSideEffectClassArtifactWrite ToolDefinitionSideEffectClass = "artifact-write"
+const ToolDefinitionSideEffectClassDomainEffect ToolDefinitionSideEffectClass = "domain-effect"
+const ToolDefinitionSideEffectClassNone ToolDefinitionSideEffectClass = "none"
+const ToolDefinitionSideEffectClassRead ToolDefinitionSideEffectClass = "read"
 
-var enumValues_ToolDefinitionV1SideEffectClass = []interface{}{
+var enumValues_ToolDefinitionSideEffectClass = []interface{}{
 	"none",
 	"read",
 	"artifact-write",
@@ -5430,7 +6915,7 @@ var enumValues_ToolDefinitionV1SideEffectClass = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ToolDefinitionV1SideEffectClass) UnmarshalJSON(value []byte) error {
+func (j *ToolDefinitionSideEffectClass) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5439,26 +6924,26 @@ func (j *ToolDefinitionV1SideEffectClass) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_ToolDefinitionV1SideEffectClass {
+	for _, expected := range enumValues_ToolDefinitionSideEffectClass {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ToolDefinitionV1SideEffectClass, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ToolDefinitionSideEffectClass, v)
 	}
-	*j = ToolDefinitionV1SideEffectClass(v)
+	*j = ToolDefinitionSideEffectClass(v)
 	return nil
 }
 
-type ToolDefinitionV1TimeoutPolicy struct {
+type ToolDefinitionTimeoutPolicy struct {
 	// TimeoutMilliseconds corresponds to the JSON schema field "timeoutMilliseconds".
 	TimeoutMilliseconds int `json:"timeoutMilliseconds" yaml:"timeoutMilliseconds" mapstructure:"timeoutMilliseconds"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ToolDefinitionV1TimeoutPolicy) UnmarshalJSON(value []byte) error {
+func (j *ToolDefinitionTimeoutPolicy) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5467,9 +6952,9 @@ func (j *ToolDefinitionV1TimeoutPolicy) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["timeoutMilliseconds"]; raw != nil && !ok {
-		return fmt.Errorf("field timeoutMilliseconds in ToolDefinitionV1TimeoutPolicy: required")
+		return fmt.Errorf("field timeoutMilliseconds in ToolDefinitionTimeoutPolicy: required")
 	}
-	type Plain ToolDefinitionV1TimeoutPolicy
+	type Plain ToolDefinitionTimeoutPolicy
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -5480,12 +6965,12 @@ func (j *ToolDefinitionV1TimeoutPolicy) UnmarshalJSON(value []byte) error {
 	if 1 > plain.TimeoutMilliseconds {
 		return fmt.Errorf("field %s: must be >= %v", "timeoutMilliseconds", 1)
 	}
-	*j = ToolDefinitionV1TimeoutPolicy(plain)
+	*j = ToolDefinitionTimeoutPolicy(plain)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *ToolDefinitionV1) UnmarshalJSON(value []byte) error {
+func (j *ToolDefinition) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5494,45 +6979,39 @@ func (j *ToolDefinitionV1) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["acceptedDataClasses"]; raw != nil && !ok {
-		return fmt.Errorf("field acceptedDataClasses in ToolDefinitionV1: required")
-	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in ToolDefinitionV1: required")
+		return fmt.Errorf("field acceptedDataClasses in ToolDefinition: required")
 	}
 	if _, ok := raw["approvalPolicy"]; raw != nil && !ok {
-		return fmt.Errorf("field approvalPolicy in ToolDefinitionV1: required")
+		return fmt.Errorf("field approvalPolicy in ToolDefinition: required")
 	}
 	if _, ok := raw["capability"]; raw != nil && !ok {
-		return fmt.Errorf("field capability in ToolDefinitionV1: required")
-	}
-	if _, ok := raw["capabilityVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field capabilityVersion in ToolDefinitionV1: required")
+		return fmt.Errorf("field capability in ToolDefinition: required")
 	}
 	if _, ok := raw["inputSchema"]; raw != nil && !ok {
-		return fmt.Errorf("field inputSchema in ToolDefinitionV1: required")
+		return fmt.Errorf("field inputSchema in ToolDefinition: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in ToolDefinitionV1: required")
+		return fmt.Errorf("field kind in ToolDefinition: required")
 	}
 	if _, ok := raw["outputSchema"]; raw != nil && !ok {
-		return fmt.Errorf("field outputSchema in ToolDefinitionV1: required")
+		return fmt.Errorf("field outputSchema in ToolDefinition: required")
 	}
 	if _, ok := raw["retryPolicy"]; raw != nil && !ok {
-		return fmt.Errorf("field retryPolicy in ToolDefinitionV1: required")
+		return fmt.Errorf("field retryPolicy in ToolDefinition: required")
 	}
 	if _, ok := raw["riskClass"]; raw != nil && !ok {
-		return fmt.Errorf("field riskClass in ToolDefinitionV1: required")
+		return fmt.Errorf("field riskClass in ToolDefinition: required")
 	}
 	if _, ok := raw["sideEffectClass"]; raw != nil && !ok {
-		return fmt.Errorf("field sideEffectClass in ToolDefinitionV1: required")
+		return fmt.Errorf("field sideEffectClass in ToolDefinition: required")
 	}
 	if _, ok := raw["timeoutPolicy"]; raw != nil && !ok {
-		return fmt.Errorf("field timeoutPolicy in ToolDefinitionV1: required")
+		return fmt.Errorf("field timeoutPolicy in ToolDefinition: required")
 	}
 	if _, ok := raw["toolId"]; raw != nil && !ok {
-		return fmt.Errorf("field toolId in ToolDefinitionV1: required")
+		return fmt.Errorf("field toolId in ToolDefinition: required")
 	}
-	type Plain ToolDefinitionV1
+	type Plain ToolDefinition
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -5543,17 +7022,14 @@ func (j *ToolDefinitionV1) UnmarshalJSON(value []byte) error {
 	if len(plain.AcceptedDataClasses) > 4 {
 		return fmt.Errorf("field %s length: must be <= %d", "acceptedDataClasses", 4)
 	}
-	*j = ToolDefinitionV1(plain)
+	*j = ToolDefinition(plain)
 	return nil
 }
 
-// Bounded UsageObservationV1 wire contract governed by PRD 0012.
-type UsageObservationV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
-
+// Bounded UsageObservation wire contract governed by PRD 0012.
+type UsageObservation struct {
 	// Cost corresponds to the JSON schema field "cost".
-	Cost SharedPrimitivesV1Cost `json:"cost" yaml:"cost" mapstructure:"cost"`
+	Cost SharedPrimitivesCost `json:"cost" yaml:"cost" mapstructure:"cost"`
 
 	// ExecutionGeneration corresponds to the JSON schema field "executionGeneration".
 	ExecutionGeneration int `json:"executionGeneration" yaml:"executionGeneration" mapstructure:"executionGeneration"`
@@ -5565,60 +7041,60 @@ type UsageObservationV1 struct {
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
 	// Meter corresponds to the JSON schema field "meter".
-	Meter UsageObservationV1Meter `json:"meter" yaml:"meter" mapstructure:"meter"`
+	Meter UsageObservationMeter `json:"meter" yaml:"meter" mapstructure:"meter"`
 
 	// MeterSequence corresponds to the JSON schema field "meterSequence".
 	MeterSequence int `json:"meterSequence" yaml:"meterSequence" mapstructure:"meterSequence"`
 
 	// ObservationId corresponds to the JSON schema field "observationId".
-	ObservationId SharedPrimitivesV1OpaqueId `json:"observationId" yaml:"observationId" mapstructure:"observationId"`
+	ObservationId SharedPrimitivesOpaqueId `json:"observationId" yaml:"observationId" mapstructure:"observationId"`
 
 	// ObservedAt corresponds to the JSON schema field "observedAt".
-	ObservedAt SharedPrimitivesV1Timestamp `json:"observedAt" yaml:"observedAt" mapstructure:"observedAt"`
+	ObservedAt SharedPrimitivesTimestamp `json:"observedAt" yaml:"observedAt" mapstructure:"observedAt"`
 
 	// PhysicalAttemptId corresponds to the JSON schema field "physicalAttemptId".
-	PhysicalAttemptId SharedPrimitivesV1OpaqueId `json:"physicalAttemptId" yaml:"physicalAttemptId" mapstructure:"physicalAttemptId"`
+	PhysicalAttemptId SharedPrimitivesOpaqueId `json:"physicalAttemptId" yaml:"physicalAttemptId" mapstructure:"physicalAttemptId"`
 
 	// ProviderEventId corresponds to the JSON schema field "providerEventId".
-	ProviderEventId *SharedPrimitivesV1OpaqueId `json:"providerEventId,omitempty,omitzero" yaml:"providerEventId,omitempty" mapstructure:"providerEventId,omitempty"`
+	ProviderEventId *SharedPrimitivesOpaqueId `json:"providerEventId,omitempty,omitzero" yaml:"providerEventId,omitempty" mapstructure:"providerEventId,omitempty"`
 
 	// Quantity corresponds to the JSON schema field "quantity".
-	Quantity SharedPrimitivesV1DecimalString `json:"quantity" yaml:"quantity" mapstructure:"quantity"`
+	Quantity SharedPrimitivesDecimalString `json:"quantity" yaml:"quantity" mapstructure:"quantity"`
 
 	// RecoveryEpoch corresponds to the JSON schema field "recoveryEpoch".
 	RecoveryEpoch int `json:"recoveryEpoch" yaml:"recoveryEpoch" mapstructure:"recoveryEpoch"`
 
 	// ReservationId corresponds to the JSON schema field "reservationId".
-	ReservationId SharedPrimitivesV1OpaqueId `json:"reservationId" yaml:"reservationId" mapstructure:"reservationId"`
+	ReservationId SharedPrimitivesOpaqueId `json:"reservationId" yaml:"reservationId" mapstructure:"reservationId"`
 
 	// RootRunId corresponds to the JSON schema field "rootRunId".
-	RootRunId SharedPrimitivesV1OpaqueId `json:"rootRunId" yaml:"rootRunId" mapstructure:"rootRunId"`
+	RootRunId SharedPrimitivesOpaqueId `json:"rootRunId" yaml:"rootRunId" mapstructure:"rootRunId"`
 
 	// RunId corresponds to the JSON schema field "runId".
-	RunId SharedPrimitivesV1OpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
+	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
 
 	// Source corresponds to the JSON schema field "source".
-	Source UsageObservationV1Source `json:"source" yaml:"source" mapstructure:"source"`
+	Source UsageObservationSource `json:"source" yaml:"source" mapstructure:"source"`
 
 	// TaskId corresponds to the JSON schema field "taskId".
-	TaskId SharedPrimitivesV1OpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
+	TaskId SharedPrimitivesOpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
 
 	// TraceContext corresponds to the JSON schema field "traceContext".
-	TraceContext SharedPrimitivesV1TraceContext `json:"traceContext" yaml:"traceContext" mapstructure:"traceContext"`
+	TraceContext SharedPrimitivesTraceContext `json:"traceContext" yaml:"traceContext" mapstructure:"traceContext"`
 
 	// Unit corresponds to the JSON schema field "unit".
-	Unit UsageObservationV1Unit `json:"unit" yaml:"unit" mapstructure:"unit"`
+	Unit UsageObservationUnit `json:"unit" yaml:"unit" mapstructure:"unit"`
 }
 
-type UsageObservationV1Meter string
+type UsageObservationMeter string
 
-const UsageObservationV1MeterGpuDuration UsageObservationV1Meter = "gpu-duration"
-const UsageObservationV1MeterInputTokens UsageObservationV1Meter = "input-tokens"
-const UsageObservationV1MeterOutputTokens UsageObservationV1Meter = "output-tokens"
-const UsageObservationV1MeterProviderCost UsageObservationV1Meter = "provider-cost"
-const UsageObservationV1MeterWorkerDuration UsageObservationV1Meter = "worker-duration"
+const UsageObservationMeterGpuDuration UsageObservationMeter = "gpu-duration"
+const UsageObservationMeterInputTokens UsageObservationMeter = "input-tokens"
+const UsageObservationMeterOutputTokens UsageObservationMeter = "output-tokens"
+const UsageObservationMeterProviderCost UsageObservationMeter = "provider-cost"
+const UsageObservationMeterWorkerDuration UsageObservationMeter = "worker-duration"
 
-var enumValues_UsageObservationV1Meter = []interface{}{
+var enumValues_UsageObservationMeter = []interface{}{
 	"input-tokens",
 	"output-tokens",
 	"worker-duration",
@@ -5627,7 +7103,7 @@ var enumValues_UsageObservationV1Meter = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *UsageObservationV1Meter) UnmarshalJSON(value []byte) error {
+func (j *UsageObservationMeter) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5636,29 +7112,29 @@ func (j *UsageObservationV1Meter) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_UsageObservationV1Meter {
+	for _, expected := range enumValues_UsageObservationMeter {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_UsageObservationV1Meter, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_UsageObservationMeter, v)
 	}
-	*j = UsageObservationV1Meter(v)
+	*j = UsageObservationMeter(v)
 	return nil
 }
 
-type UsageObservationV1Source struct {
+type UsageObservationSource struct {
 	// BuildIdentity corresponds to the JSON schema field "buildIdentity".
-	BuildIdentity SharedPrimitivesV1OpaqueId `json:"buildIdentity" yaml:"buildIdentity" mapstructure:"buildIdentity"`
+	BuildIdentity SharedPrimitivesOpaqueId `json:"buildIdentity" yaml:"buildIdentity" mapstructure:"buildIdentity"`
 
 	// Provider corresponds to the JSON schema field "provider".
-	Provider SharedPrimitivesV1OpaqueId `json:"provider" yaml:"provider" mapstructure:"provider"`
+	Provider SharedPrimitivesOpaqueId `json:"provider" yaml:"provider" mapstructure:"provider"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *UsageObservationV1Source) UnmarshalJSON(value []byte) error {
+func (j *UsageObservationSource) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5667,29 +7143,29 @@ func (j *UsageObservationV1Source) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	if _, ok := raw["buildIdentity"]; raw != nil && !ok {
-		return fmt.Errorf("field buildIdentity in UsageObservationV1Source: required")
+		return fmt.Errorf("field buildIdentity in UsageObservationSource: required")
 	}
 	if _, ok := raw["provider"]; raw != nil && !ok {
-		return fmt.Errorf("field provider in UsageObservationV1Source: required")
+		return fmt.Errorf("field provider in UsageObservationSource: required")
 	}
-	type Plain UsageObservationV1Source
+	type Plain UsageObservationSource
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
-	*j = UsageObservationV1Source(plain)
+	*j = UsageObservationSource(plain)
 	return nil
 }
 
-type UsageObservationV1Unit string
+type UsageObservationUnit string
 
-const UsageObservationV1UnitByte UsageObservationV1Unit = "byte"
-const UsageObservationV1UnitCount UsageObservationV1Unit = "count"
-const UsageObservationV1UnitMillisecond UsageObservationV1Unit = "millisecond"
-const UsageObservationV1UnitToken UsageObservationV1Unit = "token"
-const UsageObservationV1UnitUsdMicro UsageObservationV1Unit = "usd-micro"
+const UsageObservationUnitByte UsageObservationUnit = "byte"
+const UsageObservationUnitCount UsageObservationUnit = "count"
+const UsageObservationUnitMillisecond UsageObservationUnit = "millisecond"
+const UsageObservationUnitToken UsageObservationUnit = "token"
+const UsageObservationUnitUsdMicro UsageObservationUnit = "usd-micro"
 
-var enumValues_UsageObservationV1Unit = []interface{}{
+var enumValues_UsageObservationUnit = []interface{}{
 	"token",
 	"millisecond",
 	"byte",
@@ -5698,7 +7174,7 @@ var enumValues_UsageObservationV1Unit = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *UsageObservationV1Unit) UnmarshalJSON(value []byte) error {
+func (j *UsageObservationUnit) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5707,21 +7183,21 @@ func (j *UsageObservationV1Unit) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_UsageObservationV1Unit {
+	for _, expected := range enumValues_UsageObservationUnit {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_UsageObservationV1Unit, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_UsageObservationUnit, v)
 	}
-	*j = UsageObservationV1Unit(v)
+	*j = UsageObservationUnit(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *UsageObservationV1) UnmarshalJSON(value []byte) error {
+func (j *UsageObservation) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5729,64 +7205,61 @@ func (j *UsageObservationV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in UsageObservationV1: required")
-	}
 	if _, ok := raw["cost"]; raw != nil && !ok {
-		return fmt.Errorf("field cost in UsageObservationV1: required")
+		return fmt.Errorf("field cost in UsageObservation: required")
 	}
 	if _, ok := raw["executionGeneration"]; raw != nil && !ok {
-		return fmt.Errorf("field executionGeneration in UsageObservationV1: required")
+		return fmt.Errorf("field executionGeneration in UsageObservation: required")
 	}
 	if _, ok := raw["final"]; raw != nil && !ok {
-		return fmt.Errorf("field final in UsageObservationV1: required")
+		return fmt.Errorf("field final in UsageObservation: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in UsageObservationV1: required")
+		return fmt.Errorf("field kind in UsageObservation: required")
 	}
 	if _, ok := raw["meter"]; raw != nil && !ok {
-		return fmt.Errorf("field meter in UsageObservationV1: required")
+		return fmt.Errorf("field meter in UsageObservation: required")
 	}
 	if _, ok := raw["meterSequence"]; raw != nil && !ok {
-		return fmt.Errorf("field meterSequence in UsageObservationV1: required")
+		return fmt.Errorf("field meterSequence in UsageObservation: required")
 	}
 	if _, ok := raw["observationId"]; raw != nil && !ok {
-		return fmt.Errorf("field observationId in UsageObservationV1: required")
+		return fmt.Errorf("field observationId in UsageObservation: required")
 	}
 	if _, ok := raw["observedAt"]; raw != nil && !ok {
-		return fmt.Errorf("field observedAt in UsageObservationV1: required")
+		return fmt.Errorf("field observedAt in UsageObservation: required")
 	}
 	if _, ok := raw["physicalAttemptId"]; raw != nil && !ok {
-		return fmt.Errorf("field physicalAttemptId in UsageObservationV1: required")
+		return fmt.Errorf("field physicalAttemptId in UsageObservation: required")
 	}
 	if _, ok := raw["quantity"]; raw != nil && !ok {
-		return fmt.Errorf("field quantity in UsageObservationV1: required")
+		return fmt.Errorf("field quantity in UsageObservation: required")
 	}
 	if _, ok := raw["recoveryEpoch"]; raw != nil && !ok {
-		return fmt.Errorf("field recoveryEpoch in UsageObservationV1: required")
+		return fmt.Errorf("field recoveryEpoch in UsageObservation: required")
 	}
 	if _, ok := raw["reservationId"]; raw != nil && !ok {
-		return fmt.Errorf("field reservationId in UsageObservationV1: required")
+		return fmt.Errorf("field reservationId in UsageObservation: required")
 	}
 	if _, ok := raw["rootRunId"]; raw != nil && !ok {
-		return fmt.Errorf("field rootRunId in UsageObservationV1: required")
+		return fmt.Errorf("field rootRunId in UsageObservation: required")
 	}
 	if _, ok := raw["runId"]; raw != nil && !ok {
-		return fmt.Errorf("field runId in UsageObservationV1: required")
+		return fmt.Errorf("field runId in UsageObservation: required")
 	}
 	if _, ok := raw["source"]; raw != nil && !ok {
-		return fmt.Errorf("field source in UsageObservationV1: required")
+		return fmt.Errorf("field source in UsageObservation: required")
 	}
 	if _, ok := raw["taskId"]; raw != nil && !ok {
-		return fmt.Errorf("field taskId in UsageObservationV1: required")
+		return fmt.Errorf("field taskId in UsageObservation: required")
 	}
 	if _, ok := raw["traceContext"]; raw != nil && !ok {
-		return fmt.Errorf("field traceContext in UsageObservationV1: required")
+		return fmt.Errorf("field traceContext in UsageObservation: required")
 	}
 	if _, ok := raw["unit"]; raw != nil && !ok {
-		return fmt.Errorf("field unit in UsageObservationV1: required")
+		return fmt.Errorf("field unit in UsageObservation: required")
 	}
-	type Plain UsageObservationV1
+	type Plain UsageObservation
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -5809,15 +7282,12 @@ func (j *UsageObservationV1) UnmarshalJSON(value []byte) error {
 	if 0 > plain.RecoveryEpoch {
 		return fmt.Errorf("field %s: must be >= %v", "recoveryEpoch", 0)
 	}
-	*j = UsageObservationV1(plain)
+	*j = UsageObservation(plain)
 	return nil
 }
 
-// Bounded WorkerLeaseV1 wire contract governed by PRD 0012.
-type WorkerLeaseV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
-
+// Bounded WorkerLease wire contract governed by PRD 0012.
+type WorkerLease struct {
 	// AttemptNumber corresponds to the JSON schema field "attemptNumber".
 	AttemptNumber int `json:"attemptNumber" yaml:"attemptNumber" mapstructure:"attemptNumber"`
 
@@ -5825,13 +7295,13 @@ type WorkerLeaseV1 struct {
 	ExecutionGeneration int `json:"executionGeneration" yaml:"executionGeneration" mapstructure:"executionGeneration"`
 
 	// ExpiresAt corresponds to the JSON schema field "expiresAt".
-	ExpiresAt SharedPrimitivesV1Timestamp `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
+	ExpiresAt SharedPrimitivesTimestamp `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
 
 	// FenceToken corresponds to the JSON schema field "fenceToken".
 	FenceToken string `json:"fenceToken" yaml:"fenceToken" mapstructure:"fenceToken"`
 
 	// IssuedAt corresponds to the JSON schema field "issuedAt".
-	IssuedAt SharedPrimitivesV1Timestamp `json:"issuedAt" yaml:"issuedAt" mapstructure:"issuedAt"`
+	IssuedAt SharedPrimitivesTimestamp `json:"issuedAt" yaml:"issuedAt" mapstructure:"issuedAt"`
 
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
@@ -5840,20 +7310,20 @@ type WorkerLeaseV1 struct {
 	LeaseEpoch int `json:"leaseEpoch" yaml:"leaseEpoch" mapstructure:"leaseEpoch"`
 
 	// Owner corresponds to the JSON schema field "owner".
-	Owner SharedPrimitivesV1OpaqueId `json:"owner" yaml:"owner" mapstructure:"owner"`
+	Owner SharedPrimitivesOpaqueId `json:"owner" yaml:"owner" mapstructure:"owner"`
 
 	// PhysicalAttemptId corresponds to the JSON schema field "physicalAttemptId".
-	PhysicalAttemptId SharedPrimitivesV1OpaqueId `json:"physicalAttemptId" yaml:"physicalAttemptId" mapstructure:"physicalAttemptId"`
+	PhysicalAttemptId SharedPrimitivesOpaqueId `json:"physicalAttemptId" yaml:"physicalAttemptId" mapstructure:"physicalAttemptId"`
 
 	// RecoveryEpoch corresponds to the JSON schema field "recoveryEpoch".
 	RecoveryEpoch int `json:"recoveryEpoch" yaml:"recoveryEpoch" mapstructure:"recoveryEpoch"`
 
 	// TaskId corresponds to the JSON schema field "taskId".
-	TaskId SharedPrimitivesV1OpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
+	TaskId SharedPrimitivesOpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *WorkerLeaseV1) UnmarshalJSON(value []byte) error {
+func (j *WorkerLease) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -5861,43 +7331,40 @@ func (j *WorkerLeaseV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in WorkerLeaseV1: required")
-	}
 	if _, ok := raw["attemptNumber"]; raw != nil && !ok {
-		return fmt.Errorf("field attemptNumber in WorkerLeaseV1: required")
+		return fmt.Errorf("field attemptNumber in WorkerLease: required")
 	}
 	if _, ok := raw["executionGeneration"]; raw != nil && !ok {
-		return fmt.Errorf("field executionGeneration in WorkerLeaseV1: required")
+		return fmt.Errorf("field executionGeneration in WorkerLease: required")
 	}
 	if _, ok := raw["expiresAt"]; raw != nil && !ok {
-		return fmt.Errorf("field expiresAt in WorkerLeaseV1: required")
+		return fmt.Errorf("field expiresAt in WorkerLease: required")
 	}
 	if _, ok := raw["fenceToken"]; raw != nil && !ok {
-		return fmt.Errorf("field fenceToken in WorkerLeaseV1: required")
+		return fmt.Errorf("field fenceToken in WorkerLease: required")
 	}
 	if _, ok := raw["issuedAt"]; raw != nil && !ok {
-		return fmt.Errorf("field issuedAt in WorkerLeaseV1: required")
+		return fmt.Errorf("field issuedAt in WorkerLease: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in WorkerLeaseV1: required")
+		return fmt.Errorf("field kind in WorkerLease: required")
 	}
 	if _, ok := raw["leaseEpoch"]; raw != nil && !ok {
-		return fmt.Errorf("field leaseEpoch in WorkerLeaseV1: required")
+		return fmt.Errorf("field leaseEpoch in WorkerLease: required")
 	}
 	if _, ok := raw["owner"]; raw != nil && !ok {
-		return fmt.Errorf("field owner in WorkerLeaseV1: required")
+		return fmt.Errorf("field owner in WorkerLease: required")
 	}
 	if _, ok := raw["physicalAttemptId"]; raw != nil && !ok {
-		return fmt.Errorf("field physicalAttemptId in WorkerLeaseV1: required")
+		return fmt.Errorf("field physicalAttemptId in WorkerLease: required")
 	}
 	if _, ok := raw["recoveryEpoch"]; raw != nil && !ok {
-		return fmt.Errorf("field recoveryEpoch in WorkerLeaseV1: required")
+		return fmt.Errorf("field recoveryEpoch in WorkerLease: required")
 	}
 	if _, ok := raw["taskId"]; raw != nil && !ok {
-		return fmt.Errorf("field taskId in WorkerLeaseV1: required")
+		return fmt.Errorf("field taskId in WorkerLease: required")
 	}
-	type Plain WorkerLeaseV1
+	type Plain WorkerLease
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -5935,26 +7402,23 @@ func (j *WorkerLeaseV1) UnmarshalJSON(value []byte) error {
 	if 0 > plain.RecoveryEpoch {
 		return fmt.Errorf("field %s: must be >= %v", "recoveryEpoch", 0)
 	}
-	*j = WorkerLeaseV1(plain)
+	*j = WorkerLease(plain)
 	return nil
 }
 
-// Bounded WorkerResultV1 wire contract governed by PRD 0012.
-type WorkerResultV1 struct {
-	// ApiVersion corresponds to the JSON schema field "apiVersion".
-	ApiVersion interface{} `json:"apiVersion" yaml:"apiVersion" mapstructure:"apiVersion"`
-
+// Bounded WorkerResult wire contract governed by PRD 0012.
+type WorkerResult struct {
 	// Artifacts corresponds to the JSON schema field "artifacts".
-	Artifacts []SharedPrimitivesV1ArtifactReference `json:"artifacts" yaml:"artifacts" mapstructure:"artifacts"`
+	Artifacts []SharedPrimitivesArtifactReference `json:"artifacts" yaml:"artifacts" mapstructure:"artifacts"`
 
 	// BuildIdentity corresponds to the JSON schema field "buildIdentity".
-	BuildIdentity SharedPrimitivesV1OpaqueId `json:"buildIdentity" yaml:"buildIdentity" mapstructure:"buildIdentity"`
+	BuildIdentity SharedPrimitivesOpaqueId `json:"buildIdentity" yaml:"buildIdentity" mapstructure:"buildIdentity"`
 
 	// Capability corresponds to the JSON schema field "capability".
-	Capability WorkerResultV1Capability `json:"capability" yaml:"capability" mapstructure:"capability"`
+	Capability WorkerResultCapability `json:"capability" yaml:"capability" mapstructure:"capability"`
 
 	// CompletedAt corresponds to the JSON schema field "completedAt".
-	CompletedAt SharedPrimitivesV1Timestamp `json:"completedAt" yaml:"completedAt" mapstructure:"completedAt"`
+	CompletedAt SharedPrimitivesTimestamp `json:"completedAt" yaml:"completedAt" mapstructure:"completedAt"`
 
 	// ExecutionGeneration corresponds to the JSON schema field "executionGeneration".
 	ExecutionGeneration int `json:"executionGeneration" yaml:"executionGeneration" mapstructure:"executionGeneration"`
@@ -5966,35 +7430,35 @@ type WorkerResultV1 struct {
 	LeaseEpoch int `json:"leaseEpoch" yaml:"leaseEpoch" mapstructure:"leaseEpoch"`
 
 	// Metrics corresponds to the JSON schema field "metrics".
-	Metrics SharedPrimitivesV1BoundedStringMap `json:"metrics" yaml:"metrics" mapstructure:"metrics"`
+	Metrics SharedPrimitivesBoundedStringMap `json:"metrics" yaml:"metrics" mapstructure:"metrics"`
 
 	// PhysicalAttemptId corresponds to the JSON schema field "physicalAttemptId".
-	PhysicalAttemptId SharedPrimitivesV1OpaqueId `json:"physicalAttemptId" yaml:"physicalAttemptId" mapstructure:"physicalAttemptId"`
+	PhysicalAttemptId SharedPrimitivesOpaqueId `json:"physicalAttemptId" yaml:"physicalAttemptId" mapstructure:"physicalAttemptId"`
 
 	// Problem corresponds to the JSON schema field "problem".
-	Problem *ProblemDetailsV1 `json:"problem,omitempty,omitzero" yaml:"problem,omitempty" mapstructure:"problem,omitempty"`
+	Problem *ProblemDetails `json:"problem,omitempty,omitzero" yaml:"problem,omitempty" mapstructure:"problem,omitempty"`
 
 	// RecoveryEpoch corresponds to the JSON schema field "recoveryEpoch".
 	RecoveryEpoch int `json:"recoveryEpoch" yaml:"recoveryEpoch" mapstructure:"recoveryEpoch"`
 
 	// TaskId corresponds to the JSON schema field "taskId".
-	TaskId SharedPrimitivesV1OpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
+	TaskId SharedPrimitivesOpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
 
 	// UsageReferences corresponds to the JSON schema field "usageReferences".
-	UsageReferences []SharedPrimitivesV1OpaqueId `json:"usageReferences" yaml:"usageReferences" mapstructure:"usageReferences"`
+	UsageReferences []SharedPrimitivesOpaqueId `json:"usageReferences" yaml:"usageReferences" mapstructure:"usageReferences"`
 
 	// Warnings corresponds to the JSON schema field "warnings".
-	Warnings []ProblemDetailsV1 `json:"warnings" yaml:"warnings" mapstructure:"warnings"`
+	Warnings []ProblemDetails `json:"warnings" yaml:"warnings" mapstructure:"warnings"`
 }
 
-type WorkerResultV1Capability string
+type WorkerResultCapability string
 
-const WorkerResultV1CapabilityArtifactScan WorkerResultV1Capability = "artifact.scan"
-const WorkerResultV1CapabilityContractValidate WorkerResultV1Capability = "contract.validate"
-const WorkerResultV1CapabilityFakeExecute WorkerResultV1Capability = "fake.execute"
-const WorkerResultV1CapabilityProviderInvoke WorkerResultV1Capability = "provider.invoke"
+const WorkerResultCapabilityArtifactScan WorkerResultCapability = "artifact.scan"
+const WorkerResultCapabilityContractValidate WorkerResultCapability = "contract.validate"
+const WorkerResultCapabilityFakeExecute WorkerResultCapability = "fake.execute"
+const WorkerResultCapabilityProviderInvoke WorkerResultCapability = "provider.invoke"
 
-var enumValues_WorkerResultV1Capability = []interface{}{
+var enumValues_WorkerResultCapability = []interface{}{
 	"provider.invoke",
 	"contract.validate",
 	"artifact.scan",
@@ -6002,7 +7466,7 @@ var enumValues_WorkerResultV1Capability = []interface{}{
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *WorkerResultV1Capability) UnmarshalJSON(value []byte) error {
+func (j *WorkerResultCapability) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -6011,21 +7475,21 @@ func (j *WorkerResultV1Capability) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	var ok bool
-	for _, expected := range enumValues_WorkerResultV1Capability {
+	for _, expected := range enumValues_WorkerResultCapability {
 		if reflect.DeepEqual(v, expected) {
 			ok = true
 			break
 		}
 	}
 	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkerResultV1Capability, v)
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_WorkerResultCapability, v)
 	}
-	*j = WorkerResultV1Capability(v)
+	*j = WorkerResultCapability(v)
 	return nil
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
-func (j *WorkerResultV1) UnmarshalJSON(value []byte) error {
+func (j *WorkerResult) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
 		return err
 	}
@@ -6033,49 +7497,46 @@ func (j *WorkerResultV1) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
-	if _, ok := raw["apiVersion"]; raw != nil && !ok {
-		return fmt.Errorf("field apiVersion in WorkerResultV1: required")
-	}
 	if _, ok := raw["artifacts"]; raw != nil && !ok {
-		return fmt.Errorf("field artifacts in WorkerResultV1: required")
+		return fmt.Errorf("field artifacts in WorkerResult: required")
 	}
 	if _, ok := raw["buildIdentity"]; raw != nil && !ok {
-		return fmt.Errorf("field buildIdentity in WorkerResultV1: required")
+		return fmt.Errorf("field buildIdentity in WorkerResult: required")
 	}
 	if _, ok := raw["capability"]; raw != nil && !ok {
-		return fmt.Errorf("field capability in WorkerResultV1: required")
+		return fmt.Errorf("field capability in WorkerResult: required")
 	}
 	if _, ok := raw["completedAt"]; raw != nil && !ok {
-		return fmt.Errorf("field completedAt in WorkerResultV1: required")
+		return fmt.Errorf("field completedAt in WorkerResult: required")
 	}
 	if _, ok := raw["executionGeneration"]; raw != nil && !ok {
-		return fmt.Errorf("field executionGeneration in WorkerResultV1: required")
+		return fmt.Errorf("field executionGeneration in WorkerResult: required")
 	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
-		return fmt.Errorf("field kind in WorkerResultV1: required")
+		return fmt.Errorf("field kind in WorkerResult: required")
 	}
 	if _, ok := raw["leaseEpoch"]; raw != nil && !ok {
-		return fmt.Errorf("field leaseEpoch in WorkerResultV1: required")
+		return fmt.Errorf("field leaseEpoch in WorkerResult: required")
 	}
 	if _, ok := raw["metrics"]; raw != nil && !ok {
-		return fmt.Errorf("field metrics in WorkerResultV1: required")
+		return fmt.Errorf("field metrics in WorkerResult: required")
 	}
 	if _, ok := raw["physicalAttemptId"]; raw != nil && !ok {
-		return fmt.Errorf("field physicalAttemptId in WorkerResultV1: required")
+		return fmt.Errorf("field physicalAttemptId in WorkerResult: required")
 	}
 	if _, ok := raw["recoveryEpoch"]; raw != nil && !ok {
-		return fmt.Errorf("field recoveryEpoch in WorkerResultV1: required")
+		return fmt.Errorf("field recoveryEpoch in WorkerResult: required")
 	}
 	if _, ok := raw["taskId"]; raw != nil && !ok {
-		return fmt.Errorf("field taskId in WorkerResultV1: required")
+		return fmt.Errorf("field taskId in WorkerResult: required")
 	}
 	if _, ok := raw["usageReferences"]; raw != nil && !ok {
-		return fmt.Errorf("field usageReferences in WorkerResultV1: required")
+		return fmt.Errorf("field usageReferences in WorkerResult: required")
 	}
 	if _, ok := raw["warnings"]; raw != nil && !ok {
-		return fmt.Errorf("field warnings in WorkerResultV1: required")
+		return fmt.Errorf("field warnings in WorkerResult: required")
 	}
-	type Plain WorkerResultV1
+	type Plain WorkerResult
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
@@ -6107,7 +7568,7 @@ func (j *WorkerResultV1) UnmarshalJSON(value []byte) error {
 	if len(plain.Warnings) > 32 {
 		return fmt.Errorf("field %s length: must be <= %d", "warnings", 32)
 	}
-	*j = WorkerResultV1(plain)
+	*j = WorkerResult(plain)
 	return nil
 }
 
@@ -6198,7 +7659,7 @@ func scanJSONValue(decoder *json.Decoder, depth int) error {
 }
 
 // UnmarshalJSON enforces the bounds declared by BoundedStringMap.
-func (j *SharedPrimitivesV1BoundedStringMap) UnmarshalJSON(value []byte) error {
+func (j *SharedPrimitivesBoundedStringMap) UnmarshalJSON(value []byte) error {
 	var plain map[string]string
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err

@@ -1,0 +1,127 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/agent-task.schema.json",
+  "title": "AgentTask contract",
+  "description": "Bounded AgentTask wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 14,
+  "maxProperties": 14,
+  "required": [
+    "kind",
+    "taskId",
+    "runId",
+    "rootRunId",
+    "executionGeneration",
+    "capability",
+    "inputSchema",
+    "artifactInputs",
+    "parameters",
+    "resources",
+    "limits",
+    "idempotency",
+    "traceContext",
+    "contractBomReference"
+  ],
+  "properties": {
+    "kind": {
+      "const": "AgentTask"
+    },
+    "taskId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TaskId"
+    },
+    "runId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
+    },
+    "rootRunId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
+    },
+    "executionGeneration": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "capability": {
+      "enum": [
+        "provider.invoke",
+        "contract.validate",
+        "artifact.scan",
+        "fake.execute"
+      ]
+    },
+    "inputSchema": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/SchemaReference"
+    },
+    "artifactInputs": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+      }
+    },
+    "parameters": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+    },
+    "resources": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "resourceClass",
+        "priority"
+      ],
+      "properties": {
+        "resourceClass": {
+          "enum": [
+            "interactive-cpu",
+            "batch-cpu",
+            "interactive-gpu",
+            "batch-gpu"
+          ]
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "additionalProperties": false
+    },
+    "limits": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ResourceLimits"
+    },
+    "idempotency": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Idempotency"
+    },
+    "traceContext": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TraceContext"
+    },
+    "contractBomReference": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ContractBomReference"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "AgentTask",
+    "componentName": "anvilkit.contract.schema.agent-task",
+    "owner": "Agent Service Scheduler owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/taskId",
+      "/runId",
+      "/rootRunId",
+      "/executionGeneration",
+      "/capability",
+      "/inputSchema",
+      "/parameters",
+      "/resources",
+      "/limits",
+      "/idempotency",
+      "/traceContext"
+    ],
+    "maximumSerializedBytes": 65536,
+    "descriptions": [
+      "contracts/agent/asyncapi/agent-events.asyncapi.json"
+    ]
+  }
+}

@@ -1,0 +1,174 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/contract-bom.schema.json",
+  "title": "ContractBom contract",
+  "description": "Closed content-addressed Contract BOM manifest governed by design 0003 §8: the exact schema, registry, definition, Tool profile, policy, bundle, and generator/runtime identities resolved for a run. Resolution uses immutable digests, rejects missing, duplicate-conflicting, revoked, unsigned, or mismatched components, and performs no bundle-directed network fetch.",
+  "type": "object",
+  "minProperties": 8,
+  "maxProperties": 8,
+  "required": [
+    "kind",
+    "name",
+    "digest",
+    "createdAt",
+    "issuer",
+    "components",
+    "registrySetDigest",
+    "profileDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ContractBom"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-z0-9][a-z0-9.-]*$"
+    },
+    "digest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "createdAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    },
+    "issuer": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 256,
+      "pattern": "^urn:anvilkit:issuer:[a-z0-9][a-z0-9:-]*$"
+    },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/Entry"
+      }
+    },
+    "registrySetDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "profileDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ComponentKind": {
+      "enum": [
+        "agent-definition",
+        "asyncapi",
+        "declarative-bundle",
+        "fixture-manifest",
+        "generated-binding",
+        "generator",
+        "json-schema",
+        "openapi",
+        "policy",
+        "registry-set",
+        "runtime",
+        "tool-profile"
+      ]
+    },
+    "ComponentName": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 160,
+      "pattern": "^anvilkit\\.[a-z0-9][a-z0-9.-]*$"
+    },
+    "Dependency": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "kind",
+        "name",
+        "digest"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ComponentKind"
+        },
+        "name": {
+          "$ref": "#/$defs/ComponentName"
+        },
+        "digest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Entry": {
+      "type": "object",
+      "minProperties": 8,
+      "maxProperties": 8,
+      "required": [
+        "kind",
+        "name",
+        "mediaType",
+        "digest",
+        "size",
+        "dependencies",
+        "issuer",
+        "provenanceDigest"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ComponentKind"
+        },
+        "name": {
+          "$ref": "#/$defs/ComponentName"
+        },
+        "mediaType": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 127,
+          "pattern": "^[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*$"
+        },
+        "digest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "dependencies": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/Dependency"
+          }
+        },
+        "issuer": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 256,
+          "pattern": "^urn:anvilkit:issuer:[a-z0-9][a-z0-9:-]*$"
+        },
+        "provenanceDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "ContractBom",
+    "componentName": "anvilkit.contract.schema.contract-bom",
+    "owner": "Platform Contracts owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/name",
+      "/createdAt",
+      "/issuer",
+      "/components",
+      "/registrySetDigest",
+      "/profileDigest"
+    ],
+    "maximumSerializedBytes": 1048576,
+    "descriptions": []
+  }
+}

@@ -1,0 +1,152 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/agent-run.schema.json",
+  "title": "AgentRun contract",
+  "description": "Bounded AgentRun wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 18,
+  "maxProperties": 20,
+  "required": [
+    "kind",
+    "runId",
+    "rootRunId",
+    "workspaceId",
+    "actorId",
+    "domain",
+    "operation",
+    "target",
+    "definition",
+    "contractBomReference",
+    "policy",
+    "budget",
+    "idempotency",
+    "status",
+    "executionGeneration",
+    "resourceRevision",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "kind": {
+      "const": "AgentRun"
+    },
+    "runId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
+    },
+    "rootRunId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
+    },
+    "parentRunId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
+    },
+    "workspaceId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/WorkspaceId"
+    },
+    "actorId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ActorId"
+    },
+    "domain": {
+      "enum": [
+        "platform-agent",
+        "pagix-page",
+        "contract-runtime"
+      ]
+    },
+    "operation": {
+      "enum": [
+        "page-change",
+        "artifact-validation",
+        "image-operation",
+        "component-package"
+      ]
+    },
+    "target": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TargetReference"
+    },
+    "definition": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/DefinitionReference"
+    },
+    "contractBomReference": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ContractBomReference"
+    },
+    "policy": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PolicyReference"
+    },
+    "budget": {
+      "$ref": "anvilkit://schema/agent-budget?digest=sha256:e2942efa249ebe3c79c105b3356d50a8cc3c99e8b544616a6ed10fb44a0b8467"
+    },
+    "idempotency": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Idempotency"
+    },
+    "status": {
+      "enum": [
+        "created",
+        "preparing",
+        "planning",
+        "awaiting_input",
+        "executing",
+        "validating",
+        "awaiting_review",
+        "awaiting_approval",
+        "committing",
+        "awaiting_domain_confirmation",
+        "conflict",
+        "cancelling",
+        "failed",
+        "completed",
+        "cancelled",
+        "refused",
+        "discarded"
+      ]
+    },
+    "executionGeneration": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "resourceRevision": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "createdAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    },
+    "updatedAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    },
+    "problem": {
+      "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "parentRunId": "omitted for a root run",
+    "problem": "omitted unless the run is failed or otherwise records a durable problem"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "AgentRun",
+    "componentName": "anvilkit.contract.schema.agent-run",
+    "owner": "Agent Service owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/runId",
+      "/rootRunId",
+      "/parentRunId",
+      "/actorId",
+      "/domain",
+      "/operation",
+      "/target",
+      "/definition",
+      "/contractBomReference",
+      "/policy",
+      "/budget",
+      "/idempotency",
+      "/status"
+    ],
+    "maximumSerializedBytes": 32768,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json"
+    ]
+  }
+}

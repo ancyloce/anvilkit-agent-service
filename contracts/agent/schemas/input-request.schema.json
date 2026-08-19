@@ -1,0 +1,85 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/input-request.schema.json",
+  "title": "InputRequest contract",
+  "description": "Bounded InputRequest wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 8,
+  "maxProperties": 8,
+  "required": [
+    "kind",
+    "requestId",
+    "runId",
+    "question",
+    "responseSchema",
+    "expiresAt",
+    "version",
+    "resumeState"
+  ],
+  "properties": {
+    "kind": {
+      "const": "InputRequest"
+    },
+    "requestId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RequestId"
+    },
+    "runId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "responseSchema": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/SchemaReference"
+    },
+    "expiresAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "resumeState": {
+      "enum": [
+        "created",
+        "preparing",
+        "planning",
+        "awaiting_input",
+        "executing",
+        "validating",
+        "awaiting_review",
+        "awaiting_approval",
+        "committing",
+        "awaiting_domain_confirmation",
+        "conflict",
+        "cancelling",
+        "failed",
+        "completed",
+        "cancelled",
+        "refused",
+        "discarded"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "InputRequest",
+    "componentName": "anvilkit.contract.schema.input-request",
+    "owner": "Agent Service Workflow owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/question",
+      "/responseSchema",
+      "/expiresAt",
+      "/version",
+      "/resumeState"
+    ],
+    "maximumSerializedBytes": 32768,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json"
+    ]
+  }
+}

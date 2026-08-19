@@ -1,0 +1,95 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/contract-runtime-result.schema.json",
+  "title": "ContractRuntimeResult contract",
+  "description": "Transport-neutral deterministic Contract Runtime result governed by ADR-022: a canonical result or ProblemDetails, plus the bundle, schema, policy, runtime, and execution digests used for execution.",
+  "type": "object",
+  "minProperties": 7,
+  "maxProperties": 10,
+  "required": [
+    "kind",
+    "outcome",
+    "runtime",
+    "bundleDigest",
+    "schemaDigest",
+    "policyDigest",
+    "executionDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ContractRuntimeResult"
+    },
+    "outcome": {
+      "enum": [
+        "ok",
+        "problem"
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "runtimeId",
+        "buildIdentity"
+      ],
+      "properties": {
+        "runtimeId": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+        },
+        "buildIdentity": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BuildId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "bundleDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "schemaDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "policyDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "executionDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "canonicalOutput": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 262144
+    },
+    "outputDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "problem": {
+      "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "canonicalOutput": "omitted when the outcome is problem",
+    "outputDigest": "omitted when the outcome is problem",
+    "problem": "omitted when the outcome is ok"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "ContractRuntimeResult",
+    "componentName": "anvilkit.contract.schema.contract-runtime-result",
+    "owner": "Contract Runtime owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/outcome",
+      "/runtime",
+      "/bundleDigest",
+      "/schemaDigest",
+      "/policyDigest",
+      "/executionDigest",
+      "/canonicalOutput",
+      "/outputDigest",
+      "/problem"
+    ],
+    "maximumSerializedBytes": 524288,
+    "descriptions": []
+  }
+}

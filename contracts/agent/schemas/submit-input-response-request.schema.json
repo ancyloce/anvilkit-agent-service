@@ -1,0 +1,42 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/submit-input-response-request.schema.json",
+  "title": "SubmitInputResponseRequest contract",
+  "description": "Intent-only input response command governed by ADR-021. The response binds the current InputRequest revision; the payload is additionally validated against the InputRequest response schema by Agent Service.",
+  "type": "object",
+  "minProperties": 3,
+  "maxProperties": 3,
+  "required": [
+    "kind",
+    "requestVersion",
+    "responsePayload"
+  ],
+  "properties": {
+    "kind": {
+      "const": "SubmitInputResponseRequest"
+    },
+    "requestVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "responsePayload": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "SubmitInputResponseRequest",
+    "componentName": "anvilkit.contract.schema.submit-input-response-request",
+    "owner": "Agent Service Workflow owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/requestVersion",
+      "/responsePayload"
+    ],
+    "maximumSerializedBytes": 65536,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json"
+    ]
+  }
+}

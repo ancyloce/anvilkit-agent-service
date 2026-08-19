@@ -1,0 +1,120 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/worker-result.schema.json",
+  "title": "WorkerResult contract",
+  "description": "Bounded WorkerResult wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 13,
+  "maxProperties": 14,
+  "required": [
+    "kind",
+    "taskId",
+    "recoveryEpoch",
+    "executionGeneration",
+    "physicalAttemptId",
+    "leaseEpoch",
+    "capability",
+    "buildIdentity",
+    "artifacts",
+    "metrics",
+    "usageReferences",
+    "warnings",
+    "completedAt"
+  ],
+  "properties": {
+    "kind": {
+      "const": "WorkerResult"
+    },
+    "taskId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TaskId"
+    },
+    "recoveryEpoch": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "executionGeneration": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "physicalAttemptId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PhysicalAttemptId"
+    },
+    "leaseEpoch": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "capability": {
+      "enum": [
+        "provider.invoke",
+        "contract.validate",
+        "artifact.scan",
+        "fake.execute"
+      ]
+    },
+    "buildIdentity": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BuildId"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+      }
+    },
+    "metrics": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+    },
+    "usageReferences": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+      }
+    },
+    "problem": {
+      "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+    },
+    "completedAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "problem": "omitted for a successful result"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "WorkerResult",
+    "componentName": "anvilkit.contract.schema.worker-result",
+    "owner": "Worker Protocol owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/taskId",
+      "/recoveryEpoch",
+      "/executionGeneration",
+      "/physicalAttemptId",
+      "/leaseEpoch",
+      "/capability",
+      "/buildIdentity",
+      "/artifacts",
+      "/usageReferences",
+      "/problem"
+    ],
+    "maximumSerializedBytes": 65536,
+    "descriptions": [
+      "contracts/agent/asyncapi/agent-events.asyncapi.json"
+    ]
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/contract-runtime-request.schema.json",
+  "title": "ContractRuntimeRequest contract",
+  "description": "Transport-neutral Contract Runtime request governed by ADR-022. The same request under the same bundle, runtime profile, and declared inputs must produce the same canonical result; time, randomness, environment, and locale are unavailable unless explicitly supplied as input.",
+  "type": "object",
+  "minProperties": 8,
+  "maxProperties": 9,
+  "required": [
+    "kind",
+    "operation",
+    "bundleDigest",
+    "contract",
+    "canonicalInput",
+    "canonicalInputDigest",
+    "policy",
+    "limits"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ContractRuntimeRequest"
+    },
+    "operation": {
+      "enum": [
+        "validate",
+        "execute"
+      ]
+    },
+    "bundleDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "contract": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/SchemaReference"
+    },
+    "canonicalInput": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 262144
+    },
+    "canonicalInputDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "policy": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PolicyReference"
+    },
+    "limits": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ResourceLimits"
+    },
+    "traceContext": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TraceContext"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "traceContext": "omitted when no trace is propagated across the runtime boundary"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "ContractRuntimeRequest",
+    "componentName": "anvilkit.contract.schema.contract-runtime-request",
+    "owner": "Contract Runtime owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/operation",
+      "/bundleDigest",
+      "/contract",
+      "/canonicalInput",
+      "/canonicalInputDigest",
+      "/policy",
+      "/limits"
+    ],
+    "maximumSerializedBytes": 524288,
+    "descriptions": []
+  }
+}

@@ -1,0 +1,151 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/tool-definition.schema.json",
+  "title": "ToolDefinition contract",
+  "description": "Bounded ToolDefinition wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 11,
+  "maxProperties": 11,
+  "required": [
+    "kind",
+    "capability",
+    "inputSchema",
+    "outputSchema",
+    "sideEffectClass",
+    "riskClass",
+    "approvalPolicy",
+    "timeoutPolicy",
+    "retryPolicy",
+    "acceptedDataClasses",
+    "toolId"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ToolDefinition"
+    },
+    "capability": {
+      "enum": [
+        "provider.invoke",
+        "contract.validate",
+        "artifact.scan",
+        "fake.execute"
+      ]
+    },
+    "inputSchema": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/SchemaReference"
+    },
+    "outputSchema": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/SchemaReference"
+    },
+    "sideEffectClass": {
+      "enum": [
+        "none",
+        "read",
+        "artifact-write",
+        "domain-effect"
+      ]
+    },
+    "riskClass": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "approvalPolicy": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PolicyReference"
+    },
+    "timeoutPolicy": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "required": [
+        "timeoutMilliseconds"
+      ],
+      "properties": {
+        "timeoutMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400000
+        }
+      },
+      "additionalProperties": false
+    },
+    "retryPolicy": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "maximumAttempts",
+        "backoffMilliseconds",
+        "retryability"
+      ],
+      "properties": {
+        "maximumAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "backoffMilliseconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000
+        },
+        "retryability": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 3,
+          "items": {
+            "enum": [
+              "safe-immediate",
+              "safe-after-backoff",
+              "operator-action"
+            ]
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "acceptedDataClasses": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": {
+        "enum": [
+          "public",
+          "internal",
+          "confidential",
+          "restricted"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "toolId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ToolDefinition",
+    "componentName": "anvilkit.contract.schema.tool-definition",
+    "owner": "Platform Tool and Policy Registry owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/capability",
+      "/inputSchema",
+      "/outputSchema",
+      "/sideEffectClass",
+      "/riskClass",
+      "/approvalPolicy",
+      "/timeoutPolicy",
+      "/retryPolicy",
+      "/acceptedDataClasses"
+    ],
+    "maximumSerializedBytes": 32768,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json"
+    ]
+  }
+}

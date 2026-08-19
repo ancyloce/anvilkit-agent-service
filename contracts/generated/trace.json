@@ -2,114 +2,154 @@
   "traceVersion": 1,
   "language": "go",
   "packageVersion": "0.1.0",
-  "sourceSetSha256": "c4cce2ab130e519ae3ee37ffd808be68095c36fd18556d552a5eceed3b67eacf",
+  "sourceSetSha256": "c3af7c0a1b402c258c0ff6c7611fcf41e46b2e259b93df005c55b772bcf428f1",
   "sources": [
     {
-      "path": "contracts/schemas/v1/agent-artifact.schema.json",
-      "sha256": "a4f1cecb68b04d7693eefaddaa1bec7e82d11180b2f7f2f38fd4c5abed1a42cb"
+      "path": "contracts/agent/schemas/agent-artifact.schema.json",
+      "sha256": "0776014482233fa9db255075fd51ca229e421b2232c624213cb09d13795aac43"
     },
     {
-      "path": "contracts/schemas/v1/agent-budget.schema.json",
-      "sha256": "ae8e0049aa37366c6f59a5e40d354cc361388e8f1403783ea6442c7bdd0b3715"
+      "path": "contracts/agent/schemas/agent-budget.schema.json",
+      "sha256": "e2942efa249ebe3c79c105b3356d50a8cc3c99e8b544616a6ed10fb44a0b8467"
     },
     {
-      "path": "contracts/schemas/v1/agent-definition.schema.json",
-      "sha256": "ea62aa3afe82221022c43813f98373a1111e015ffc15671d6582bfdab70af462"
+      "path": "contracts/agent/schemas/agent-definition.schema.json",
+      "sha256": "59ea772874f19e68bf7dc7b3e83c2429a0e72e7a645ae23b5217d411130d4bfe"
     },
     {
-      "path": "contracts/schemas/v1/agent-event.schema.json",
-      "sha256": "f19775b8dfdd34cac0318fce8067460988671840987a2b9aaeaa3c85710591ab"
+      "path": "contracts/agent/schemas/agent-event.schema.json",
+      "sha256": "2fdd8937381427507e721675ebbd66144595a193b53ba460534e9712df9b774a"
     },
     {
-      "path": "contracts/schemas/v1/agent-run.schema.json",
-      "sha256": "68949242c9b4557a8b5ff965f76de8f2de49c11523a7cc1e64cfd1b4af824233"
+      "path": "contracts/agent/schemas/agent-evidence.schema.json",
+      "sha256": "e4251dd073a86fa271d85551c9dfd4f8d046c38704e4f32a70e03f764fd7e378"
     },
     {
-      "path": "contracts/schemas/v1/agent-task.schema.json",
-      "sha256": "45832bc15da304e6c282fb87f5eb64cd424cdec51ecde34b665e44db9f7e6b63"
+      "path": "contracts/agent/schemas/agent-run.schema.json",
+      "sha256": "e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564"
     },
     {
-      "path": "contracts/schemas/v1/apply-authorization.schema.json",
-      "sha256": "67ce757f4792deccb1fc6c442611bfed2fff76aa1cac39ad1aa5ff70eddf97a3"
+      "path": "contracts/agent/schemas/agent-stream-delta.schema.json",
+      "sha256": "0d64114cedd078202f1046fbadd7291544a590b9019422af77ce2f8c4cb8f590"
     },
     {
-      "path": "contracts/schemas/v1/approval-request.schema.json",
-      "sha256": "9bbfd3c18ebfabe205bca28a7022035c095c8d4831cddef4834868216919af2c"
+      "path": "contracts/agent/schemas/agent-task.schema.json",
+      "sha256": "323739e5173befedf6c54f79ee0c05a3757460329a7ffef765622a26da711939"
     },
     {
-      "path": "contracts/schemas/v1/compiled-context.schema.json",
-      "sha256": "7ed9b01d0451d8c1ba34b1959ea119d4c9d65db0b1a2343b7e8eb81c2b1bc037"
+      "path": "contracts/agent/schemas/apply-authorization.schema.json",
+      "sha256": "ad07f9d74ca750dac5b682247ee8109501c4d165aea4d1024f1fa316b92e3e1b"
     },
     {
-      "path": "contracts/schemas/v1/component-package-spec.schema.json",
-      "sha256": "0692c18651185915c2dd509a26fc18c0fe550285db07f7aa5b4d63234c66aa2b"
+      "path": "contracts/agent/schemas/approval-request.schema.json",
+      "sha256": "0c12c96f59986ac18d9d689f0051aa6c74023ccf4ac7746436ffc90a3cdfeec8"
     },
     {
-      "path": "contracts/schemas/v1/contract-revocation-snapshot.schema.json",
-      "sha256": "3f1513e42d97b2f5175cfd5ab1f380719d5233e27095de32caf96c771f5ef410"
+      "path": "contracts/agent/schemas/compiled-context.schema.json",
+      "sha256": "e535dd923ac156840b06932f5a54aa7e70ea6dcc6f0bce8314a6e562ad784c33"
     },
     {
-      "path": "contracts/schemas/v1/contract-signature-statement.schema.json",
-      "sha256": "01c9337789f939ad964979bb6d26324113b82ac09868ffed4d1be31dad10c049"
+      "path": "contracts/agent/schemas/component-package-spec.schema.json",
+      "sha256": "d694500504b19346c06da12db9cfee37b0810f6e6bb6b07298e3b03c78518061"
     },
     {
-      "path": "contracts/schemas/v1/contract-trust-root.schema.json",
-      "sha256": "d4c4ddc353fdf286540f4b03f61bceb1898bcf645b11230a0a8ea73ce5018667"
+      "path": "contracts/agent/schemas/contract-bom.schema.json",
+      "sha256": "ce7b739bd95967b541246f800ff5513ef24d299c42377a4e3467828edfb08c54"
     },
     {
-      "path": "contracts/schemas/v1/image-operation-plan.schema.json",
-      "sha256": "3d60868426e48bec883ce91ae71d10ab609e02b5b559d3a47e1f0c34041c5709"
+      "path": "contracts/agent/schemas/contract-revocation-snapshot.schema.json",
+      "sha256": "99aa7e7245994d5cca1fe781b70621f57f33cfc378f25a14dc0fb269554977fc"
     },
     {
-      "path": "contracts/schemas/v1/input-request.schema.json",
-      "sha256": "93dbc2fb16cc3791dca4473ea51c583ebfea96a98747601adeecd7b17708e922"
+      "path": "contracts/agent/schemas/contract-runtime-request.schema.json",
+      "sha256": "0400c3b836ee560c5d21f82cd118e26aad404014f87b740ecf2b80d143708bff"
     },
     {
-      "path": "contracts/schemas/v1/problem-details.schema.json",
-      "sha256": "6cfe1db66717fb64fd1ec18920ec64b16c191c2ba6a4009350ba4a19163b7647"
+      "path": "contracts/agent/schemas/contract-runtime-result.schema.json",
+      "sha256": "b22a03aa428e3e5cdc0b6913ca491a7bba4b95680855a9d45118d35181edb643"
     },
     {
-      "path": "contracts/schemas/v1/provider-continuation.schema.json",
-      "sha256": "68810769703a8bb093f06deec27b822877a655ffef7770d06144a4c5c10143fb"
+      "path": "contracts/agent/schemas/contract-signature-statement.schema.json",
+      "sha256": "e5e5790e27162eaa359f19ec848c2916f122411613314f977c7dce32b6a20b10"
     },
     {
-      "path": "contracts/schemas/v1/shared-primitives.schema.json",
-      "sha256": "de45a3a2412afca14c4386afe8fd750621366e1ec826928e336639936f814592"
+      "path": "contracts/agent/schemas/contract-trust-root.schema.json",
+      "sha256": "3332af2b4d2477423358fded7f67dd8434aa8f43269edd1f0a3e46b9df8d2574"
     },
     {
-      "path": "contracts/schemas/v1/target-snapshot.schema.json",
-      "sha256": "89d75fa6d287eea5b21208bfcaae4a8e639debf2e4a7dfad322805ec13ed41c2"
+      "path": "contracts/agent/schemas/create-agent-run-request.schema.json",
+      "sha256": "ae244db518fe7b181990406994ff42623cfebe97756e4b073fc9ea3df83b8fb0"
     },
     {
-      "path": "contracts/schemas/v1/tool-definition.schema.json",
-      "sha256": "3c76deee323264f5239029fcdb76f9200e99f717ac4182c99069e2eb08462f43"
+      "path": "contracts/agent/schemas/image-operation-plan.schema.json",
+      "sha256": "8c4863dff200b2caa2158b9fda6467ac9d86da4b7cd10ac7f5831ed1eb046882"
     },
     {
-      "path": "contracts/schemas/v1/usage-observation.schema.json",
-      "sha256": "929bb6dd41798113a64664f83397e7e2b642ea37133698d03041c4ede397c68a"
+      "path": "contracts/agent/schemas/input-request.schema.json",
+      "sha256": "b24bd0e89eeb408e7b5aac779676e790af60d089584a0ec2808273a3326a3d53"
     },
     {
-      "path": "contracts/schemas/v1/worker-lease.schema.json",
-      "sha256": "fdf0052070ba25ccd4bbb524acce0908eee354350a8d6a67a35600539e1f1faf"
+      "path": "contracts/agent/schemas/issue-apply-authorization-request.schema.json",
+      "sha256": "653d8dba345b8e1fae093dd491321a6cb4b5b7b56b896efe88c38739be0e8bca"
     },
     {
-      "path": "contracts/schemas/v1/worker-result.schema.json",
-      "sha256": "af74e57340b240d669e1fad7fc9259fd7738361030461c4b4b814c12d175ad8c"
+      "path": "contracts/agent/schemas/issued-apply-authorization.schema.json",
+      "sha256": "6b6daee532a781483e8d3ccdc1a152e65837ad3529ba47d2b0c01e39a354dacf"
     },
     {
-      "path": "contracts/openapi/v1/agent-service.openapi.json",
-      "sha256": "140de862da24742d4b3cdcec4872f62be2ac0efb4010a71812aa65fd1a471514"
+      "path": "contracts/agent/schemas/problem-details.schema.json",
+      "sha256": "d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
     },
     {
-      "path": "contracts/openapi/v1/pagix-agent-integration.openapi.json",
-      "sha256": "947409ac4ce349bcbbabd4dd1374b30564e1fbae01df06546d6fcb67868c0734"
+      "path": "contracts/agent/schemas/provider-continuation.schema.json",
+      "sha256": "5b0e3545a8cf95d40c0b23960d79780419e70857ad00b4fee9c58be8cb7de54d"
+    },
+    {
+      "path": "contracts/agent/schemas/shared-primitives.schema.json",
+      "sha256": "49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576"
+    },
+    {
+      "path": "contracts/agent/schemas/submit-approval-decision-request.schema.json",
+      "sha256": "580f4673c28360cf4d0bb68ed922aad20ea7eab56879bf69c0dd82459afe7a8e"
+    },
+    {
+      "path": "contracts/agent/schemas/submit-input-response-request.schema.json",
+      "sha256": "70154bbdeba06c4a875de34fb925c6d708bd67d215a126d38dd869747a44f0d8"
+    },
+    {
+      "path": "contracts/agent/schemas/target-snapshot.schema.json",
+      "sha256": "24d36aef73946c2618dec27104ddc58553c32eb6ba3933f8250459e7452970bc"
+    },
+    {
+      "path": "contracts/agent/schemas/tool-definition.schema.json",
+      "sha256": "61e67b664f0d67945f9c7ee33dc371dd11e78095576b7642d905c51558f7803e"
+    },
+    {
+      "path": "contracts/agent/schemas/usage-observation.schema.json",
+      "sha256": "c3beabfc7abfa5565a082806b356585bc64ce8b6dd46f26606feff87677b5eb8"
+    },
+    {
+      "path": "contracts/agent/schemas/worker-lease.schema.json",
+      "sha256": "969dbadb42316bc843b41538e260883572e5d73421f898ec94901d1a8b4cc107"
+    },
+    {
+      "path": "contracts/agent/schemas/worker-result.schema.json",
+      "sha256": "81fabb41058af81f39623846816223f3b30efd1372c40f545b825ee6fca1cd08"
+    },
+    {
+      "path": "contracts/agent/openapi/agent-service.openapi.json",
+      "sha256": "1e8ff603e1f6b8503c613fbb3f02bd711f6c4c22bee3b23398ac1779ba7dc8e3"
+    },
+    {
+      "path": "contracts/agent/openapi/pagix-agent-integration.openapi.json",
+      "sha256": "df7beaa77c923a5444b1da3115a1ff208126b07bd30aa8d6c216870ac03b17e6"
     }
   ],
   "projections": {
-    "schemaBundleSha256": "b5da72dec2ad0b0f437d4f2c0db4dfa4a5286774d8f020d7e1c3c32c2290794b",
+    "schemaBundleSha256": "ae5a3f8c5e11445baad81bd0081bd109f4090618eeb80c077b89508e45eca2aa",
     "openapi": {
-      "agent-service": "8a8b7ff24e29e300350c8a6fe242443f6058460e55913777ecf0138dc6d61f61",
-      "pagix-agent-integration": "0b01a609846a529c9194c673c8551ee52ee4fcd1cd8c4b220eedb9009e0f00d5"
+      "agent-service": "293e2244e7d3f2e2c9a4e353a36925947868ab1470949d1c411d04b2cdeeeed8",
+      "pagix-agent-integration": "fd922e0781d1fe1b16602bf6b16300fe509ad78a094aff5856d6538ac22fb11c"
     }
   },
   "generators": {
@@ -122,18 +162,16 @@
       "version": "v0.24.1"
     }
   },
-  "rootBomIdentity": "sha256:2b0f5a1f42bcf399d640deb60df4597f9ed18d8fe22d52b7f5d4a5638fdc2018",
-  "rootBomState": "composed-candidate-unpublished",
   "output": {
-    "bytes": 495976,
+    "bytes": 613642,
     "files": 3,
-    "sha256": "475fc8d2c70862f791f4b60ae0b75ee02f3a6d71aaafc057f82f6b7ef381e9a4",
+    "sha256": "2f7f7b7430022a31fe2b58871b379fc981aa04d85ded3e2ca18c5d5e125a9219",
     "directories": [
       {
         "directory": "generated",
-        "bytes": 495976,
+        "bytes": 613642,
         "files": 3,
-        "sha256": "baef694466f19140753f97249677f21e451514ddb4c6b871ef2f3134c31bba01"
+        "sha256": "96722497a2b13833992b05007625c41504b6b016956f03fec8eb12350dff176d"
       }
     ]
   }

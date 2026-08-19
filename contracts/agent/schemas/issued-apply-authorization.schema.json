@@ -1,0 +1,44 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/issued-apply-authorization.schema.json",
+  "title": "IssuedApplyAuthorization contract",
+  "description": "Issued Apply Authorization response governed by ADR-021: the canonical ApplyAuthorization document plus its compact JWS carrier. The document must be byte-equivalent to the decoded JWS payload after canonicalization.",
+  "type": "object",
+  "minProperties": 3,
+  "maxProperties": 3,
+  "required": [
+    "kind",
+    "authorization",
+    "compactJws"
+  ],
+  "properties": {
+    "kind": {
+      "const": "IssuedApplyAuthorization"
+    },
+    "authorization": {
+      "$ref": "anvilkit://schema/apply-authorization?digest=sha256:ad07f9d74ca750dac5b682247ee8109501c4d165aea4d1024f1fa316b92e3e1b"
+    },
+    "compactJws": {
+      "type": "string",
+      "minLength": 32,
+      "maxLength": 16384,
+      "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "IssuedApplyAuthorization",
+    "componentName": "anvilkit.contract.schema.issued-apply-authorization",
+    "owner": "Agent Service Authorization and Pagix Redemption owners",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/authorization",
+      "/compactJws"
+    ],
+    "maximumSerializedBytes": 65536,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json",
+      "contracts/agent/openapi/pagix-agent-integration.openapi.json"
+    ]
+  }
+}

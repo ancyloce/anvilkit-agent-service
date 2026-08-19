@@ -1,0 +1,127 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/problem-details.schema.json",
+  "title": "ProblemDetails contract",
+  "description": "Bounded ProblemDetails wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 5,
+  "maxProperties": 8,
+  "required": [
+    "kind",
+    "code",
+    "retryability",
+    "message",
+    "fieldErrors"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ProblemDetails"
+    },
+    "code": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 96,
+      "pattern": "^[A-Z][A-Z0-9_.-]+$"
+    },
+    "retryability": {
+      "enum": [
+        "never",
+        "safe-immediate",
+        "safe-after-backoff",
+        "after-input",
+        "after-approval",
+        "after-rebase",
+        "operator-action"
+      ]
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    },
+    "fieldErrors": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "minProperties": 4,
+        "maxProperties": 4,
+        "required": [
+          "code",
+          "instancePath",
+          "schemaPath",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 96,
+            "pattern": "^[A-Z][A-Z0-9_.-]+$"
+          },
+          "instancePath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^/.*$"
+          },
+          "schemaPath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^/.*$"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "stage": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z][a-z0-9._-]*$"
+    },
+    "runId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
+    },
+    "traceId": {
+      "type": "string",
+      "minLength": 32,
+      "maxLength": 32,
+      "pattern": "^[0-9a-f]{32}$"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "stage": "omitted when failure is not associated with a workflow stage",
+    "runId": "omitted when failure occurs before run allocation",
+    "traceId": "omitted only when no trace was established"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "ProblemDetails",
+    "componentName": "anvilkit.contract.schema.problem-details",
+    "owner": "Platform Contracts owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/code",
+      "/retryability",
+      "/fieldErrors",
+      "/stage",
+      "/runId",
+      "/traceId"
+    ],
+    "maximumSerializedBytes": 32768,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json",
+      "contracts/agent/openapi/pagix-agent-integration.openapi.json",
+      "contracts/agent/asyncapi/agent-events.asyncapi.json",
+      "contracts/agent/asyncapi/pagix-domain-events.asyncapi.json"
+    ]
+  }
+}

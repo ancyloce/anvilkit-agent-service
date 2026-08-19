@@ -1,10 +1,13 @@
 {
   "pinVersion": 1,
-  "bomVersion": "1.0.0",
-  "bomDigest": "sha256:2b0f5a1f42bcf399d640deb60df4597f9ed18d8fe22d52b7f5d4a5638fdc2018",
-  "ociManifestDigest": "sha256:7b7c903bf711e4f436e69036d8e1feedab321ee91d85f679026b3774dfd6fea1",
-  "evidenceManifestDigest": "sha256:d195bc405e52ece54d90d11338d3a6da64d93825b0b426ad386d4e8bb0786c42",
-  "consumerGeneration": 1,
-  "state": "candidate-unpublished",
-  "source": "contracts/governance/m5/oci-release-drill.raw.json"
+  "state": "canonical",
+  "profile": {
+    "path": "agent/profile/p0-kernel-profile.json",
+    "sha256": "sha256:1dc59362a1bbe144539c7fc4100da8fe2d393ddb74893b7c2a2b8bc7244db1d4"
+  },
+  "lock": {
+    "path": "agent/lock/contracts.lock.json",
+    "sha256": "sha256:fd2a072472c0420c0974b0dee12b3e65ae14a9526c2a4de15f1c1bdd66f9a727"
+  },
+  "source": "anvilkit-platform contracts/agent (ADR-018 canonical cutover)"
 }

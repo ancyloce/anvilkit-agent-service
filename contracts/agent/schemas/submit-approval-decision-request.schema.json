@@ -1,0 +1,59 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/submit-approval-decision-request.schema.json",
+  "title": "SubmitApprovalDecisionRequest contract",
+  "description": "Intent-only approval decision command governed by ADR-021. The decision binds the current ApprovalRequest decision revision and the exact action digest being approved.",
+  "type": "object",
+  "minProperties": 4,
+  "maxProperties": 5,
+  "required": [
+    "kind",
+    "decision",
+    "decisionVersion",
+    "actionDigest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "SubmitApprovalDecisionRequest"
+    },
+    "decision": {
+      "enum": [
+        "approve",
+        "reject",
+        "request-changes"
+      ]
+    },
+    "decisionVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "actionDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "comment": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "comment": "omitted when the reviewer records no comment"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "SubmitApprovalDecisionRequest",
+    "componentName": "anvilkit.contract.schema.submit-approval-decision-request",
+    "owner": "Agent Service Workflow owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/decision",
+      "/decisionVersion",
+      "/actionDigest"
+    ],
+    "maximumSerializedBytes": 16384,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json"
+    ]
+  }
+}

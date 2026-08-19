@@ -1,0 +1,124 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/agent-event.schema.json",
+  "title": "AgentEvent contract",
+  "description": "Bounded AgentEvent wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 11,
+  "maxProperties": 14,
+  "required": [
+    "kind",
+    "eventId",
+    "runId",
+    "workspaceId",
+    "projectId",
+    "sequence",
+    "eventType",
+    "occurredAt",
+    "subject",
+    "traceContext",
+    "contractBomReference"
+  ],
+  "properties": {
+    "kind": {
+      "const": "AgentEvent"
+    },
+    "eventId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "runId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
+    },
+    "workspaceId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/WorkspaceId"
+    },
+    "projectId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ProjectId"
+    },
+    "taskId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TaskId"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "eventType": {
+      "enum": [
+        "run.created",
+        "run.state-changed",
+        "run.input-requested",
+        "run.approval-requested",
+        "run.artifact-available",
+        "run.problem-recorded"
+      ]
+    },
+    "occurredAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    },
+    "subject": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "subjectType",
+        "subjectId"
+      ],
+      "properties": {
+        "subjectType": {
+          "enum": [
+            "user",
+            "system"
+          ]
+        },
+        "subjectId": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ActorId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "traceContext": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TraceContext"
+    },
+    "payload": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+    },
+    "artifactReference": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+    },
+    "contractBomReference": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ContractBomReference"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "taskId": "omitted for run-level events",
+    "payload": "omitted when the event body is carried by artifact reference",
+    "artifactReference": "omitted when the bounded inline payload is present"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "AgentEvent",
+    "componentName": "anvilkit.contract.schema.agent-event",
+    "owner": "Agent Service Events owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/eventId",
+      "/runId",
+      "/workspaceId",
+      "/projectId",
+      "/taskId",
+      "/sequence",
+      "/eventType",
+      "/occurredAt",
+      "/subject",
+      "/traceContext",
+      "/payload",
+      "/artifactReference"
+    ],
+    "maximumSerializedBytes": 32768,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json",
+      "contracts/agent/asyncapi/agent-events.asyncapi.json"
+    ]
+  }
+}

@@ -1,0 +1,165 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/agent-budget.schema.json",
+  "title": "AgentBudget contract",
+  "description": "Bounded AgentBudget wire contract governed by PRD 0012.",
+  "type": "object",
+  "minProperties": 9,
+  "maxProperties": 9,
+  "required": [
+    "kind",
+    "modelLimits",
+    "tokenLimits",
+    "workerLimits",
+    "gpuLimits",
+    "currencyLimits",
+    "reservationId",
+    "exceedBehavior",
+    "policy"
+  ],
+  "properties": {
+    "kind": {
+      "const": "AgentBudget"
+    },
+    "modelLimits": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "maximumCalls",
+        "maximumConcurrentCalls"
+      ],
+      "properties": {
+        "maximumCalls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "maximumConcurrentCalls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        }
+      },
+      "additionalProperties": false
+    },
+    "tokenLimits": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "inputTokens",
+        "outputTokens",
+        "totalTokens"
+      ],
+      "properties": {
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "totalTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "workerLimits": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "maximumAttempts",
+        "maximumDurationMilliseconds"
+      ],
+      "properties": {
+        "maximumAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "maximumDurationMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 604800000
+        }
+      },
+      "additionalProperties": false
+    },
+    "gpuLimits": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "required": [
+        "maximumGpuMilliseconds"
+      ],
+      "properties": {
+        "maximumGpuMilliseconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false
+    },
+    "currencyLimits": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "maximumCost",
+        "reservedCost"
+      ],
+      "properties": {
+        "maximumCost": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Cost"
+        },
+        "reservedCost": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Cost"
+        }
+      },
+      "additionalProperties": false
+    },
+    "reservationId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ReservationId"
+    },
+    "exceedBehavior": {
+      "enum": [
+        "refuse",
+        "pause-for-approval",
+        "cancel"
+      ]
+    },
+    "policy": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PolicyReference"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "AgentBudget",
+    "componentName": "anvilkit.contract.schema.agent-budget",
+    "owner": "Pagix Policy and Platform Dispatch owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/modelLimits",
+      "/tokenLimits",
+      "/workerLimits",
+      "/gpuLimits",
+      "/currencyLimits",
+      "/reservationId",
+      "/exceedBehavior"
+    ],
+    "maximumSerializedBytes": 16384,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json",
+      "contracts/agent/openapi/pagix-agent-integration.openapi.json"
+    ]
+  }
+}
