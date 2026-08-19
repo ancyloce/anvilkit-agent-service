@@ -1256,6 +1256,7 @@ func assertDurableAtomicCounts(t *testing.T, ctx context.Context, pool *pgxpool.
 func durableAuthority() runs.Authority {
 	policy := []byte(`{"policyId":"policy.synthetic","version":"v1","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)
 	return runs.Authority{
+		Definition:  []byte(`{"definitionId":"definition.synthetic.001","definitionDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}`),
 		ContractBOM: []byte(`{"repository":"anvilkit/contracts","bomDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ociManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidenceManifestDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}`),
 		Policy:      policy,
 		Budget:      []byte(`{"kind":"AgentBudget","modelLimits":{"maximumCalls":10,"maximumConcurrentCalls":2},"tokenLimits":{"inputTokens":4096,"outputTokens":2048,"totalTokens":6144},"workerLimits":{"maximumAttempts":4,"maximumDurationMilliseconds":60000},"gpuLimits":{"maximumGpuMilliseconds":0},"currencyLimits":{"maximumCost":{"amount":"1000","currency":"USD"},"reservedCost":{"amount":"500","currency":"USD"}},"reservationId":"reservation.synthetic.001","exceedBehavior":"refuse","policy":` + string(policy) + `}`),
@@ -1398,12 +1399,18 @@ func assertAtomicEventsAndInbox(t *testing.T, ctx context.Context, pool *pgxpool
 
 func validEventBytes(eventID, runID string, sequence uint64, eventType string) []byte {
 	value := map[string]any{
-		"kind":       "AgentEvent",
-		"eventId":    eventID,
-		"runId":      runID,
-		"sequence":   sequence,
-		"eventType":  eventType,
-		"occurredAt": "2026-08-13T12:00:00.000Z",
+		"kind":        "AgentEvent",
+		"eventId":     eventID,
+		"runId":       runID,
+		"workspaceId": "w",
+		"projectId":   "p",
+		"sequence":    sequence,
+		"eventType":   eventType,
+		"occurredAt":  "2026-08-13T12:00:00.000Z",
+		"subject": map[string]string{
+			"subjectType": "system",
+			"subjectId":   "agent-service",
+		},
 		"traceContext": map[string]string{
 			"traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
 		},
