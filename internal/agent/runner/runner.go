@@ -1,0 +1,582 @@
+// Package runner implements the thin AgentRunner: one provider-neutral turn
+// at a time against a digest-pinned definition and authorized compiled
+// context. The runner resolves exactly one TurnDecision per turn and owns no
+// retries, durable waits, cancellation, checkpoints, artifacts, approval,
+// budget authority, or commits.
+package runner
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
+	"github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler"
+	"github.com/ancyloce/anvilkit-agent-service/internal/modelgateway"
+	"github.com/ancyloce/anvilkit-agent-service/internal/planning"
+	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
+	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
+)
+
+// ContextCompiler compiles the authorized trust layers for one turn.
+type ContextCompiler interface {
+	Compile(context.Context, contextcompiler.Request) (contextcompiler.Result, error)
+}
+
+// Selector resolves the policy-eligible provider selection for one turn.
+type Selector interface {
+	Select(ctx context.Context, workspaceID string, policy agent.PolicyReference) (modelgateway.Selection, error)
+}
+
+// Invoker performs one policy-eligible provider invocation. The gateway
+// satisfies this interface; the runner layers strict typed-plan validation
+// and bounded repair on top of it.
+type Invoker interface {
+	Invoke(context.Context, modelgateway.InvokeRequest) (modelgateway.AdapterResponse, modelgateway.InvocationRecord, error)
+}
+
+// ActionGuard is the mandatory Tool Guard evaluation boundary.
+type ActionGuard interface {
+	Evaluate(context.Context, tools.Intent, tools.CurrentAuthority, tools.Proposal) (tools.Decision, error)
+}
+
+// AuthorityView re-reads current authority immediately before a guarded
+// action.
+type AuthorityView interface {
+	Current(ctx context.Context, view RunView) (tools.CurrentAuthority, error)
+}
+
+// CandidateValidator validates a candidate document against one pinned
+// schema reference and fails closed on unknown references.
+type CandidateValidator interface {
+	Validate(ctx context.Context, reference agent.SchemaReference, candidate json.RawMessage) error
+}
+
+type Clock interface{ Now() time.Time }
+
+// RunView is the bounded run identity the runner may disclose to planning.
+type RunView struct {
+	RunID       string `json:"runId"`
+	WorkspaceID string `json:"workspaceId"`
+	ProjectID   string `json:"projectId"`
+	ActorID     string `json:"actorId"`
+	Domain      string `json:"domain"`
+	Operation   string `json:"operation"`
+	TargetType  string `json:"targetType"`
+	TargetID    string `json:"targetId"`
+}
+
+// BudgetView is the remaining budget the executor derived from the pinned
+// AgentBudget and recorded usage. The runner enforces it before every model
+// call; it never mutates budget authority.
+type BudgetView struct {
+	RemainingModelCalls   int64  `json:"remainingModelCalls"`
+	RemainingInputTokens  int64  `json:"remainingInputTokens"`
+	RemainingOutputTokens int64  `json:"remainingOutputTokens"`
+	RemainingCostMicros   int64  `json:"remainingCostMicros"`
+	ExceedBehavior        string `json:"exceedBehavior"`
+}
+
+// Limits bound one provider invocation.
+type Limits struct {
+	MaximumOutputBytes  int
+	MaximumInputTokens  int64
+	MaximumOutputTokens int64
+	Timeout             time.Duration
+	MaximumAttempts     int
+	RetryBudget         time.Duration
+	ContextTokens       int
+}
+
+func (l Limits) validate() error {
+	if l.MaximumOutputBytes < 1 || l.MaximumInputTokens < 1 || l.MaximumOutputTokens < 1 || l.Timeout <= 0 || l.MaximumAttempts < 1 || l.RetryBudget < 0 || l.ContextTokens < 1 {
+		return fmt.Errorf("agent runner limits must be positive")
+	}
+	return nil
+}
+
+const (
+	PhasePlan     = "plan"
+	PhaseRevise   = "revise"
+	PhaseDelegate = "delegate"
+)
+
+type TurnRequest struct {
+	Definition      agent.Definition
+	Run             RunView
+	Phase           string
+	Turn            int
+	Depth           int
+	Notes           []string
+	InputValue      json.RawMessage
+	ReviewReason    string
+	DelegationsUsed int
+	Budget          BudgetView
+}
+
+// Halted is a typed budget or limit stop with the deterministic behavior the
+// pinned budget demands.
+type Halted struct {
+	Problem problem.Details
+	Refuse  bool
+}
+
+type TurnOutcome struct {
+	Decision agent.TurnDecision
+	Usage    agent.Usage
+	Notes    []string
+	Halted   *Halted
+}
+
+type DelegateRequest struct {
+	Parent          agent.Definition
+	Decision        agent.DelegateDecision
+	Run             RunView
+	Depth           int
+	DelegationsUsed int
+	Notes           []string
+	Budget          BudgetView
+}
+
+type DelegateOutcome struct {
+	Candidate json.RawMessage
+	Refused   *problem.Details
+	Usage     agent.Usage
+	Notes     []string
+	Halted    *Halted
+}
+
+// Runner executes turns. It is stateless between calls.
+type Runner struct {
+	registry  *agent.Registry
+	compiler  ContextCompiler
+	selector  Selector
+	invoker   Invoker
+	guard     ActionGuard
+	authority AuthorityView
+	validator CandidateValidator
+	clock     Clock
+	limits    Limits
+}
+
+type Config struct {
+	Registry  *agent.Registry
+	Compiler  ContextCompiler
+	Selector  Selector
+	Invoker   Invoker
+	Guard     ActionGuard
+	Authority AuthorityView
+	Validator CandidateValidator
+	Clock     Clock
+	Limits    Limits
+}
+
+func New(cfg Config) (*Runner, error) {
+	if cfg.Registry == nil || cfg.Compiler == nil || cfg.Selector == nil || cfg.Invoker == nil || cfg.Guard == nil || cfg.Authority == nil || cfg.Validator == nil || cfg.Clock == nil {
+		return nil, fmt.Errorf("agent runner: every pipeline dependency is required")
+	}
+	if err := cfg.Limits.validate(); err != nil {
+		return nil, err
+	}
+	return &Runner{registry: cfg.Registry, compiler: cfg.Compiler, selector: cfg.Selector, invoker: cfg.Invoker, guard: cfg.Guard, authority: cfg.Authority, validator: cfg.Validator, clock: cfg.Clock, limits: cfg.Limits}, nil
+}
+
+// reserved tool names map typed plans onto the explicit TurnDecision
+// vocabulary. Any other agent.* name is invalid and resolves to a refusal;
+// any non-reserved name is a tool call proposal.
+const (
+	planContinue  = "agent.continue"
+	planNeedInput = "agent.need-input"
+	planDelegate  = "agent.delegate"
+	planFinal     = "agent.final"
+	planRefuse    = "agent.refuse"
+)
+
+// Turn executes one bounded reasoning turn: budget precheck, authorized
+// context compilation, one policy-eligible provider invocation with bounded
+// repair, and deterministic TurnDecision resolution.
+func (r *Runner) Turn(ctx context.Context, request TurnRequest) (TurnOutcome, error) {
+	if halted := precheck(request.Budget); halted != nil {
+		return TurnOutcome{Halted: halted}, nil
+	}
+	instruction, err := r.registry.Instruction(request.Definition.DefinitionID)
+	if err != nil {
+		return TurnOutcome{}, err
+	}
+	compiled, err := r.compileContext(ctx, instruction, request)
+	if err != nil {
+		return TurnOutcome{}, fmt.Errorf("compile turn context: %w", err)
+	}
+	selection, err := r.selector.Select(ctx, request.Run.WorkspaceID, request.Definition.ModelPolicy)
+	if err != nil {
+		return TurnOutcome{}, fmt.Errorf("select eligible provider: %w", err)
+	}
+	costCap := request.Budget.RemainingCostMicros
+	if selection.MaximumCostMicros < costCap {
+		costCap = selection.MaximumCostMicros
+	}
+	invoke := modelgateway.InvokeRequest{
+		RunID:               request.Run.RunID,
+		WorkspaceID:         request.Run.WorkspaceID,
+		ProjectID:           request.Run.ProjectID,
+		Selection:           selection,
+		Context:             compiled,
+		DataClasses:         []modelgateway.DataClass{"public", "internal"},
+		MaximumOutputBytes:  r.limits.MaximumOutputBytes,
+		MaximumInputTokens:  minimum64(r.limits.MaximumInputTokens, request.Budget.RemainingInputTokens),
+		MaximumOutputTokens: minimum64(r.limits.MaximumOutputTokens, request.Budget.RemainingOutputTokens),
+		MaximumCostMicros:   costCap,
+		Timeout:             r.limits.Timeout,
+		MaximumAttempts:     r.limits.MaximumAttempts,
+		RetryBudget:         r.limits.RetryBudget,
+		Scenario:            "agent-turn",
+	}
+	repairs := request.Definition.RepairPolicy.MaximumAttempts
+	if request.Definition.RepairPolicy.Mode == "reject" {
+		repairs = 0
+	}
+	planResult, planErr := r.plan(ctx, invoke, repairs)
+	usage := usageOf(planResult)
+	if planErr != nil {
+		var details problem.Details
+		if !errors.As(planErr, &details) {
+			return TurnOutcome{}, fmt.Errorf("plan turn: %w", planErr)
+		}
+		// Typed-plan rejection after bounded repair resolves to an explicit
+		// refusal decision; ambiguous fallthrough is impossible.
+		return TurnOutcome{
+			Decision: agent.TurnDecision{Kind: agent.DecisionRefuse, Refuse: &agent.RefuseDecision{Reason: "typed plan failed bounded validation and repair"}},
+			Usage:    usage,
+			Notes:    []string{"planning rejected: " + details.Code},
+		}, nil
+	}
+	decision, invalidReason := r.resolveDecision(planResult.Plan, request)
+	if invalidReason != "" {
+		return TurnOutcome{
+			Decision: agent.TurnDecision{Kind: agent.DecisionRefuse, Refuse: &agent.RefuseDecision{Reason: invalidReason}},
+			Usage:    usage,
+			Notes:    []string{"decision rejected: " + invalidReason},
+		}, nil
+	}
+	if err := decision.Validate(); err != nil {
+		return TurnOutcome{
+			Decision: agent.TurnDecision{Kind: agent.DecisionRefuse, Refuse: &agent.RefuseDecision{Reason: "turn decision violates the bounded contract"}},
+			Usage:    usage,
+			Notes:    []string{"decision rejected: bounded contract violation"},
+		}, nil
+	}
+	return TurnOutcome{Decision: decision, Usage: usage}, nil
+}
+
+// GuardAction evaluates the mandatory Tool Guard for one proposed tool call
+// against re-read current authority. Denials return the typed problem and
+// the recorded decision.
+func (r *Runner) GuardAction(ctx context.Context, definition agent.Definition, run RunView, proposal agent.ToolCallDecision) (tools.Decision, error) {
+	current, err := r.authority.Current(ctx, run)
+	if err != nil {
+		return tools.Decision{}, fmt.Errorf("read current authority: %w", err)
+	}
+	allowed := make([]string, 0, len(definition.ToolProfile.Tools))
+	for _, tool := range definition.ToolProfile.Tools {
+		allowed = append(allowed, tool.ComponentName)
+	}
+	intent := tools.Intent{
+		RunID:          run.RunID,
+		WorkspaceID:    run.WorkspaceID,
+		ProjectID:      run.ProjectID,
+		ActorID:        run.ActorID,
+		AllowedTools:   allowed,
+		AllowedEffects: []string{"read"},
+		MaximumRisk:    "low",
+		DataClasses:    []string{"public", "internal"},
+	}
+	return r.guard.Evaluate(ctx, intent, current, tools.Proposal{ToolID: proposal.ToolID, Arguments: proposal.Arguments})
+}
+
+// ValidateCandidate validates a final candidate against the definition's
+// pinned output schema reference.
+func (r *Runner) ValidateCandidate(ctx context.Context, definition agent.Definition, candidate json.RawMessage) error {
+	return r.validator.Validate(ctx, definition.OutputSchema, candidate)
+}
+
+// Delegate runs one bounded Specialist invocation inside the parent run
+// boundary. Depth, fan-out, authority, and budget constraints are enforced
+// before any specialist turn executes.
+func (r *Runner) Delegate(ctx context.Context, request DelegateRequest) (DelegateOutcome, error) {
+	if !request.Parent.AllowsDelegate(request.Decision.DelegateID) {
+		return refusedDelegation("delegate is not in the pinned allowed-delegate set"), nil
+	}
+	if request.Depth+1 > request.Parent.MaximumDelegationDepth {
+		return refusedDelegation("delegation exceeds the pinned maximum depth"), nil
+	}
+	if request.DelegationsUsed+1 > request.Parent.MaximumFanOut {
+		return refusedDelegation("delegation exceeds the pinned maximum fan-out"), nil
+	}
+	specialist, err := r.registry.ResolveDelegate(request.Decision.DelegateID)
+	if err != nil {
+		return refusedDelegation("delegate is not resolvable in the approved registry"), nil
+	}
+	if err := r.validator.Validate(ctx, specialist.InputSchema, request.Decision.Input); err != nil {
+		return refusedDelegation("delegate input violates the specialist input schema"), nil
+	}
+	outcome := DelegateOutcome{}
+	notes := append([]string{}, request.Notes...)
+	notes = append(notes, "delegated task input accepted")
+	budget := request.Budget
+	for turn := 0; turn < specialist.TurnLimit; turn++ {
+		turnOutcome, err := r.Turn(ctx, TurnRequest{
+			Definition:      specialist,
+			Run:             request.Run,
+			Phase:           PhaseDelegate,
+			Turn:            turn,
+			Depth:           request.Depth + 1,
+			Notes:           append(notes, "delegated input: "+truncate(string(request.Decision.Input), 2048)),
+			DelegationsUsed: 0,
+			Budget:          budget,
+		})
+		if err != nil {
+			return DelegateOutcome{}, err
+		}
+		outcome.Usage = outcome.Usage.Add(turnOutcome.Usage)
+		budget = consume(budget, turnOutcome.Usage)
+		outcome.Notes = append(outcome.Notes, turnOutcome.Notes...)
+		if turnOutcome.Halted != nil {
+			outcome.Halted = turnOutcome.Halted
+			return outcome, nil
+		}
+		switch turnOutcome.Decision.Kind {
+		case agent.DecisionContinue:
+			if turnOutcome.Decision.Continue.Note != "" {
+				notes = append(notes, "specialist: "+turnOutcome.Decision.Continue.Note)
+			}
+			continue
+		case agent.DecisionFinal:
+			if err := r.validator.Validate(ctx, specialist.OutputSchema, turnOutcome.Decision.Final.Candidate); err != nil {
+				refused := problem.New(problem.CodeContractInvalid, "")
+				refused.Detail = "specialist candidate violates the pinned output schema"
+				outcome.Refused = &refused
+				return outcome, nil
+			}
+			outcome.Candidate = turnOutcome.Decision.Final.Candidate
+			outcome.Notes = append(outcome.Notes, "specialist candidate accepted")
+			return outcome, nil
+		case agent.DecisionRefuse:
+			refused := problem.New(problem.CodePolicyDenied, "")
+			refused.Detail = turnOutcome.Decision.Refuse.Reason
+			outcome.Refused = &refused
+			return outcome, nil
+		default:
+			// Specialists may only continue, finalize, or refuse inside a
+			// delegation boundary.
+			refused := problem.New(problem.CodePolicyDenied, "")
+			refused.Detail = "specialist produced a decision outside the delegation contract"
+			outcome.Refused = &refused
+			return outcome, nil
+		}
+	}
+	refused := problem.New(problem.CodeLimitExceeded, "")
+	refused.Detail = "specialist reached the pinned turn limit without a candidate"
+	outcome.Refused = &refused
+	return outcome, nil
+}
+
+func (r *Runner) plan(ctx context.Context, invoke modelgateway.InvokeRequest, repairs int) (planning.Result, error) {
+	engine, err := planning.New(r.invoker, 8, boundRepairs(repairs))
+	if err != nil {
+		return planning.Result{}, err
+	}
+	return engine.Plan(ctx, invoke)
+}
+
+func (r *Runner) compileContext(ctx context.Context, instruction string, request TurnRequest) ([]byte, error) {
+	sources := []contextcompiler.Source{
+		{ID: "instruction", Trust: contextcompiler.System, Classification: contextcompiler.Internal, Content: instruction, WorkspaceID: request.Run.WorkspaceID, TokenBudget: r.limits.ContextTokens / 4},
+		{ID: "task", Trust: contextcompiler.Agent, Classification: contextcompiler.Internal, Content: taskDescription(request), WorkspaceID: request.Run.WorkspaceID, TokenBudget: r.limits.ContextTokens / 4},
+	}
+	if len(request.InputValue) > 0 {
+		sources = append(sources, contextcompiler.Source{ID: "input-response", Trust: contextcompiler.User, Classification: contextcompiler.Internal, Content: string(request.InputValue), WorkspaceID: request.Run.WorkspaceID, TokenBudget: r.limits.ContextTokens / 8})
+	}
+	if request.ReviewReason != "" {
+		sources = append(sources, contextcompiler.Source{ID: "review-guidance", Trust: contextcompiler.User, Classification: contextcompiler.Internal, Content: request.ReviewReason, WorkspaceID: request.Run.WorkspaceID, TokenBudget: r.limits.ContextTokens / 8})
+	}
+	for index, note := range boundedNotes(request.Notes) {
+		sources = append(sources, contextcompiler.Source{ID: fmt.Sprintf("note-%02d", index), Trust: contextcompiler.ToolOutput, Classification: contextcompiler.Internal, Content: note, WorkspaceID: request.Run.WorkspaceID, TokenBudget: r.limits.ContextTokens / 16})
+	}
+	compiled, err := r.compiler.Compile(ctx, contextcompiler.Request{
+		WorkspaceID:     request.Run.WorkspaceID,
+		ProjectID:       request.Run.ProjectID,
+		RunID:           request.Run.RunID,
+		Sources:         sources,
+		Policy:          contextcompiler.PolicyReference{PolicyID: request.Definition.GuardrailPolicy.PolicyID, Version: request.Definition.GuardrailPolicy.Version, Digest: request.Definition.GuardrailPolicy.Digest},
+		RedactionPolicy: contextcompiler.PolicyReference{PolicyID: request.Definition.GuardrailPolicy.PolicyID, Version: request.Definition.GuardrailPolicy.Version, Digest: request.Definition.GuardrailPolicy.Digest},
+		TotalTokens:     r.limits.ContextTokens,
+		CompiledAt:      r.clock.Now(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	var builder strings.Builder
+	for _, layer := range compiled.Disclosure {
+		builder.WriteString("[" + string(layer.Trust) + ":" + layer.LayerID + "]\n")
+		builder.WriteString(layer.Content)
+		builder.WriteString("\n")
+	}
+	return []byte(builder.String()), nil
+}
+
+// resolveDecision maps the first validated typed-plan step onto the explicit
+// decision vocabulary and enforces every definition constraint the decision
+// depends on. It returns a non-empty reason when the proposal is invalid.
+func (r *Runner) resolveDecision(plan planning.Plan, request TurnRequest) (agent.TurnDecision, string) {
+	first := plan.Steps[0]
+	arguments := func() json.RawMessage {
+		raw, err := json.Marshal(first.Arguments)
+		if err != nil {
+			return nil
+		}
+		return raw
+	}
+	switch first.Tool {
+	case planContinue:
+		note := stringArgument(first.Arguments, "note")
+		return agent.TurnDecision{Kind: agent.DecisionContinue, Continue: &agent.ContinueDecision{Note: note}}, ""
+	case planNeedInput:
+		question := stringArgument(first.Arguments, "question")
+		if question == "" {
+			return agent.TurnDecision{}, "input request requires a bounded question"
+		}
+		if !hasStopCondition(request.Definition, "input-required") {
+			return agent.TurnDecision{}, "definition does not allow input requests"
+		}
+		return agent.TurnDecision{Kind: agent.DecisionNeedInput, NeedInput: &agent.NeedInputDecision{Question: question}}, ""
+	case planDelegate:
+		delegate := stringArgument(first.Arguments, "delegate")
+		input, hasInput := first.Arguments["input"]
+		if delegate == "" || !hasInput {
+			return agent.TurnDecision{}, "delegation requires a delegate identity and input"
+		}
+		if !request.Definition.AllowsDelegate(delegate) {
+			return agent.TurnDecision{}, "delegate is not in the pinned allowed-delegate set"
+		}
+		return agent.TurnDecision{Kind: agent.DecisionDelegate, Delegate: &agent.DelegateDecision{DelegateID: delegate, Input: append(json.RawMessage(nil), input...)}}, ""
+	case planFinal:
+		candidate, hasCandidate := first.Arguments["candidate"]
+		if !hasCandidate {
+			return agent.TurnDecision{}, "final decision requires a candidate document"
+		}
+		summary := stringArgument(first.Arguments, "summary")
+		return agent.TurnDecision{Kind: agent.DecisionFinal, Final: &agent.FinalDecision{Candidate: append(json.RawMessage(nil), candidate...), Summary: summary}}, ""
+	case planRefuse:
+		reason := stringArgument(first.Arguments, "reason")
+		if reason == "" {
+			return agent.TurnDecision{}, "refusal requires a bounded reason"
+		}
+		return agent.TurnDecision{Kind: agent.DecisionRefuse, Refuse: &agent.RefuseDecision{Reason: reason}}, ""
+	default:
+		if strings.HasPrefix(first.Tool, "agent.") {
+			return agent.TurnDecision{}, "plan proposed an unknown reserved decision"
+		}
+		if !request.Definition.AllowsTool(first.Tool) {
+			return agent.TurnDecision{}, "plan proposed a tool outside the pinned profile"
+		}
+		raw := arguments()
+		if raw == nil {
+			return agent.TurnDecision{}, "tool arguments are not serializable"
+		}
+		return agent.TurnDecision{Kind: agent.DecisionToolCall, ToolCall: &agent.ToolCallDecision{ToolID: first.Tool, Arguments: raw}}, ""
+	}
+}
+
+func precheck(budget BudgetView) *Halted {
+	if budget.RemainingModelCalls >= 1 && budget.RemainingInputTokens >= 1 && budget.RemainingOutputTokens >= 1 && budget.RemainingCostMicros >= 1 {
+		return nil
+	}
+	details := problem.New(problem.CodeBudgetDenied, "")
+	details.Detail = "the pinned agent budget is exhausted"
+	return &Halted{Problem: details, Refuse: budget.ExceedBehavior == "refuse"}
+}
+
+func consume(budget BudgetView, usage agent.Usage) BudgetView {
+	budget.RemainingModelCalls -= usage.ModelCalls
+	budget.RemainingInputTokens -= usage.InputTokens
+	budget.RemainingOutputTokens -= usage.OutputTokens
+	budget.RemainingCostMicros -= usage.CostMicros
+	return budget
+}
+
+func refusedDelegation(reason string) DelegateOutcome {
+	refused := problem.New(problem.CodePolicyDenied, "")
+	refused.Detail = reason
+	return DelegateOutcome{Refused: &refused}
+}
+
+func usageOf(result planning.Result) agent.Usage {
+	usage := agent.Usage{}
+	for _, attempt := range result.Attempts {
+		usage.ModelCalls++
+		usage.InputTokens += attempt.Invocation.InputTokens
+		usage.OutputTokens += attempt.Invocation.OutputTokens
+		usage.CostMicros += attempt.Invocation.CostMicros
+	}
+	return usage
+}
+
+func taskDescription(request TurnRequest) string {
+	return fmt.Sprintf("phase=%s turn=%d domain=%s operation=%s target=%s:%s", request.Phase, request.Turn, request.Run.Domain, request.Run.Operation, request.Run.TargetType, request.Run.TargetID)
+}
+
+func hasStopCondition(definition agent.Definition, condition string) bool {
+	for _, stop := range definition.StopConditions {
+		if stop == condition {
+			return true
+		}
+	}
+	return false
+}
+
+func stringArgument(arguments map[string]json.RawMessage, key string) string {
+	raw, present := arguments[key]
+	if !present {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return value
+}
+
+func boundedNotes(notes []string) []string {
+	const maximumNotes = 16
+	if len(notes) <= maximumNotes {
+		return notes
+	}
+	return notes[len(notes)-maximumNotes:]
+}
+
+func boundRepairs(value int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > 3 {
+		return 3
+	}
+	return value
+}
+
+func minimum64(left, right int64) int64 {
+	if left < right {
+		return left
+	}
+	return right
+}
+
+func truncate(value string, maximum int) string {
+	if len(value) <= maximum {
+		return value
+	}
+	return value[:maximum]
+}
