@@ -20,11 +20,12 @@ const (
 	FactRetry           FactClass = "retry"
 	FactDiscard         FactClass = "discard"
 	FactAuthorization   FactClass = "authorization-issuance"
+	FactDecision        FactClass = "turn-decision"
 	FactPrivilegedAudit FactClass = "privileged-audit"
 )
 
 func Classes() []FactClass {
-	return []FactClass{FactCreate, FactInput, FactApproval, FactCancel, FactRetry, FactDiscard, FactAuthorization, FactPrivilegedAudit}
+	return []FactClass{FactCreate, FactInput, FactApproval, FactCancel, FactRetry, FactDiscard, FactAuthorization, FactDecision, FactPrivilegedAudit}
 }
 
 type Fact struct {
