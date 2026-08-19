@@ -76,7 +76,7 @@ func (s *Store) Create(ctx context.Context, record runs.CreateRecord) (runs.Crea
 		if err := s.fail(AfterOutboxWrite); err != nil {
 			return idempotency.Response{}, err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO agent_workflow.checkpoints(workspace_id,project_id,workflow_id,workflow_version,step_name,state_bytes) VALUES($1,$2,$3,1,'created',$4)`, record.Scope.WorkspaceID, record.Scope.ProjectID, string(record.Snapshot.RunID)+":v1", bytes); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO agent_workflow.checkpoints(workspace_id,project_id,workflow_id,workflow_version,step_name,state_bytes) VALUES($1,$2,$3,1,'created',$4)`, record.Scope.WorkspaceID, record.Scope.ProjectID, string(record.Snapshot.RunID)+":g1", bytes); err != nil {
 			return idempotency.Response{}, fmt.Errorf("persist created checkpoint: %w", err)
 		}
 		if err := s.fail(AfterCheckpointWrite); err != nil {
@@ -228,7 +228,7 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 	if updated.Problem == nil {
 		problemBytes = nil
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO agent_workflow.checkpoints(workspace_id,project_id,workflow_id,workflow_version,step_name,state_bytes,problem_bytes) VALUES($1,$2,$3,1,$4,$5,$6)`, scope.WorkspaceID, scope.ProjectID, string(id)+":v1", fmt.Sprintf("%s-v%d", updated.State, updated.Version), updatedBytes, problemBytes); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO agent_workflow.checkpoints(workspace_id,project_id,workflow_id,workflow_version,step_name,state_bytes,problem_bytes) VALUES($1,$2,$3,1,$4,$5,$6)`, scope.WorkspaceID, scope.ProjectID, string(id)+":g1", fmt.Sprintf("%s-v%d", updated.State, updated.Version), updatedBytes, problemBytes); err != nil {
 		return runs.Snapshot{}, err
 	}
 	if err := s.fail(AfterCheckpointWrite); err != nil {

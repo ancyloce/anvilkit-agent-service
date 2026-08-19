@@ -215,7 +215,9 @@ func allowedTarget(state State, command CommandKind) (State, bool) {
 	case ReconcileCancellation:
 		return Cancelled, state == Cancelling
 	case RecordFailure:
-		return Failed, state == Preparing || state == Planning || state == Executing || state == Validating
+		// awaiting_input and awaiting_approval fail on durable expiry
+		// (design 0005 §5: "expired" edges).
+		return Failed, state == Preparing || state == Planning || state == Executing || state == Validating || state == AwaitingInput || state == AwaitingApproval
 	case RecordRefusal:
 		return Refused, state == Preparing || state == Planning || state == Validating
 	case Retry:

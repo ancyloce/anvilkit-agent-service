@@ -141,10 +141,10 @@ type PageInfo struct {
 	NextCursor string `json:"nextCursor,omitempty"`
 }
 type Start struct {
-	WorkflowID string
-	Scope      Scope
-	RunID      ID
-	Version    int
+	Scope       Scope
+	RunID       ID
+	Generation  uint64
+	Traceparent string
 }
 type Starter interface {
 	Ensure(context.Context, Start) error
@@ -259,7 +259,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CreateOutcome,
 	if _, err := s.receipts.Append(ctx, fact); err != nil {
 		return CreateOutcome{}, fmt.Errorf("create authority fact remains unacknowledged: %w", err)
 	}
-	if err := s.starter.Ensure(ctx, Start{WorkflowID: string(outcome.Snapshot.RunID) + ":v1", Scope: input.Scope, RunID: outcome.Snapshot.RunID, Version: 1}); err != nil {
+	if err := s.starter.Ensure(ctx, Start{Scope: input.Scope, RunID: outcome.Snapshot.RunID, Generation: 1, Traceparent: input.Traceparent}); err != nil {
 		return CreateOutcome{}, fmt.Errorf("ensure durable create workflow: %w", err)
 	}
 	return outcome, nil
