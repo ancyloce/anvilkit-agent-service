@@ -83,9 +83,6 @@ func (s *Service) RequestInput(ctx context.Context, write Write, command OpenInp
 	if err != nil {
 		return InputRequest{}, OperationResult{}, err
 	}
-	if err := s.runtime.OpenWait(ctx, write.Scope, inputWaitWorkflowID(write.RunID, stored.ID), inputTopic(stored.ID), stored.ExpiresAt.Sub(now)); err != nil {
-		return InputRequest{}, OperationResult{}, fmt.Errorf("open durable input wait: %w", err)
-	}
 	return stored, result, nil
 }
 
@@ -119,7 +116,7 @@ func (s *Service) RespondInput(ctx context.Context, write Write, command InputRe
 		return OperationResult{}, err
 	}
 	payload, _ := json.Marshal(command)
-	if err := s.runtime.Signal(ctx, inputWaitWorkflowID(write.RunID, command.RequestID), inputTopic(command.RequestID), payload, write.IdempotencyKey); err != nil {
+	if err := s.runtime.Signal(ctx, executionWorkflowID(write.RunID, result.Snapshot.ExecutionGeneration), inputTopic(command.RequestID), payload, write.IdempotencyKey); err != nil {
 		return OperationResult{}, fmt.Errorf("signal durable input wait after accepted fact: %w", err)
 	}
 	if err := s.runtime.ResumeRun(ctx, write.Scope, result.Snapshot, request.ResumeCheckpoint, "input:"+string(request.ID)); err != nil {
@@ -161,9 +158,6 @@ func (s *Service) RequestApproval(ctx context.Context, write Write, command Open
 	if err != nil {
 		return ApprovalRequest{}, OperationResult{}, err
 	}
-	if err := s.runtime.OpenWait(ctx, write.Scope, approvalWaitWorkflowID(write.RunID, stored.ID), approvalTopic(stored.ID), stored.ExpiresAt.Sub(now)); err != nil {
-		return ApprovalRequest{}, OperationResult{}, fmt.Errorf("open durable approval wait: %w", err)
-	}
 	return stored, result, nil
 }
 
@@ -194,7 +188,7 @@ func (s *Service) DecideApproval(ctx context.Context, write Write, command Appro
 		return OperationResult{}, err
 	}
 	payload, _ := json.Marshal(command)
-	if err := s.runtime.Signal(ctx, approvalWaitWorkflowID(write.RunID, command.RequestID), approvalTopic(command.RequestID), payload, write.IdempotencyKey); err != nil {
+	if err := s.runtime.Signal(ctx, executionWorkflowID(write.RunID, result.Snapshot.ExecutionGeneration), approvalTopic(command.RequestID), payload, write.IdempotencyKey); err != nil {
 		return OperationResult{}, fmt.Errorf("signal durable approval wait after accepted fact: %w", err)
 	}
 	if command.Decision == DecisionReject || command.Decision == DecisionChange {
@@ -405,14 +399,7 @@ func digestFor(write Write, value any) (string, error) {
 
 func clone(value json.RawMessage) json.RawMessage { return append(json.RawMessage(nil), value...) }
 func executionWorkflowID(id runs.ID, generation uint64) string {
-	return fmt.Sprintf("%s:v%d", id, generation)
-}
-func workflowID(id runs.ID) string { return executionWorkflowID(id, 1) }
-func inputWaitWorkflowID(id runs.ID, request RequestID) string {
-	return workflowID(id) + ":input:" + string(request)
-}
-func approvalWaitWorkflowID(id runs.ID, request RequestID) string {
-	return workflowID(id) + ":approval:" + string(request)
+	return fmt.Sprintf("%s:g%d", id, generation)
 }
 func inputTopic(id RequestID) string    { return "input:" + string(id) }
 func approvalTopic(id RequestID) string { return "approval:" + string(id) }

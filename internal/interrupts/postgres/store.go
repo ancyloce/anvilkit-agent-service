@@ -389,7 +389,7 @@ func (s *Store) CreateChild(ctx context.Context, write interrupts.Write, child i
 		if err := s.persistEvent(ctx, tx, childWrite, 1, childSnapshot.LatestEventID, event, child.CreatedAt); err != nil {
 			return nil, err
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO agent_workflow.checkpoints(workspace_id,project_id,workflow_id,workflow_version,step_name,state_bytes) VALUES($1,$2,$3,1,'created',$4)`, write.Scope.WorkspaceID, write.Scope.ProjectID, string(child.RunID)+":v1", childBytes); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO agent_workflow.checkpoints(workspace_id,project_id,workflow_id,workflow_version,step_name,state_bytes) VALUES($1,$2,$3,1,'created',$4)`, write.Scope.WorkspaceID, write.Scope.ProjectID, string(child.RunID)+":g1", childBytes); err != nil {
 			return nil, err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO agent_control.run_progress(workspace_id,project_id,run_id,state,entered_at,progress_at) VALUES($1,$2,$3,$4,$5,$5)`, write.Scope.WorkspaceID, write.Scope.ProjectID, child.RunID, runs.Created, child.CreatedAt); err != nil {
@@ -606,7 +606,7 @@ func (s *Store) transition(ctx context.Context, tx pgx.Tx, write interrupts.Writ
 	if snapshot.Problem == nil {
 		problemBytes = nil
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO agent_workflow.checkpoints(workspace_id,project_id,workflow_id,workflow_version,step_name,state_bytes,problem_bytes) VALUES($1,$2,$3,1,$4,$5,$6)`, write.Scope.WorkspaceID, write.Scope.ProjectID, string(write.RunID)+":v1", fmt.Sprintf("%s-v%d", snapshot.Status, snapshot.Version), raw, problemBytes); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO agent_workflow.checkpoints(workspace_id,project_id,workflow_id,workflow_version,step_name,state_bytes,problem_bytes) VALUES($1,$2,$3,1,$4,$5,$6)`, write.Scope.WorkspaceID, write.Scope.ProjectID, string(write.RunID)+":g1", fmt.Sprintf("%s-v%d", snapshot.Status, snapshot.Version), raw, problemBytes); err != nil {
 		return runs.Snapshot{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO agent_control.run_progress(workspace_id,project_id,run_id,state,entered_at,progress_at,stuck_at) VALUES($1,$2,$3,$4,$5,$5,NULL) ON CONFLICT(workspace_id,project_id,run_id) DO UPDATE SET state=EXCLUDED.state,entered_at=EXCLUDED.entered_at,progress_at=EXCLUDED.progress_at,stuck_at=NULL`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, snapshot.Status, now); err != nil {

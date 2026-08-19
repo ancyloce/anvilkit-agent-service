@@ -221,10 +221,13 @@ type Authority interface {
 	RetryEligibility(context.Context, runs.Scope, runs.Snapshot) (bool, string, error)
 }
 
+// Runtime drives the canonical AgentRunWorkflow. Input and approval waits
+// live inside the run workflow itself, so opening an interrupt requires no
+// separate durable wait; acceptance signals target the run workflow by
+// execution generation.
 type Runtime interface {
 	Signal(context.Context, string, string, json.RawMessage, string) error
 	StartChild(context.Context, Child) error
-	OpenWait(context.Context, runs.Scope, string, string, time.Duration) error
 	StopRun(context.Context, runs.Scope, runs.ID, uint64) error
 	// ResumeRun must be idempotent for a run, execution generation, and resume
 	// key. An empty key identifies the generation-level explicit retry.

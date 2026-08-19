@@ -54,6 +54,33 @@ func (r *MemoryRepository) Seed(scope runs.Scope, snapshot runs.Snapshot) error 
 	return nil
 }
 
+// Get satisfies the execution pipeline's run-store read port with the same
+// scope enforcement the production store applies.
+func (r *MemoryRepository) Get(ctx context.Context, scope runs.Scope, id runs.ID) (runs.Snapshot, error) {
+	return r.Current(ctx, scope, id)
+}
+
+// Transition satisfies the execution pipeline's compare-and-set port with
+// exactly the aggregate legality the production store enforces. The fake is
+// never looser than the contract it imitates.
+func (r *MemoryRepository) Transition(_ context.Context, scope runs.Scope, id runs.ID, expectedVersion uint64, command runs.Command) (runs.Snapshot, error) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	entry, err := r.scoped(scope, id)
+	if err != nil {
+		return runs.Snapshot{}, err
+	}
+	if entry.snapshot.Version != expectedVersion {
+		return runs.Snapshot{}, problem.New(problem.CodeVersionConflict, "")
+	}
+	snapshot, err := transition(entry.snapshot, command)
+	if err != nil {
+		return runs.Snapshot{}, err
+	}
+	r.advance(entry, snapshot, snapshot.UpdatedAt)
+	return cloneSnapshot(entry.snapshot), nil
+}
+
 func (r *MemoryRepository) Current(_ context.Context, scope runs.Scope, id runs.ID) (runs.Snapshot, error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
