@@ -1,6 +1,6 @@
 {
   "datasetVersion": 1,
-  "datasetId": "agent-service-typed-plan-v1",
+  "datasetId": "agent-service-typed-plan",
   "owner": "Agent Service contract evaluation",
   "cases": [
     {"id":"valid","scenario":"valid","weight":200,"eligible":true,"invalid":false,"forbidden":false,"expectedOutcome":"accepted","expectedTool":"fake.execute","expectedDispatchAllowed":true},
