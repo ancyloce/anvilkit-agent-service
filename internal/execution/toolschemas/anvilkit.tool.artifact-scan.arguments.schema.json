@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Artifact scan tool arguments",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["artifactDigest"],
+  "properties": {
+    "artifactDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

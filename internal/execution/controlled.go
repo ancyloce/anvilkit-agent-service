@@ -459,15 +459,25 @@ func (a *ControlledCommitAuthority) Issue(_ context.Context, request Authorizati
 	defer a.lock.Unlock()
 	a.issued = append(a.issued, request)
 	digest := sha256.Sum256([]byte(request.IdempotencyKey))
-	return IssuedAuthorization{AuthorizationID: "authorization." + hex.EncodeToString(digest[:16])}, nil
+	// The synthetic compact token is deterministic per operation, so a replay
+	// carries byte-identical material; it is not a real signature and only
+	// test domain ports that skip verification accept it.
+	return IssuedAuthorization{
+		AuthorizationID: "authorization." + hex.EncodeToString(digest[:16]),
+		CompactJWS:      "controlled." + hex.EncodeToString(digest[:16]) + ".signature",
+	}, nil
 }
 
-// ControlledArtifactPort answers artifact eligibility for the controlled
-// topology. Every candidate is eligible until it is explicitly withdrawn,
-// which models quarantine, deletion, or expiry between approval and commit.
+// ControlledArtifactPort is the strict in-memory artifact lifecycle for the
+// controlled topology and for executor tests. It enforces the same forward
+// path the real artifact owner enforces — recorded candidates become valid,
+// review acceptance finalizes them, a confirmed effect commits them, and only
+// a finalized artifact is eligible for a governed effect. Withdraw models
+// quarantine, deletion, or expiry between approval and commit.
 type ControlledArtifactPort struct {
 	lock       sync.Mutex
 	ineligible map[string]string
+	states     map[string]string
 	queries    []ArtifactQuery
 }
 
@@ -479,7 +489,7 @@ func (p *ControlledArtifactPort) Queries() []ArtifactQuery {
 }
 
 func NewControlledArtifactPort() *ControlledArtifactPort {
-	return &ControlledArtifactPort{ineligible: make(map[string]string)}
+	return &ControlledArtifactPort{ineligible: make(map[string]string), states: make(map[string]string)}
 }
 
 // Withdraw makes one artifact digest ineligible from the next check onwards.
@@ -487,6 +497,44 @@ func (p *ControlledArtifactPort) Withdraw(artifactDigest, reason string) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	p.ineligible[artifactDigest] = reason
+}
+
+func (p *ControlledArtifactPort) RecordCandidate(_ context.Context, candidate ArtifactCandidate) error {
+	if candidate.WorkspaceID == "" || candidate.ProjectID == "" || candidate.RunID == "" || candidate.Digest == "" || len(candidate.Bytes) == 0 || candidate.OperationKey == "" {
+		return fmt.Errorf("controlled artifact port: a complete candidate identity is required")
+	}
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	if _, recorded := p.states[candidate.Digest]; !recorded {
+		p.states[candidate.Digest] = "valid"
+	}
+	return nil
+}
+
+func (p *ControlledArtifactPort) EnsureFinalized(_ context.Context, query ArtifactQuery) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	switch p.states[query.ArtifactDigest] {
+	case "valid":
+		p.states[query.ArtifactDigest] = "finalized"
+		return nil
+	case "finalized", "committed":
+		return nil
+	default:
+		return fmt.Errorf("controlled artifact port: no valid artifact record to finalize")
+	}
+}
+
+func (p *ControlledArtifactPort) EnsureCommitted(_ context.Context, query ArtifactQuery) error {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	switch p.states[query.ArtifactDigest] {
+	case "finalized", "committed":
+		p.states[query.ArtifactDigest] = "committed"
+		return nil
+	default:
+		return fmt.Errorf("controlled artifact port: only a finalized artifact can be committed")
+	}
 }
 
 func (p *ControlledArtifactPort) Eligible(_ context.Context, query ArtifactQuery) (ArtifactEligibility, error) {
@@ -499,7 +547,14 @@ func (p *ControlledArtifactPort) Eligible(_ context.Context, query ArtifactQuery
 	if reason, withdrawn := p.ineligible[query.ArtifactDigest]; withdrawn {
 		return ArtifactEligibility{Eligible: false, Reason: reason}, nil
 	}
-	return ArtifactEligibility{Eligible: true}, nil
+	switch p.states[query.ArtifactDigest] {
+	case "finalized":
+		return ArtifactEligibility{Eligible: true}, nil
+	case "":
+		return ArtifactEligibility{Eligible: false, Reason: "no immutable artifact record exists for the candidate"}, nil
+	default:
+		return ArtifactEligibility{Eligible: false, Reason: "the artifact is not finalized: " + p.states[query.ArtifactDigest]}, nil
+	}
 }
 
 // NewApprovedToolProfile builds the running tool profile from the approved

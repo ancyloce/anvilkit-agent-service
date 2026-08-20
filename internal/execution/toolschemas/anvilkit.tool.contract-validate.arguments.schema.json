@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Contract validate tool arguments",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["document", "schema"],
+  "properties": {
+    "document": {
+      "type": "object"
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["componentName", "digest"],
+      "properties": {
+        "componentName": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 160
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

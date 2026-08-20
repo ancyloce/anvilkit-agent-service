@@ -16,8 +16,13 @@ import (
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent/runner"
+	"github.com/ancyloce/anvilkit-agent-service/internal/applyauth"
 	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
+	"github.com/ancyloce/anvilkit-agent-service/internal/budget"
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
+	"github.com/ancyloce/anvilkit-agent-service/internal/contractclient"
+	"github.com/ancyloce/anvilkit-agent-service/internal/domaincommit"
+	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
@@ -72,6 +77,13 @@ type ToolInvocation struct {
 	WorkspaceID    string
 	ProjectID      string
 	RunID          string
+	// The fenced dispatch identity: the root run the usage rolls up to, the
+	// actor whose authority the dispatch re-reads, the execution generation
+	// the fence binds, and the trace the attempt is attributed to.
+	RootRunID           string
+	ActorID             string
+	ExecutionGeneration uint64
+	Traceparent         string
 }
 
 type ToolResult struct {
@@ -83,7 +95,11 @@ type ToolExecutor interface {
 	Execute(context.Context, ToolInvocation) (ToolResult, error)
 }
 
-// DomainCommand is one idempotent authoritative domain commit.
+// DomainCommand is one idempotent authoritative domain commit. It carries the
+// complete signed apply authorization together with every binding the caller
+// re-derived from durable state; the domain boundary verifies the token —
+// signature, audience, expiry, action, artifact, target, base revision,
+// actor, and material digests — and atomically redeems it before any effect.
 type DomainCommand struct {
 	OperationID     string
 	WorkspaceID     string
@@ -91,6 +107,18 @@ type DomainCommand struct {
 	RunID           string
 	ArtifactDigest  string
 	AuthorizationID string
+	// AuthorizationJWS is the complete signed capability, carried whole from
+	// durable issuance through the write-ahead submission record.
+	AuthorizationJWS string
+	// The expected bindings the domain boundary verifies against the signed
+	// payload, field for field.
+	ActionDigest      string
+	BaseRevision      string
+	Target            applyauth.Target
+	ActorID           string
+	DefinitionDigest  string
+	ContractBOMDigest string
+	PolicyDigest      string
 }
 
 const (
@@ -153,10 +181,16 @@ type ToolMaterial interface {
 	ToolDefinition(componentName string) (tools.Definition, bool)
 }
 
-// ArtifactPort answers artifact eligibility. The executor never infers
-// eligibility from run state: the artifact owner answers, and an ineligible
-// answer stops the commit before any authorization is issued.
+// ArtifactPort is the artifact owner's boundary. The workflow records every
+// validated candidate as an immutable artifact, review acceptance finalizes
+// it, and a confirmed governed effect commits it — each call convergent under
+// replay. The executor never infers eligibility from run state: the artifact
+// owner answers, and an ineligible answer stops the commit before any
+// authorization is issued.
 type ArtifactPort interface {
+	RecordCandidate(context.Context, ArtifactCandidate) error
+	EnsureFinalized(context.Context, ArtifactQuery) error
+	EnsureCommitted(context.Context, ArtifactQuery) error
 	Eligible(context.Context, ArtifactQuery) (ArtifactEligibility, error)
 }
 
@@ -169,39 +203,90 @@ type AuthorizationRequest struct {
 	RunID          string
 	ArtifactDigest string
 	ActionDigest   string
+	// ApprovalRequestID names the accepted approval the authorization must
+	// bind. The issuer re-reads and re-proves it; the request only names it.
+	ApprovalRequestID string
 }
 
+// IssuedAuthorization is the durable issuance answer: the authorization
+// identity together with the complete signed token. A replay of the same
+// durable operation returns the original persisted capability.
 type IssuedAuthorization struct {
 	AuthorizationID string
+	CompactJWS      string
+	ExpiresAt       time.Time
 }
 
 type CommitAuthority interface {
 	Issue(context.Context, AuthorizationRequest) (IssuedAuthorization, error)
 }
 
+// DeltaPublisher fans provisional stream deltas to live subscribers. Deltas
+// are droppable by contract; publishing never blocks the workflow.
+type DeltaPublisher interface {
+	Publish(events.Delta) error
+}
+
+// EvidenceRecorder appends internal AgentEvidence facts. The events evidence
+// store satisfies it; recording is idempotent by evidence identity so every
+// durable-operation replay converges on one record.
+type EvidenceRecorder interface {
+	AppendEvidence(context.Context, events.Evidence) (uint64, error)
+}
+
 type Clock interface{ Now() time.Time }
+
+// BudgetController is the Platform budget authority the pipeline reserves
+// through before any expensive dispatch. The budget controller satisfies it:
+// its ledger and generation source are durable, so reservation, observation,
+// and settlement state survive restart and fence on the run aggregate's
+// execution generation.
+type BudgetController interface {
+	ReserveInitial(context.Context, budget.Estimate, budget.Generation) (budget.Reservation, error)
+	ReserveReplacement(context.Context, budget.Estimate, budget.Generation, budget.ReservationID) (budget.Reservation, error)
+	Dispatch(context.Context, budget.Scope, budget.ReservationID, budget.Generation, budget.Dispatch) error
+	Observe(context.Context, budget.Observation) error
+	Reservation(context.Context, budget.Scope, budget.ReservationID) (budget.Reservation, error)
+	Reconcile(ctx context.Context, scope budget.Scope, id budget.ReservationID, generation budget.Generation, finalCost *int64, release bool, actor string) (budget.Reservation, error)
+}
 
 // Config wires the executor. Every dependency is required; the executor
 // never substitutes a fallback.
 type Config struct {
-	Registry          *agent.Registry
-	Runner            *runner.Runner
-	Runs              RunStore
-	InterruptWriter   InterruptWriter
-	InterruptReader   InterruptReader
-	InterruptExpirer  InterruptExpirer
-	Authority         AuthorityProvider
-	Tools             ToolExecutor
-	ToolMaterial      ToolMaterial
-	Artifacts         ArtifactPort
-	Domain            DomainPort
-	CommitAuthority   CommitAuthority
-	Decisions         journal.Store
-	Clock             Clock
-	InputTTL          time.Duration
+	Registry         *agent.Registry
+	Runner           *runner.Runner
+	Runs             RunStore
+	InterruptWriter  InterruptWriter
+	InterruptReader  InterruptReader
+	InterruptExpirer InterruptExpirer
+	Authority        AuthorityProvider
+	Tools            ToolExecutor
+	ToolMaterial     ToolMaterial
+	Artifacts        ArtifactPort
+	Domain           DomainPort
+	Submissions      domaincommit.Store
+	CommitAuthority  CommitAuthority
+	Contracts        ContractValidator
+	Evidence         EvidenceRecorder
+	Deltas           DeltaPublisher
+	Decisions        journal.Store
+	Budget           BudgetController
+	Clock            Clock
+	InputTTL         time.Duration
+	// BudgetTTL bounds how long a run's standing reservation stays
+	// dispatchable before requiring settlement or review.
+	BudgetTTL         time.Duration
 	ApprovalTTL       time.Duration
 	TurnLimit         int
 	ValidatorIdentity string
+	// ReconcileLimit bounds how many durable uncertain reconciliations one
+	// submitted governed effect may accumulate before the submission journal
+	// escalates it to operator resolution. DomainRetryBase and DomainRetryCap
+	// shape the bounded backoff the workflow holds for between
+	// reconciliations of an unsettled effect.
+	ReconcileLimit  int
+	DomainRetryBase time.Duration
+	DomainRetryCap  time.Duration
 }
 
 type Executor struct {
@@ -218,11 +303,17 @@ func traceparentOf(input workflow.RunInput) string {
 }
 
 func New(cfg Config) (*Executor, error) {
-	if cfg.Registry == nil || cfg.Runner == nil || cfg.Runs == nil || cfg.InterruptWriter == nil || cfg.InterruptReader == nil || cfg.InterruptExpirer == nil || cfg.Authority == nil || cfg.Tools == nil || cfg.ToolMaterial == nil || cfg.Artifacts == nil || cfg.Domain == nil || cfg.CommitAuthority == nil || cfg.Decisions == nil || cfg.Clock == nil {
+	if cfg.Registry == nil || cfg.Runner == nil || cfg.Runs == nil || cfg.InterruptWriter == nil || cfg.InterruptReader == nil || cfg.InterruptExpirer == nil || cfg.Authority == nil || cfg.Tools == nil || cfg.ToolMaterial == nil || cfg.Artifacts == nil || cfg.Domain == nil || cfg.Submissions == nil || cfg.CommitAuthority == nil || cfg.Contracts == nil || cfg.Evidence == nil || cfg.Deltas == nil || cfg.Decisions == nil || cfg.Budget == nil || cfg.Clock == nil {
 		return nil, fmt.Errorf("agent execution: every pipeline dependency is required")
+	}
+	if cfg.BudgetTTL <= 0 {
+		return nil, fmt.Errorf("agent execution: the budget reservation lifetime must be positive")
 	}
 	if cfg.InputTTL <= 0 || cfg.ApprovalTTL <= 0 || cfg.TurnLimit < 1 {
 		return nil, fmt.Errorf("agent execution: interrupt deadlines and turn limit must be positive")
+	}
+	if cfg.ReconcileLimit < 1 || cfg.DomainRetryBase <= 0 || cfg.DomainRetryCap < cfg.DomainRetryBase {
+		return nil, fmt.Errorf("agent execution: the domain reconciliation bound and backoff window must be positive and ordered")
 	}
 	if !validDigestString(cfg.ValidatorIdentity) {
 		return nil, fmt.Errorf("agent execution: validator identity must be the pinned contract material digest")
@@ -307,6 +398,9 @@ func (e *Executor) currentAuthority(ctx context.Context, scope runs.Scope, snaps
 	if _, err := parseBudget(current.Budget); err != nil {
 		return authority.Current{}, staleAuthority("the current agent budget is not decodable")
 	}
+	if current.TargetRevoked(snapshot.Target.ID) {
+		return authority.Current{}, staleAuthority("authority over the run's target is revoked")
+	}
 	return current, nil
 }
 
@@ -322,6 +416,44 @@ func staleAuthority(detail string) *problem.Details {
 // haltOnStale converts a stale-authority stop into the workflow halt shape.
 func haltOnStale(details *problem.Details) *workflow.Halt {
 	return &workflow.Halt{Problem: *details, Behavior: workflow.TerminalFailed}
+}
+
+// recordEvidence appends one internal evidence fact for a durable operation.
+// The identity derives from the operation key and type, so a replay records
+// nothing new; a failed append fails the operation so evidence is never
+// silently dropped.
+func (e *Executor) recordEvidence(ctx context.Context, op workflow.OpID, input workflow.RunInput, snapshot runs.Snapshot, evidenceType, retention string, payload map[string]string) error {
+	identity := "evidence." + strings.TrimPrefix(mustDeterministicDigest(struct {
+		Key  string `json:"key"`
+		Type string `json:"type"`
+	}{op.Key(), evidenceType}), "sha256:")[:32]
+	definitionDigest, bomDigest, policyDigest, err := materialDigests(snapshot.Definition, snapshot.ContractBOM, snapshot.Policy)
+	if err != nil {
+		return fmt.Errorf("digest evidence producer material: %w", err)
+	}
+	if _, err := e.cfg.Evidence.AppendEvidence(ctx, events.Evidence{
+		WorkspaceID: snapshot.WorkspaceID,
+		ProjectID:   snapshot.Target.ProjectID,
+		RunID:       string(snapshot.RunID),
+		EvidenceID:  identity,
+		Type:        evidenceType,
+		OccurredAt:  e.cfg.Clock.Now(),
+		Producer: events.EvidenceProducer{
+			Component:         "agent-executor",
+			DefinitionDigest:  definitionDigest,
+			PolicyDigest:      policyDigest,
+			ContractBOMDigest: bomDigest,
+		},
+		Classification: "internal",
+		Retention:      retention,
+		TurnID:         op.Step,
+		WorkflowID:     input.Key.WorkflowID(),
+		Traceparent:    traceparentOf(input),
+		Payload:        payload,
+	}); err != nil {
+		return fmt.Errorf("record %s evidence: %w", evidenceType, err)
+	}
+	return nil
 }
 
 func (e *Executor) Prepare(ctx context.Context, op workflow.OpID, input workflow.RunInput) (workflow.PrepareResult, error) {
@@ -349,10 +481,19 @@ func (e *Executor) Prepare(ctx context.Context, op workflow.OpID, input workflow
 	if refusal != nil {
 		return workflow.PrepareResult{Refused: refusal, Version: snapshot.Version}, nil
 	}
-	if _, err := parseBudget(snapshot.Budget); err != nil {
+	limits, err := parseBudget(snapshot.Budget)
+	if err != nil {
 		budgetRefusal := problem.New(problem.CodeBudgetDenied, "")
 		budgetRefusal.Detail = "pinned agent budget is not decodable"
 		return workflow.PrepareResult{Refused: &budgetRefusal, Version: snapshot.Version}, nil
+	}
+	// Reservation before dispatch: the run's pinned worst-case cost is
+	// durably reserved under the active budget generation before the run may
+	// execute anything. A replayed preparation converges on the reservation
+	// it already made; a denied reservation refuses the run here, before any
+	// model or worker dispatch exists.
+	if refused := e.ensureRunReservation(ctx, snapshot, limits); refused != nil {
+		return workflow.PrepareResult{Refused: refused, Version: snapshot.Version}, nil
 	}
 	if snapshot.Status == runs.Preparing {
 		next, lost, err := e.apply(ctx, scope, runs.ID(input.Key.RunID), snapshot.Version, runs.Command{Kind: runs.PreparationReady, Traceparent: traceparentOf(input)}, runs.Planning)
@@ -392,34 +533,77 @@ func (e *Executor) ExecuteTurn(ctx context.Context, op workflow.OpID, input work
 	if refusal != nil {
 		return workflow.TurnResult{}, *refusal
 	}
-	budget, err := parseBudget(snapshot.Budget)
-	if err != nil {
-		return workflow.TurnResult{}, err
-	}
-	outcome, err := e.cfg.Runner.Turn(ctx, runner.TurnRequest{
-		Definition:      definition,
-		Run:             runView(snapshot),
-		Phase:           phaseName(input.Phase),
-		Turn:            input.Turn,
-		Depth:           0,
-		Notes:           input.Carry.Notes,
-		InputValue:      input.Carry.InputValue,
-		OperationKey:    op.Key(),
-		Authority:       current,
-		ReviewReason:    input.Carry.ReviewReason,
-		DelegationsUsed: input.Carry.Delegations,
-		Budget:          budget.remaining(input.Carry.Usage),
-	})
+	limits, err := parseBudget(snapshot.Budget)
 	if err != nil {
 		return workflow.TurnResult{}, err
 	}
 	carry := input.Carry
+	carry.Version = snapshot.Version
+	// The model turn is an expensive dispatch: it runs only inside the budget
+	// controller's dispatch gate, which proves the run's standing reservation
+	// is current, unreleased, unexpired, and of the active generation at the
+	// moment of dispatch.
+	var outcome runner.TurnOutcome
+	reservationID := budgetReservationID(string(snapshot.RunID), snapshot.ExecutionGeneration)
+	dispatchErr := e.cfg.Budget.Dispatch(ctx, budgetScopeOf(snapshot), reservationID, budget.Generation(snapshot.ExecutionGeneration), func(ctx context.Context, _ budget.Reservation) error {
+		var turnErr error
+		outcome, turnErr = e.cfg.Runner.Turn(ctx, runner.TurnRequest{
+			Definition:      definition,
+			Run:             runView(snapshot),
+			Phase:           phaseName(input.Phase),
+			Turn:            input.Turn,
+			Depth:           0,
+			Notes:           input.Carry.Notes,
+			InputValue:      input.Carry.InputValue,
+			OperationKey:    op.Key(),
+			Authority:       current,
+			ReviewReason:    input.Carry.ReviewReason,
+			DelegationsUsed: input.Carry.Delegations,
+			Budget:          limits.remaining(input.Carry.Usage),
+		})
+		return turnErr
+	})
+	if dispatchErr != nil {
+		var details problem.Details
+		if errors.As(dispatchErr, &details) && details.Code == string(problem.CodeBudgetDenied) {
+			return workflow.TurnResult{Carry: carry, Halt: &workflow.Halt{Problem: details, Behavior: workflow.TerminalFailed}}, nil
+		}
+		return workflow.TurnResult{}, dispatchErr
+	}
+	// Every turn's observed cost lands on the durable reservation,
+	// deduplicated by the durable operation identity so replay never counts
+	// usage twice.
+	if err := e.cfg.Budget.Observe(ctx, budget.Observation{
+		ID:                  op.Key() + ":budget",
+		Scope:               budgetScopeOf(snapshot),
+		ReservationID:       reservationID,
+		RootRunID:           string(snapshot.RootRunID),
+		RunID:               string(snapshot.RunID),
+		TaskID:              "model:" + op.Step,
+		AttemptID:           budget.AttemptID(op.Key()),
+		ExecutionGeneration: snapshot.ExecutionGeneration,
+		MeterSequence:       uint64(input.Turn),
+		CostMicros:          outcome.Usage.CostMicros,
+	}); err != nil {
+		return workflow.TurnResult{}, fmt.Errorf("observe turn usage against the budget reservation: %w", err)
+	}
 	carry.Usage = carry.Usage.Add(outcome.Usage)
 	carry.Notes = boundNotes(append(carry.Notes, outcome.Notes...))
-	carry.Version = snapshot.Version
 	if outcome.Halted != nil {
 		return workflow.TurnResult{Carry: carry, Halt: haltOf(*outcome.Halted)}, nil
 	}
+	// A completed turn is live progress for connected consumers. The delta is
+	// provisional by contract — dropping it changes nothing durable, so a
+	// publish failure is never allowed to fail the turn.
+	_ = e.cfg.Deltas.Publish(events.Delta{
+		WorkspaceID: snapshot.WorkspaceID,
+		RunID:       string(snapshot.RunID),
+		Channel:     "progress",
+		TurnID:      op.Key(),
+		Traceparent: traceparentOf(input.Run),
+		EmittedAt:   e.cfg.Clock.Now(),
+		Payload:     map[string]string{"turn": fmt.Sprintf("%d", input.Turn), "decision": string(outcome.Decision.Kind)},
+	})
 	return workflow.TurnResult{Decision: outcome.Decision, Carry: carry}, nil
 }
 
@@ -488,15 +672,26 @@ func (e *Executor) ExecuteAction(ctx context.Context, op workflow.OpID, input wo
 		// how long the tool may run, and the signed retry policy bounds how
 		// many times it may be attempted at all.
 		result, err := e.dispatch(ctx, decision.Dispatch, ToolInvocation{
-			IdempotencyKey: op.Key(),
-			ToolID:         proposal.ToolID,
-			Arguments:      proposal.Arguments,
-			WorkspaceID:    snapshot.WorkspaceID,
-			ProjectID:      snapshot.Target.ProjectID,
-			RunID:          string(snapshot.RunID),
+			IdempotencyKey:      op.Key(),
+			ToolID:              proposal.ToolID,
+			Arguments:           proposal.Arguments,
+			WorkspaceID:         snapshot.WorkspaceID,
+			ProjectID:           snapshot.Target.ProjectID,
+			RunID:               string(snapshot.RunID),
+			RootRunID:           string(snapshot.RootRunID),
+			ActorID:             snapshot.ActorID,
+			ExecutionGeneration: snapshot.ExecutionGeneration,
+			Traceparent:         traceparentOf(input.Run),
 		})
 		if err != nil {
 			return workflow.ActionResult{}, fmt.Errorf("execute authorized tool: %w", err)
+		}
+		outputDigest, err := canonical.Digest(result.Output)
+		if err != nil {
+			return workflow.ActionResult{}, fmt.Errorf("digest tool output for evidence: %w", err)
+		}
+		if err := e.recordEvidence(ctx, op, input.Run, snapshot, "tool.execution-completed", "operational", map[string]string{"toolId": proposal.ToolID, "outputDigest": outputDigest}); err != nil {
+			return workflow.ActionResult{}, err
 		}
 		carry.Notes = boundNotes(append(carry.Notes, "tool "+proposal.ToolID+" output: "+truncate(string(result.Output), 2048)))
 		return workflow.ActionResult{Carry: carry}, nil
@@ -591,26 +786,52 @@ func (e *Executor) ExecuteDelegateTurn(ctx context.Context, op workflow.OpID, in
 	if mismatch := e.verifyMaterial(specialist); mismatch != nil {
 		return workflow.DelegateTurnResult{}, *mismatch
 	}
-	budget, err := parseBudget(snapshot.Budget)
+	limits, err := parseBudget(snapshot.Budget)
 	if err != nil {
 		return workflow.DelegateTurnResult{}, err
 	}
 	carry := input.Carry
 	carry.Version = snapshot.Version
-	outcome, err := e.cfg.Runner.DelegateTurn(ctx, runner.DelegateTurnRequest{
-		Specialist:   specialist,
-		Run:          runView(snapshot),
-		Turn:         input.DelegateTurn,
-		Depth:        1,
-		Last:         input.Last,
-		Notes:        carry.Notes,
-		Input:        input.Input,
-		Budget:       budget.remaining(carry.Usage),
-		OperationKey: op.Key(),
-		Authority:    current,
+	// A Specialist turn shares the parent run's budget boundary: the same
+	// standing reservation gates its dispatch and accumulates its cost.
+	var outcome runner.DelegateTurnOutcome
+	reservationID := budgetReservationID(string(snapshot.RunID), snapshot.ExecutionGeneration)
+	dispatchErr := e.cfg.Budget.Dispatch(ctx, budgetScopeOf(snapshot), reservationID, budget.Generation(snapshot.ExecutionGeneration), func(ctx context.Context, _ budget.Reservation) error {
+		var turnErr error
+		outcome, turnErr = e.cfg.Runner.DelegateTurn(ctx, runner.DelegateTurnRequest{
+			Specialist:   specialist,
+			Run:          runView(snapshot),
+			Turn:         input.DelegateTurn,
+			Depth:        1,
+			Last:         input.Last,
+			Notes:        carry.Notes,
+			Input:        input.Input,
+			Budget:       limits.remaining(carry.Usage),
+			OperationKey: op.Key(),
+			Authority:    current,
+		})
+		return turnErr
 	})
-	if err != nil {
-		return workflow.DelegateTurnResult{}, err
+	if dispatchErr != nil {
+		var details problem.Details
+		if errors.As(dispatchErr, &details) && details.Code == string(problem.CodeBudgetDenied) {
+			return workflow.DelegateTurnResult{Done: true, Carry: carry, Halt: &workflow.Halt{Problem: details, Behavior: workflow.TerminalFailed}}, nil
+		}
+		return workflow.DelegateTurnResult{}, dispatchErr
+	}
+	if err := e.cfg.Budget.Observe(ctx, budget.Observation{
+		ID:                  op.Key() + ":budget",
+		Scope:               budgetScopeOf(snapshot),
+		ReservationID:       reservationID,
+		RootRunID:           string(snapshot.RootRunID),
+		RunID:               string(snapshot.RunID),
+		TaskID:              "model-delegate:" + op.Step,
+		AttemptID:           budget.AttemptID(op.Key()),
+		ExecutionGeneration: snapshot.ExecutionGeneration,
+		MeterSequence:       uint64(input.DelegateTurn),
+		CostMicros:          outcome.Usage.CostMicros,
+	}); err != nil {
+		return workflow.DelegateTurnResult{}, fmt.Errorf("observe delegate turn usage against the budget reservation: %w", err)
 	}
 	carry.Usage = carry.Usage.Add(outcome.Usage)
 	carry.Notes = boundNotes(append(carry.Notes, outcome.Notes...))
@@ -772,6 +993,12 @@ func (e *Executor) ExpireInterrupt(ctx context.Context, op workflow.OpID, expire
 	if outcome.Superseded {
 		return workflow.Ack{Superseded: true}, nil
 	}
+	// Expiry fails the run inside the interrupt repository's critical
+	// section, so this is its terminal boundary: the standing reservation is
+	// settled here, held un-released like every failure.
+	if err := e.settleRunBudget(ctx, snapshot, false); err != nil {
+		return workflow.Ack{}, err
+	}
 	return workflow.Ack{Version: outcome.Snapshot.Version}, nil
 }
 
@@ -824,9 +1051,72 @@ func (e *Executor) FinalizeCandidate(ctx context.Context, op workflow.OpID, inpu
 	if err != nil {
 		return workflow.FinalizeResult{}, err
 	}
+	// The Contract Runtime independently validates the candidate and records
+	// durable validation evidence before anything reaches review. A
+	// deterministic rejection fails the candidate; runtime unavailability is a
+	// retryable error at this durable boundary — never a bypass. The catalog
+	// identity is the real approved-catalog digest the registry was built
+	// from, and the policy identity is the definition's pinned guardrail
+	// policy; the runtime verifies all of them against approved material
+	// before anything is recorded as validated.
+	evidence, err := e.cfg.Contracts.Validate(ctx, contractclient.Request{
+		WorkspaceID:   snapshot.WorkspaceID,
+		ProjectID:     snapshot.Target.ProjectID,
+		RunID:         string(id),
+		Kind:          contractclient.Artifact,
+		Payload:       candidate,
+		BOMDigest:     bom,
+		SchemaDigest:  definition.OutputSchema.Digest,
+		CatalogDigest: e.cfg.Registry.CatalogDigest(),
+		PolicyDigest:  definition.GuardrailPolicy.Digest,
+	})
+	if err != nil {
+		var details problem.Details
+		if errors.As(err, &details) && details.Code == string(problem.CodeContractInvalid) {
+			return workflow.FinalizeResult{Rejected: &details, Version: snapshot.Version}, nil
+		}
+		return workflow.FinalizeResult{}, fmt.Errorf("validate candidate through the Contract Runtime: %w", err)
+	}
+	validationProof, err := e.cfg.Contracts.ReviewProof(evidence)
+	if err != nil {
+		return workflow.FinalizeResult{}, fmt.Errorf("derive validation proof for review: %w", err)
+	}
+	if err := e.recordEvidence(ctx, op, input.Run, snapshot, "validation.candidate-validated", "audit", map[string]string{"artifactDigest": artifactDigest, "schemaDigest": definition.OutputSchema.Digest, "validatorVersion": evidence.ValidatorVersion}); err != nil {
+		return workflow.FinalizeResult{}, err
+	}
+	// The validated candidate becomes an immutable artifact before the run can
+	// reach review: review, approval, and commit then govern a recorded
+	// digest-attested object, never loose candidate bytes. Replays converge on
+	// the same record.
+	if err := e.cfg.Artifacts.RecordCandidate(ctx, ArtifactCandidate{
+		WorkspaceID:         snapshot.WorkspaceID,
+		ProjectID:           snapshot.Target.ProjectID,
+		RunID:               string(id),
+		Digest:              artifactDigest,
+		Bytes:               candidate,
+		SchemaComponent:     definition.OutputSchema.ComponentName,
+		SchemaDigest:        definition.OutputSchema.Digest,
+		BOMDigest:           bom,
+		CatalogDigest:       e.cfg.Registry.CatalogDigest(),
+		OperationKey:        op.Key(),
+		ExecutionGeneration: input.Run.Key.Generation,
+		BuildIdentity:       e.cfg.ValidatorIdentity,
+		Producer:            "anvilkit-agent-runner",
+	}); err != nil {
+		return workflow.FinalizeResult{}, fmt.Errorf("record immutable candidate artifact: %w", err)
+	}
 	if snapshot.Status == runs.Validating {
-		proof := runs.ValidationProof{Valid: true, BOMDigest: bom, SchemaDigest: definition.OutputSchema.Digest, ValidatorVersion: e.cfg.ValidatorIdentity, CatalogDigest: definition.DefinitionDigest}
-		next, lost, err := e.apply(ctx, scope, id, snapshot.Version, runs.Command{Kind: runs.SubmitForReview, Validation: proof, Traceparent: traceparentOf(input.Run)}, runs.AwaitingReview)
+		canonicalCandidate, err := canonical.Bytes(candidate)
+		if err != nil {
+			return workflow.FinalizeResult{}, fmt.Errorf("canonicalize candidate for artifact reference: %w", err)
+		}
+		artifactReference := &runs.EventArtifact{
+			ArtifactID: string(ArtifactRecordID(string(id), artifactDigest)),
+			Digest:     artifactDigest,
+			MediaType:  "application/json",
+			SizeBytes:  int64(len(canonicalCandidate)),
+		}
+		next, lost, err := e.apply(ctx, scope, id, snapshot.Version, runs.Command{Kind: runs.SubmitForReview, Validation: validationProof, Artifact: artifactReference, Traceparent: traceparentOf(input.Run)}, runs.AwaitingReview)
 		if err != nil {
 			return workflow.FinalizeResult{}, err
 		}
@@ -856,13 +1146,30 @@ func (e *Executor) ResolveReview(ctx context.Context, op workflow.OpID, input wo
 		return workflow.ReviewResult{}, *refusal
 	}
 	id := runs.ID(input.Run.Key.RunID)
+	// Review acceptance finalizes the immutable artifact in both exits: an
+	// accepted artifact without a governed effect completes the run over a
+	// finalized record, and a governed effect opens approval over one.
+	finalizeArtifact := func() error {
+		return e.cfg.Artifacts.EnsureFinalized(ctx, ArtifactQuery{
+			WorkspaceID:    snapshot.WorkspaceID,
+			ProjectID:      snapshot.Target.ProjectID,
+			RunID:          string(id),
+			ArtifactDigest: input.ArtifactDigest,
+		})
+	}
 	if !governedEffect(snapshot) {
+		if err := finalizeArtifact(); err != nil {
+			return workflow.ReviewResult{}, fmt.Errorf("finalize accepted artifact: %w", err)
+		}
 		next, lost, err := e.apply(ctx, scope, id, input.Version, runs.Command{Kind: runs.AcceptArtifact, Traceparent: traceparentOf(input.Run)}, runs.Completed)
 		if err != nil {
 			return workflow.ReviewResult{}, err
 		}
 		if lost {
 			return workflow.ReviewResult{Superseded: true}, nil
+		}
+		if err := e.settleRunBudget(ctx, snapshot, true); err != nil {
+			return workflow.ReviewResult{}, err
 		}
 		return workflow.ReviewResult{Accepted: true, Version: next.Version}, nil
 	}
@@ -882,6 +1189,9 @@ func (e *Executor) ResolveReview(ctx context.Context, op workflow.OpID, input wo
 	}{definition.GuardrailPolicy.PolicyID, definition.GuardrailPolicy.Version, definition.GuardrailPolicy.Digest})
 	if err != nil {
 		return workflow.ReviewResult{}, err
+	}
+	if err := finalizeArtifact(); err != nil {
+		return workflow.ReviewResult{}, fmt.Errorf("finalize artifact for approval: %w", err)
 	}
 	request, result, err := e.cfg.InterruptWriter.RequestApproval(ctx, interrupts.Write{
 		Scope:           scope,
@@ -949,14 +1259,18 @@ func (e *Executor) Commit(ctx context.Context, op workflow.OpID, input workflow.
 		return workflow.CommitResult{Superseded: true}, nil
 	}
 	id := runs.ID(input.Run.Key.RunID)
-	// The domain operation identity is derived from the durable operation, so
-	// a replay reconciles and resubmits under exactly the identity the first
-	// execution used.
-	operationID := domainOperationID(op)
+	// The domain operation identity is derived from the workflow, the
+	// accepted approval, and the artifact — facts stable across every durable
+	// reconciliation wake — so every execution of this commit addresses the
+	// same operation at the authoritative owner.
+	operationID := domainOperationIDFor(input)
 	// Recovery convergence: a crash after the terminal domain transition
 	// re-executes this operation against an already-settled aggregate.
 	switch snapshot.Status {
 	case runs.Completed:
+		if err := e.settleRunBudget(ctx, snapshot, true); err != nil {
+			return workflow.CommitResult{}, err
+		}
 		return workflow.CommitResult{Outcome: workflow.CommitCompleted, Version: snapshot.Version}, nil
 	case runs.Conflict:
 		return workflow.CommitResult{Outcome: workflow.CommitConflict, Version: snapshot.Version}, nil
@@ -967,9 +1281,11 @@ func (e *Executor) Commit(ctx context.Context, op workflow.OpID, input workflow.
 		}
 		return workflow.CommitResult{Outcome: workflow.CommitFailed, Problem: &failure, Version: snapshot.Version}, nil
 	case runs.AwaitingDomainConfirmation:
-		// A previous execution already crossed the submit boundary, so an
-		// effect may exist. Nothing is re-issued and nothing is re-submitted:
-		// the authoritative record decides what happened.
+		// A previous execution reached the submit boundary. The durable
+		// write-ahead submission record decides what is safe: a recorded but
+		// never-issued submission may be sent under the same stable operation
+		// identity, an issued one is only ever reconciled, and nothing is
+		// re-issued.
 		return e.reconcileDomain(ctx, scope, snapshot, id, operationID, input)
 	}
 	// The commit gate runs in one fixed order, and each check must pass
@@ -978,7 +1294,8 @@ func (e *Executor) Commit(ctx context.Context, op workflow.OpID, input workflow.
 	// issuance, and only then the governed domain effect. No later step is
 	// reached — and in particular neither the issuer nor the domain owner is
 	// called — while an earlier one is unsatisfied.
-	if _, stale := e.currentAuthority(ctx, scope, snapshot); stale != nil {
+	gateAuthority, stale := e.currentAuthority(ctx, scope, snapshot)
+	if stale != nil {
 		return workflow.CommitResult{Version: snapshot.Version, Halt: haltOnStale(stale)}, nil
 	}
 	approval, err := e.cfg.InterruptReader.Approval(ctx, scope, id, interrupts.RequestID(input.RequestID))
@@ -988,6 +1305,11 @@ func (e *Executor) Commit(ctx context.Context, op workflow.OpID, input workflow.
 	if approval.Decision == nil || approval.Decision.Kind != interrupts.DecisionApprove {
 		denied := problem.New(problem.CodeApplyAuthorizationDenied, "")
 		denied.Detail = "commit requires a current approve decision"
+		return workflow.CommitResult{}, denied
+	}
+	if gateAuthority.ApprovalRevoked(input.RequestID) {
+		denied := problem.New(problem.CodeApplyAuthorizationDenied, "")
+		denied.Detail = "the accepted approval has been revoked by current authority"
 		return workflow.CommitResult{}, denied
 	}
 	if !validDigestString(input.ArtifactDigest) || approval.ActionDigest != input.ArtifactDigest {
@@ -1019,19 +1341,29 @@ func (e *Executor) Commit(ctx context.Context, op workflow.OpID, input workflow.
 	// real time, and an authorization is a durable capability: it must not be
 	// minted against an authority that stopped permitting this run while the
 	// gate was running.
-	if _, stale := e.currentAuthority(ctx, scope, snapshot); stale != nil {
+	issuanceAuthority, stale := e.currentAuthority(ctx, scope, snapshot)
+	if stale != nil {
 		return workflow.CommitResult{Version: snapshot.Version, Halt: haltOnStale(stale)}, nil
 	}
+	if issuanceAuthority.ApprovalRevoked(input.RequestID) {
+		denied := problem.New(problem.CodeApplyAuthorizationDenied, "")
+		denied.Detail = "the accepted approval has been revoked by current authority"
+		return workflow.CommitResult{}, denied
+	}
 	issued, err := e.cfg.CommitAuthority.Issue(ctx, AuthorizationRequest{
-		IdempotencyKey: op.Key(),
-		WorkspaceID:    snapshot.WorkspaceID,
-		ProjectID:      snapshot.Target.ProjectID,
-		RunID:          string(id),
-		ArtifactDigest: input.ArtifactDigest,
-		ActionDigest:   approval.ActionDigest,
+		IdempotencyKey:    op.Key(),
+		WorkspaceID:       snapshot.WorkspaceID,
+		ProjectID:         snapshot.Target.ProjectID,
+		RunID:             string(id),
+		ArtifactDigest:    input.ArtifactDigest,
+		ActionDigest:      approval.ActionDigest,
+		ApprovalRequestID: input.RequestID,
 	})
 	if err != nil {
 		return workflow.CommitResult{}, fmt.Errorf("issue commit authorization: %w", err)
+	}
+	if err := e.recordEvidence(ctx, op, input.Run, snapshot, "commit.authorization-issued", "audit", map[string]string{"authorizationId": issued.AuthorizationID, "artifactDigest": input.ArtifactDigest}); err != nil {
+		return workflow.CommitResult{}, err
 	}
 	version := snapshot.Version
 	if snapshot.Status == runs.AwaitingApproval {
@@ -1061,6 +1393,14 @@ func (e *Executor) Commit(ctx context.Context, op workflow.OpID, input workflow.
 	if _, stale := e.currentAuthority(ctx, scope, snapshot); stale != nil {
 		return workflow.CommitResult{Version: snapshot.Version, Halt: haltOnStale(stale)}, nil
 	}
+	// The durable write-ahead submission record lands before the run crosses
+	// the submit boundary. It carries the complete signed authorization under
+	// the stable operation identity, so any successor process knows exactly
+	// what was about to be sent and whether sending is still safe.
+	operation, err := e.ensureSubmission(ctx, snapshot, id, operationID, op.Key(), approval.ActionDigest, input, issued)
+	if err != nil {
+		return workflow.CommitResult{}, err
+	}
 	if snapshot.Status == runs.Committing {
 		next, lost, err := e.apply(ctx, scope, id, snapshot.Version, runs.Command{Kind: runs.BeginDomainConfirmation, Traceparent: traceparentOf(input.Run)}, runs.AwaitingDomainConfirmation)
 		if err != nil {
@@ -1071,77 +1411,573 @@ func (e *Executor) Commit(ctx context.Context, op workflow.OpID, input workflow.
 		}
 		snapshot = next
 	}
-	outcome, err := e.cfg.Domain.Commit(ctx, DomainCommand{
-		OperationID:     operationID,
-		WorkspaceID:     snapshot.WorkspaceID,
-		ProjectID:       snapshot.Target.ProjectID,
-		RunID:           string(id),
-		ArtifactDigest:  input.ArtifactDigest,
-		AuthorizationID: issued.AuthorizationID,
-	})
-	if err != nil {
-		// The submission outcome is unknown. The run stays at the submit
-		// boundary, which is a state with defined exits, and the next
-		// execution of this durable operation reconciles it against the
-		// authoritative record instead of submitting again.
-		return workflow.CommitResult{}, fmt.Errorf("submit governed domain effect: %w", err)
-	}
-	return e.settleDomain(ctx, scope, snapshot, id, input, outcome)
+	return e.submitRecorded(ctx, scope, snapshot, id, operation, input)
 }
 
-// reconcileDomain resolves a run that already crossed the submit boundary.
-// It never re-issues an authorization and never re-submits an effect: the
-// authoritative owner is asked what became of the operation, and the answer
-// is what moves the run. An owner that has no record of the operation proves
-// nothing landed, which is the only condition under which the run may fail
-// out of awaiting_domain_confirmation.
-func (e *Executor) reconcileDomain(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot, id runs.ID, operationID string, input workflow.CommitInput) (workflow.CommitResult, error) {
-	record, found, err := e.cfg.Domain.Reconcile(ctx, DomainQuery{
-		OperationID: operationID,
-		WorkspaceID: snapshot.WorkspaceID,
-		ProjectID:   snapshot.Target.ProjectID,
-		RunID:       string(id),
-	})
-	if err != nil {
-		return workflow.CommitResult{}, fmt.Errorf("reconcile governed domain effect: %w", err)
-	}
-	if found {
-		switch record.Status {
-		case DomainConfirmed, DomainConflict, DomainRejected:
-			return e.settleDomain(ctx, scope, snapshot, id, input, record)
-		default:
-			// The owner holds the operation but has not decided it. The run
-			// stays where it is and this durable operation is retried; no
-			// effect is repeated and no authorization is minted.
-			uncertain := problem.New(problem.CodeDomainOutcomeUncertain, "")
-			uncertain.Detail = "the authoritative domain owner has not settled the submitted effect"
-			return workflow.CommitResult{}, uncertain
+// ensureSubmission durably records the write-ahead domain operation in the
+// not-submitted state, carrying the complete signed authorization. It is
+// insert-once per run: a replay converges on the existing record, and a
+// record that names a different operation or authorization is a conflict,
+// never a second submission path.
+func (e *Executor) ensureSubmission(ctx context.Context, snapshot runs.Snapshot, id runs.ID, operationID, operationKey, actionDigest string, input workflow.CommitInput, issued IssuedAuthorization) (domaincommit.Operation, error) {
+	journalScope := domaincommit.Scope{WorkspaceID: snapshot.WorkspaceID, ProjectID: snapshot.Target.ProjectID}
+	verify := func(operation domaincommit.Operation) (domaincommit.Operation, error) {
+		if operation.ID != operationID || string(operation.AuthorizationID) != issued.AuthorizationID || operation.AuthorizationJWS == "" {
+			return domaincommit.Operation{}, problem.New(problem.CodeIdempotencyConflict, "")
 		}
+		return operation, nil
 	}
-	failure := problem.New(problem.CodeDomainOutcomeUncertain, "")
-	failure.Retryability = "safe-after-backoff"
-	failure.Detail = "the authoritative domain owner has no record of the submitted effect, so no governed effect was applied"
-	next, lost, err := e.apply(ctx, scope, id, snapshot.Version, runs.Command{
-		Kind:           runs.RecordFailure,
-		Failure:        &failure,
-		Reconciliation: runs.DomainReconciliation{Reconciled: true, EffectApplied: false, DomainOperationID: operationID},
-		Traceparent:    traceparentOf(input.Run),
-	}, runs.Failed)
+	if prior, active, err := e.cfg.Submissions.ActiveForRun(ctx, journalScope, id); err != nil {
+		return domaincommit.Operation{}, fmt.Errorf("read domain submission journal: %w", err)
+	} else if active {
+		return verify(prior)
+	}
+	requestDigest, err := deterministicDigest(struct {
+		OperationID     string `json:"operationId"`
+		AuthorizationID string `json:"authorizationId"`
+		ArtifactDigest  string `json:"artifactDigest"`
+	}{operationID, issued.AuthorizationID, input.ArtifactDigest})
+	if err != nil {
+		return domaincommit.Operation{}, fmt.Errorf("digest domain submission identity: %w", err)
+	}
+	now := e.cfg.Clock.Now().UTC()
+	operation := domaincommit.Operation{
+		Scope:            journalScope,
+		RunID:            id,
+		ID:               operationID,
+		AuthorizationID:  applyauth.AuthorizationID(issued.AuthorizationID),
+		AuthorizationJWS: issued.CompactJWS,
+		ActionDigest:     actionDigest,
+		ArtifactDigest:   input.ArtifactDigest,
+		ExpectedRevision: "rev:" + input.RequestID,
+		IdempotencyKey:   operationKey,
+		RequestDigest:    requestDigest,
+		Status:           domaincommit.Recorded,
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	if operation.AuthorizationJWS == "" {
+		return domaincommit.Operation{}, fmt.Errorf("record domain submission: the issued authorization does not carry its signed token")
+	}
+	if err := e.cfg.Submissions.Create(ctx, operation); err != nil {
+		// A racing execution recorded first; converge on its record.
+		prior, active, readErr := e.cfg.Submissions.ActiveForRun(ctx, journalScope, id)
+		if readErr == nil && active {
+			return verify(prior)
+		}
+		return domaincommit.Operation{}, fmt.Errorf("durably record domain submission: %w", err)
+	}
+	return operation, nil
+}
+
+// submitRecorded drives one recorded operation across the submit boundary:
+// the durable submitted-intent mark first, then the submission itself under
+// the same stable operation identity, then settlement of a decided outcome.
+// A submission whose answer is lost leaves the intent mark in place, so the
+// next execution reconciles instead of sending again.
+func (e *Executor) submitRecorded(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot, id runs.ID, operation domaincommit.Operation, input workflow.CommitInput) (workflow.CommitResult, error) {
+	if err := e.cfg.Submissions.MarkIssued(ctx, operation.Scope, operation.ID, e.cfg.Clock.Now().UTC()); err != nil {
+		return workflow.CommitResult{}, fmt.Errorf("record domain submission intent: %w", err)
+	}
+	command, err := e.domainCommandOf(snapshot, id, operation)
 	if err != nil {
 		return workflow.CommitResult{}, err
 	}
-	if lost {
-		return workflow.CommitResult{Superseded: true}, nil
+	outcome, err := e.cfg.Domain.Commit(ctx, command)
+	if err != nil {
+		// The submission outcome is unknown. The durable intent mark and the
+		// run's submit-boundary state both survive; the run holds at the
+		// boundary and the next reconciliation wake resolves against the
+		// authoritative record instead of submitting again.
+		return e.unsettledResult(1, snapshot.Version, false), nil
 	}
-	return workflow.CommitResult{Outcome: workflow.CommitFailed, Problem: &failure, Version: next.Version}, nil
+	return e.settleDomain(ctx, scope, snapshot, id, operation.ID, input, outcome)
+}
+
+// domainCommandOf renders the authoritative domain command: the complete
+// signed authorization from the durable submission record plus every binding
+// re-derived from the run's durable state for the owner to verify against the
+// signed payload.
+func (e *Executor) domainCommandOf(snapshot runs.Snapshot, id runs.ID, operation domaincommit.Operation) (DomainCommand, error) {
+	definitionDigest, bomDigest, policyDigest, err := materialDigests(snapshot.Definition, snapshot.ContractBOM, snapshot.Policy)
+	if err != nil {
+		return DomainCommand{}, fmt.Errorf("digest pinned material for the domain command: %w", err)
+	}
+	return DomainCommand{
+		OperationID:       operation.ID,
+		WorkspaceID:       snapshot.WorkspaceID,
+		ProjectID:         snapshot.Target.ProjectID,
+		RunID:             string(id),
+		ArtifactDigest:    operation.ArtifactDigest,
+		AuthorizationID:   string(operation.AuthorizationID),
+		AuthorizationJWS:  operation.AuthorizationJWS,
+		ActionDigest:      operation.ActionDigest,
+		BaseRevision:      operation.ExpectedRevision,
+		Target:            applyauth.Target{Type: snapshot.Target.Type, ID: snapshot.Target.ID, WorkspaceID: snapshot.Target.WorkspaceID, ProjectID: snapshot.Target.ProjectID},
+		ActorID:           snapshot.ActorID,
+		DefinitionDigest:  definitionDigest,
+		ContractBOMDigest: bomDigest,
+		PolicyDigest:      policyDigest,
+	}, nil
+}
+
+// reconcileDomain resolves a run that already reached the submit boundary.
+// The durable write-ahead submission record distinguishes the states: a
+// not-submitted record proves nothing was sent and may be submitted under the
+// same stable operation identity; a submitted-but-uncertain record is only
+// ever reconciled against the authoritative owner — never repeated and never
+// prematurely failed; a decided record settles the run. Nothing on any path
+// re-issues an authorization.
+func (e *Executor) reconcileDomain(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot, id runs.ID, operationID string, input workflow.CommitInput) (workflow.CommitResult, error) {
+	journalScope := domaincommit.Scope{WorkspaceID: snapshot.WorkspaceID, ProjectID: snapshot.Target.ProjectID}
+	operation, active, err := e.cfg.Submissions.ActiveForRun(ctx, journalScope, id)
+	if err != nil {
+		return workflow.CommitResult{}, fmt.Errorf("read domain submission journal: %w", err)
+	}
+	if !active {
+		// The journal may already be decided with only the run transition
+		// outstanding (a crash between journal finalization and the run's
+		// terminal transition).
+		finalized, getErr := e.cfg.Submissions.Get(ctx, journalScope, operationID)
+		if getErr == nil {
+			if outcome, terminal := domainOutcomeOf(finalized.Status); terminal {
+				return e.settleDomain(ctx, scope, snapshot, id, operationID, input, DomainOutcome{Status: outcome})
+			}
+		}
+		// No durable submission record decides this run. Nothing proves a
+		// submission happened, and nothing proves it did not: the run holds
+		// at the submit boundary instead of failing an effect that may exist.
+		return e.unsettledResult(1, snapshot.Version, false), nil
+	}
+	switch operation.Status {
+	case domaincommit.Recorded:
+		// The write-ahead record exists but the submitted-intent mark does
+		// not: the crash happened before anything was sent, so submitting now
+		// under the same stable operation identity is safe.
+		return e.submitRecorded(ctx, scope, snapshot, id, operation, input)
+	case domaincommit.Issued, domaincommit.Awaiting:
+		record, found, err := e.cfg.Domain.Reconcile(ctx, DomainQuery{
+			OperationID: operation.ID,
+			WorkspaceID: snapshot.WorkspaceID,
+			ProjectID:   snapshot.Target.ProjectID,
+			RunID:       string(id),
+		})
+		if err != nil {
+			return workflow.CommitResult{}, fmt.Errorf("reconcile governed domain effect: %w", err)
+		}
+		if found {
+			switch record.Status {
+			case DomainConfirmed, DomainConflict, DomainRejected:
+				return e.settleDomain(ctx, scope, snapshot, id, operation.ID, input, record)
+			}
+		}
+		// The intent mark proves a submission may have been attempted and no
+		// authoritative record decides it yet. The command could still be in
+		// flight, so the effect is neither repeated nor prematurely failed:
+		// the uncertain reconciliation is counted durably, the bounded window
+		// escalates to operator resolution, and the run holds either way.
+		return e.recordUncertainty(ctx, input, snapshot, journalScope, operation)
+	case domaincommit.Escalated:
+		// Escalation still self-heals: the owner's late answer settles the
+		// run the moment it exists, and an audited operator resolution of the
+		// journal settles it on the next wake.
+		record, found, err := e.cfg.Domain.Reconcile(ctx, DomainQuery{
+			OperationID: operation.ID,
+			WorkspaceID: snapshot.WorkspaceID,
+			ProjectID:   snapshot.Target.ProjectID,
+			RunID:       string(id),
+		})
+		if err != nil {
+			return workflow.CommitResult{}, fmt.Errorf("reconcile escalated domain effect: %w", err)
+		}
+		if found {
+			switch record.Status {
+			case DomainConfirmed, DomainConflict, DomainRejected:
+				return e.settleDomain(ctx, scope, snapshot, id, operation.ID, input, record)
+			}
+		}
+		return e.unsettledResult(operation.ReconcileAttempts, snapshot.Version, true), nil
+	default:
+		if outcome, terminal := domainOutcomeOf(operation.Status); terminal {
+			return e.settleDomain(ctx, scope, snapshot, id, operation.ID, input, DomainOutcome{Status: outcome})
+		}
+		uncertain := problem.New(problem.CodeDomainOutcomeUncertain, "")
+		uncertain.Detail = "the domain submission record is in an unrecognized state"
+		return workflow.CommitResult{}, uncertain
+	}
+}
+
+// recordUncertainty durably counts one uncertain reconciliation, records the
+// evidence trail that makes the held run observable, and escalates the
+// operation to operator resolution once the bounded window elapses. It
+// always answers with an unsettled hold — never a failure, never a resend.
+func (e *Executor) recordUncertainty(ctx context.Context, input workflow.CommitInput, snapshot runs.Snapshot, journalScope domaincommit.Scope, operation domaincommit.Operation) (workflow.CommitResult, error) {
+	updated, err := e.cfg.Submissions.RecordReconcile(ctx, journalScope, operation.ID, e.cfg.Clock.Now().UTC())
+	if err != nil {
+		// The journal may have been decided or escalated concurrently. The
+		// hold is never lost to that race, but the escalation state reported
+		// to the workflow must still come from the record rather than from
+		// this failed write, so the journal is re-read.
+		concurrent, getErr := e.cfg.Submissions.Get(ctx, journalScope, operation.ID)
+		return e.unsettledResult(operation.ReconcileAttempts+1, snapshot.Version, getErr == nil && concurrent.Status == domaincommit.Escalated), nil
+	}
+	if updated.ReconcileAttempts == 1 {
+		if err := e.recordEvidence(ctx, workflow.OpID{WorkflowID: input.Run.Key.WorkflowID(), Step: "domain-uncertain:" + operation.ID}, input.Run, snapshot, "domain.submission-uncertain", "audit", map[string]string{"operationId": operation.ID}); err != nil {
+			return workflow.CommitResult{}, err
+		}
+	}
+	escalated := updated.Status == domaincommit.Escalated
+	if e.cfg.ReconcileLimit > 0 && updated.ReconcileAttempts >= uint64(e.cfg.ReconcileLimit) && !escalated {
+		if err := e.cfg.Submissions.Escalate(ctx, journalScope, operation.ID, e.cfg.Clock.Now().UTC()); err != nil {
+			return workflow.CommitResult{}, fmt.Errorf("escalate uncertain domain submission: %w", err)
+		}
+		if err := e.recordEvidence(ctx, workflow.OpID{WorkflowID: input.Run.Key.WorkflowID(), Step: "domain-escalated:" + operation.ID}, input.Run, snapshot, "domain.submission-escalated", "audit", map[string]string{"operationId": operation.ID, "reconcileAttempts": fmt.Sprintf("%d", updated.ReconcileAttempts)}); err != nil {
+			return workflow.CommitResult{}, err
+		}
+		escalated = true
+	}
+	return e.unsettledResult(updated.ReconcileAttempts, snapshot.Version, escalated), nil
+}
+
+// OperatorResolution is one audited operator decision on a governed effect
+// that is durably escalated. OperationID names the exact submission the
+// operator reviewed, so a decision can never land on a different operation
+// than the one the evidence was read from. OperatorID is derived from the
+// verified request authority by the caller, never from the request body.
+// Basis is the reference to the authoritative evidence the decision rests on.
+type OperatorResolution struct {
+	OperationID string
+	Outcome     string
+	OperatorID  string
+	Basis       string
+}
+
+// Validate bounds the command. The outcome vocabulary is the domain outcome
+// vocabulary: an operator decides which authoritative outcome the effect
+// actually had, never an outcome the domain has no word for.
+func (r OperatorResolution) Validate() error {
+	if r.OperationID == "" || len(r.OperationID) > 128 {
+		return stableProblem(problem.CodeRequestInvalid, "the escalated operation identity is required")
+	}
+	switch r.Outcome {
+	case DomainConfirmed, DomainConflict, DomainRejected:
+	default:
+		return stableProblem(problem.CodeRequestInvalid, "the resolution outcome is not an authoritative domain outcome")
+	}
+	if r.OperatorID == "" || len(r.OperatorID) > 128 {
+		return stableProblem(problem.CodeRequestInvalid, "the resolving operator identity is required")
+	}
+	if strings.TrimSpace(r.Basis) == "" || len(r.Basis) > 1024 {
+		return stableProblem(problem.CodeRequestInvalid, "an evidence basis between 1 and 1024 characters is required")
+	}
+	return nil
+}
+
+func stableProblem(code problem.Code, detail string) problem.Details {
+	value := problem.New(code, "")
+	value.Detail = detail
+	return value
+}
+
+// ResolveEscalation is the production operator recovery path for a run whose
+// governed effect is durably escalated. It records the audited resolution on
+// the durable submission journal and then settles the held run from that
+// record.
+//
+// Everything the decision needs is proved here rather than assumed by the
+// caller: the run is read inside the operator's own workspace and project, so
+// a run in another tenant is indistinguishable from one that does not exist;
+// current authority is re-read and must be active, complete, hold the operator
+// role in this scope's subject register, and not have had authority over the
+// run's target withdrawn; the operator's identity comes from the verified
+// request authority the caller resolved; the journal write is a
+// compare-and-set on the escalated state, so two operators racing produce one
+// winner and one conflict; and a replay of the same decision converges on the
+// recorded one instead of deciding twice. It never contacts the domain owner
+// and never resends anything.
+func (e *Executor) ResolveEscalation(ctx context.Context, scope runs.Scope, id runs.ID, expectedVersion uint64, command OperatorResolution) (runs.Snapshot, error) {
+	if err := command.Validate(); err != nil {
+		return runs.Snapshot{}, err
+	}
+	snapshot, err := e.cfg.Runs.Get(ctx, scope, id)
+	if err != nil {
+		return runs.Snapshot{}, err
+	}
+	if _, denial := e.operatorAuthority(ctx, scope, snapshot); denial != nil {
+		return runs.Snapshot{}, *denial
+	}
+	journalScope := domaincommit.Scope{WorkspaceID: snapshot.WorkspaceID, ProjectID: snapshot.Target.ProjectID}
+	operation, found, err := e.cfg.Submissions.LatestForRun(ctx, journalScope, id)
+	if err != nil {
+		return runs.Snapshot{}, fmt.Errorf("load domain submission for operator resolution: %w", err)
+	}
+	if !found || operation.ID != command.OperationID {
+		// The operator decided an operation this run does not hold. Naming the
+		// exact operation is what binds the decision to the evidence it was
+		// made from, so a mismatch is refused rather than redirected.
+		mismatched := problem.New(problem.CodeIdempotencyConflict, "")
+		mismatched.Detail = "the named operation is not the run's current domain submission"
+		return runs.Snapshot{}, mismatched
+	}
+	if recorded, terminal := domainOutcomeOf(operation.Status); terminal {
+		// Already decided. A replay of this exact audited decision converges;
+		// anything else — a different outcome, a different operator, a
+		// different basis, or an outcome the owner decided itself — is a
+		// conflict, never an override.
+		if recorded == command.Outcome && operation.ResolvedBy == command.OperatorID && operation.ResolutionBasis == command.Basis {
+			return e.settleResolvedRun(ctx, scope, snapshot, id, operation, command)
+		}
+		decided := problem.New(problem.CodeIdempotencyConflict, "")
+		decided.Detail = "the governed effect is already decided"
+		return runs.Snapshot{}, decided
+	}
+	if operation.Status != domaincommit.Escalated {
+		notEscalated := problem.New(problem.CodeInvalidTransition, "")
+		notEscalated.Detail = "only a durably escalated governed effect may be operator-resolved"
+		return runs.Snapshot{}, notEscalated
+	}
+	if snapshot.Status != runs.AwaitingDomainConfirmation {
+		invalid := problem.New(problem.CodeInvalidTransition, "")
+		invalid.Detail = "only a run holding at the submit boundary can be operator-resolved"
+		return runs.Snapshot{}, invalid
+	}
+	if expectedVersion != 0 && snapshot.Version != expectedVersion {
+		return runs.Snapshot{}, problem.New(problem.CodeVersionConflict, "")
+	}
+	status, ok := submissionStatusOf(command.Outcome)
+	if !ok {
+		return runs.Snapshot{}, stableProblem(problem.CodeRequestInvalid, "the resolution outcome is not an authoritative domain outcome")
+	}
+	// The audited resolution is durable before anything settles: the journal
+	// row records who decided, on what basis, and to what outcome, under a
+	// compare-and-set on the escalated state that only one racer can win.
+	resolved, err := e.cfg.Submissions.Resolve(ctx, journalScope, operation.ID, status, command.OperatorID, command.Basis, e.cfg.Clock.Now().UTC())
+	if err != nil {
+		return runs.Snapshot{}, err
+	}
+	return e.settleResolvedRun(ctx, scope, snapshot, id, resolved, command)
+}
+
+// operatorAuthority re-reads the one current-authority source and proves it
+// permits this actor to recover this run right now. Nothing here trusts a
+// past decision: an authority withdrawn since the escalation was raised
+// denies the recovery on this read.
+func (e *Executor) operatorAuthority(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot) (authority.Current, *problem.Details) {
+	current, err := e.cfg.Authority.Current(ctx, scope.AuthorityScope())
+	if err != nil {
+		denied := problem.New(problem.CodeAuthorityStale, "")
+		denied.Detail = "current authority could not be resolved for operator recovery"
+		return authority.Current{}, &denied
+	}
+	if !current.Active() || !current.MaterialComplete() {
+		denied := problem.New(problem.CodeAuthorityStale, "")
+		denied.Detail = "current authority does not permit operator recovery"
+		return authority.Current{}, &denied
+	}
+	if !current.HasRole(authority.RoleOperator) {
+		denied := problem.New(problem.CodeAuthorizationDenied, "")
+		denied.Detail = "operator recovery requires the operator role in this scope"
+		return authority.Current{}, &denied
+	}
+	if current.TargetRevoked(snapshot.Target.ID) {
+		denied := problem.New(problem.CodeAuthorityStale, "")
+		denied.Detail = "authority over the run's target is revoked"
+		return authority.Current{}, &denied
+	}
+	return current, nil
+}
+
+// settleResolvedRun drives the run to the outcome its decided submission
+// record carries and records the immutable operator-recovery evidence. It
+// converges: a run already settled to the recorded outcome is returned as it
+// stands.
+func (e *Executor) settleResolvedRun(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot, id runs.ID, operation domaincommit.Operation, command OperatorResolution) (runs.Snapshot, error) {
+	input := workflow.CommitInput{
+		Run: workflow.RunInput{
+			Key:   workflow.RunKey{RunID: string(id), Generation: snapshot.ExecutionGeneration},
+			Scope: workflow.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID, ActorID: scope.ActorID},
+		},
+		ArtifactDigest: operation.ArtifactDigest,
+	}
+	if err := e.recordEvidence(ctx, workflow.OpID{WorkflowID: input.Run.Key.WorkflowID(), Step: "domain-operator-resolved:" + operation.ID}, input.Run, snapshot, "domain.submission-operator-resolved", "audit", map[string]string{
+		"operationId": operation.ID,
+		"outcome":     command.Outcome,
+		"resolvedBy":  command.OperatorID,
+		"basis":       command.Basis,
+	}); err != nil {
+		return runs.Snapshot{}, err
+	}
+	if _, err := e.settleDomain(ctx, scope, snapshot, id, operation.ID, input, DomainOutcome{Status: command.Outcome}); err != nil {
+		return runs.Snapshot{}, err
+	}
+	return e.cfg.Runs.Get(ctx, scope, id)
+}
+
+// submissionStatusOf maps a domain outcome onto the submission journal's
+// terminal vocabulary.
+func submissionStatusOf(outcome string) (domaincommit.Status, bool) {
+	switch outcome {
+	case DomainConfirmed:
+		return domaincommit.Applied, true
+	case DomainConflict:
+		return domaincommit.Conflicted, true
+	case DomainRejected:
+		return domaincommit.Rejected, true
+	default:
+		return "", false
+	}
+}
+
+// ResolveEscalatedSubmission settles a run held at the submit boundary from
+// its decided durable submission record. It is the settlement half of
+// operator recovery, reachable on its own for the case where the owner's late
+// answer finalized the journal and only the run transition is outstanding. It
+// never contacts the domain owner and never resends anything; the decided
+// journal is its only input, and settling converges under replay.
+func (e *Executor) ResolveEscalatedSubmission(ctx context.Context, scope runs.Scope, id runs.ID) (runs.Snapshot, error) {
+	snapshot, err := e.cfg.Runs.Get(ctx, scope, id)
+	if err != nil {
+		return runs.Snapshot{}, fmt.Errorf("load run for operator settlement: %w", err)
+	}
+	switch snapshot.Status {
+	case runs.Completed, runs.Conflict, runs.Failed:
+		// Already settled; converge.
+		return snapshot, nil
+	case runs.AwaitingDomainConfirmation:
+	default:
+		invalid := problem.New(problem.CodeInvalidTransition, "")
+		invalid.Detail = "only a run holding at the submit boundary can be operator-settled"
+		return runs.Snapshot{}, invalid
+	}
+	journalScope := domaincommit.Scope{WorkspaceID: snapshot.WorkspaceID, ProjectID: snapshot.Target.ProjectID}
+	operation, found, err := e.cfg.Submissions.LatestForRun(ctx, journalScope, id)
+	if err != nil {
+		return runs.Snapshot{}, fmt.Errorf("load domain submission for operator settlement: %w", err)
+	}
+	if !found {
+		missing := problem.New(problem.CodeDomainOutcomeUncertain, "")
+		missing.Retryability = "operator-action"
+		missing.Detail = "no durable submission record exists for the held run"
+		return runs.Snapshot{}, missing
+	}
+	outcome, terminal := domainOutcomeOf(operation.Status)
+	if !terminal {
+		undecided := problem.New(problem.CodeDomainOutcomeUncertain, "")
+		undecided.Retryability = "operator-action"
+		undecided.Detail = "the submission record is not decided; record the audited resolution on the journal first"
+		return runs.Snapshot{}, undecided
+	}
+	input := workflow.CommitInput{
+		Run: workflow.RunInput{
+			Key:   workflow.RunKey{RunID: string(id), Generation: snapshot.ExecutionGeneration},
+			Scope: workflow.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID, ActorID: scope.ActorID},
+		},
+		ArtifactDigest: operation.ArtifactDigest,
+	}
+	result, err := e.settleDomain(ctx, scope, snapshot, id, operation.ID, input, DomainOutcome{Status: outcome})
+	if err != nil {
+		return runs.Snapshot{}, err
+	}
+	_ = result
+	return e.cfg.Runs.Get(ctx, scope, id)
+}
+
+// runStateOf maps a domain outcome onto the terminal run state it settles to.
+func runStateOf(outcome string) (runs.State, bool) {
+	switch outcome {
+	case DomainConfirmed:
+		return runs.Completed, true
+	case DomainConflict:
+		return runs.Conflict, true
+	case DomainRejected:
+		return runs.Failed, true
+	default:
+		return "", false
+	}
+}
+
+// commitOutcomeOf maps a domain outcome onto the workflow commit vocabulary.
+func commitOutcomeOf(outcome string) string {
+	switch outcome {
+	case DomainConfirmed:
+		return workflow.CommitCompleted
+	case DomainConflict:
+		return workflow.CommitConflict
+	default:
+		return workflow.CommitFailed
+	}
+}
+
+// submissionStatusMust maps a domain outcome already proved terminal onto the
+// submission journal's terminal vocabulary.
+func submissionStatusMust(outcome string) domaincommit.Status {
+	status, _ := submissionStatusOf(outcome)
+	return status
+}
+
+// domainOutcomeOf maps a decided submission-journal status onto the domain
+// outcome vocabulary.
+func domainOutcomeOf(status domaincommit.Status) (string, bool) {
+	switch status {
+	case domaincommit.Applied:
+		return DomainConfirmed, true
+	case domaincommit.Conflicted:
+		return DomainConflict, true
+	case domaincommit.Rejected:
+		return DomainRejected, true
+	default:
+		return "", false
+	}
+}
+
+// finalizeSubmission records the decided outcome on the durable submission
+// journal, converging when another execution already finalized it identically.
+func (e *Executor) finalizeSubmission(ctx context.Context, journalScope domaincommit.Scope, operationID string, status domaincommit.Status) error {
+	if err := e.cfg.Submissions.Finalize(ctx, journalScope, operationID, status, e.cfg.Clock.Now().UTC()); err != nil {
+		current, getErr := e.cfg.Submissions.Get(ctx, journalScope, operationID)
+		if getErr == nil && current.Status == status {
+			return nil
+		}
+		return fmt.Errorf("finalize domain submission record: %w", err)
+	}
+	return nil
 }
 
 // settleDomain records one authoritative domain outcome on the aggregate. It
 // is the single place a governed effect becomes a terminal run state, whether
-// the outcome came from the submission itself or from reconciling one.
-func (e *Executor) settleDomain(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot, id runs.ID, input workflow.CommitInput, outcome DomainOutcome) (workflow.CommitResult, error) {
+// the outcome came from the submission itself or from reconciling one. The
+// durable submission journal is finalized before the run transitions, so a
+// crash between the two leaves a decided journal a successor replays from.
+func (e *Executor) settleDomain(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot, id runs.ID, operationID string, input workflow.CommitInput, outcome DomainOutcome) (workflow.CommitResult, error) {
+	journalScope := domaincommit.Scope{WorkspaceID: snapshot.WorkspaceID, ProjectID: snapshot.Target.ProjectID}
+	if state, terminal := runStateOf(outcome.Status); terminal && snapshot.Status == state {
+		// Another execution already settled this run to the same outcome — the
+		// workflow's own wake and the audited operator resolution can both
+		// reach here for one decided effect. Converge on the settled run
+		// instead of re-applying a transition it already made.
+		if err := e.finalizeSubmission(ctx, journalScope, operationID, submissionStatusMust(outcome.Status)); err != nil {
+			return workflow.CommitResult{}, err
+		}
+		return workflow.CommitResult{Outcome: commitOutcomeOf(outcome.Status), Version: snapshot.Version}, nil
+	}
 	switch outcome.Status {
 	case DomainConfirmed:
+		if err := e.finalizeSubmission(ctx, journalScope, operationID, domaincommit.Applied); err != nil {
+			return workflow.CommitResult{}, err
+		}
+		if err := e.recordEvidence(ctx, workflow.OpID{WorkflowID: input.Run.Key.WorkflowID(), Step: "domain:" + operationID}, input.Run, snapshot, "domain.effect-confirmed", "audit", map[string]string{"operationId": operationID, "status": outcome.Status}); err != nil {
+			return workflow.CommitResult{}, err
+		}
+		// The confirmed governed effect commits the immutable artifact before
+		// the run settles; a replay converges on the committed record.
+		if err := e.cfg.Artifacts.EnsureCommitted(ctx, ArtifactQuery{
+			WorkspaceID:    snapshot.WorkspaceID,
+			ProjectID:      snapshot.Target.ProjectID,
+			RunID:          string(id),
+			ArtifactDigest: input.ArtifactDigest,
+		}); err != nil {
+			return workflow.CommitResult{}, fmt.Errorf("commit confirmed artifact: %w", err)
+		}
 		next, lost, err := e.apply(ctx, scope, id, snapshot.Version, runs.Command{Kind: runs.ConfirmDomain, Traceparent: traceparentOf(input.Run)}, runs.Completed)
 		if err != nil {
 			return workflow.CommitResult{}, err
@@ -1149,8 +1985,14 @@ func (e *Executor) settleDomain(ctx context.Context, scope runs.Scope, snapshot 
 		if lost {
 			return workflow.CommitResult{Superseded: true}, nil
 		}
+		if err := e.settleRunBudget(ctx, snapshot, true); err != nil {
+			return workflow.CommitResult{}, err
+		}
 		return workflow.CommitResult{Outcome: workflow.CommitCompleted, Version: next.Version}, nil
 	case DomainConflict:
+		if err := e.finalizeSubmission(ctx, journalScope, operationID, domaincommit.Conflicted); err != nil {
+			return workflow.CommitResult{}, err
+		}
 		next, lost, err := e.apply(ctx, scope, id, snapshot.Version, runs.Command{Kind: runs.RecordDomainConflict, Traceparent: traceparentOf(input.Run)}, runs.Conflict)
 		if err != nil {
 			return workflow.CommitResult{}, err
@@ -1160,6 +2002,9 @@ func (e *Executor) settleDomain(ctx context.Context, scope runs.Scope, snapshot 
 		}
 		return workflow.CommitResult{Outcome: workflow.CommitConflict, Version: next.Version}, nil
 	case DomainRejected:
+		if err := e.finalizeSubmission(ctx, journalScope, operationID, domaincommit.Rejected); err != nil {
+			return workflow.CommitResult{}, err
+		}
 		failure := problem.New(problem.CodeDomainRejected, "")
 		failure.Retryability = "never"
 		failure.Detail = "the authoritative domain owner rejected the governed effect"
@@ -1170,21 +2015,45 @@ func (e *Executor) settleDomain(ctx context.Context, scope runs.Scope, snapshot 
 		if lost {
 			return workflow.CommitResult{Superseded: true}, nil
 		}
+		if err := e.settleRunBudget(ctx, snapshot, false); err != nil {
+			return workflow.CommitResult{}, err
+		}
 		return workflow.CommitResult{Outcome: workflow.CommitFailed, Problem: &failure, Version: next.Version}, nil
 	default:
 		// An unrecognized answer settles nothing. The run holds at the submit
-		// boundary and the next execution reconciles against the record.
-		uncertain := problem.New(problem.CodeDomainOutcomeUncertain, "")
-		uncertain.Detail = "domain outcome is uncertain; resolution requires the authoritative effect record"
-		return workflow.CommitResult{}, uncertain
+		// boundary and the next reconciliation wake resolves it against the
+		// authoritative record.
+		return e.unsettledResult(1, snapshot.Version, false), nil
 	}
 }
 
-// domainOperationID derives the governed effect identity from the durable
-// operation, so every execution of the same commit step addresses the same
-// operation at the authoritative owner.
-func domainOperationID(op workflow.OpID) string {
-	return "domain." + strings.TrimPrefix(mustDeterministicDigest(op), "sha256:")[:32]
+// domainOperationIDFor derives the governed effect identity from the
+// workflow, the accepted approval, and the artifact. The identity is stable
+// across reconciliation wakes and process restarts, so recovery always
+// addresses the operation the first execution recorded.
+func domainOperationIDFor(input workflow.CommitInput) string {
+	return "domain." + strings.TrimPrefix(mustDeterministicDigest(struct {
+		WorkflowID     string `json:"workflowId"`
+		RequestID      string `json:"requestId"`
+		ArtifactDigest string `json:"artifactDigest"`
+	}{input.Run.Key.WorkflowID(), input.RequestID, input.ArtifactDigest}), "sha256:")[:32]
+}
+
+// unsettledResult holds the run at the submit boundary without failing it:
+// the workflow waits out a bounded backoff shaped by how long the effect has
+// been uncertain, then reconciles again. escalated reports the submission
+// journal's durable escalation state — the workflow releases the run at the
+// boundary on that and nothing else, so it is only ever set from a record
+// that was actually read or written, never inferred from a local count.
+func (e *Executor) unsettledResult(attempts, version uint64, escalated bool) workflow.CommitResult {
+	backoff := e.cfg.DomainRetryBase
+	for i := uint64(1); i < attempts && backoff < e.cfg.DomainRetryCap; i++ {
+		backoff *= 2
+	}
+	if backoff > e.cfg.DomainRetryCap {
+		backoff = e.cfg.DomainRetryCap
+	}
+	return workflow.CommitResult{Unsettled: true, RetryAfterMillis: backoff.Milliseconds(), Version: version, Escalated: escalated}
 }
 
 func (e *Executor) Terminalize(ctx context.Context, op workflow.OpID, input workflow.TerminalInput) (workflow.Ack, error) {
@@ -1212,6 +2081,9 @@ func (e *Executor) Terminalize(ctx context.Context, op workflow.OpID, input work
 		kind = runs.RecordRefusal
 	}
 	if snapshot.Status == target {
+		if err := e.settleRunBudget(ctx, snapshot, target == runs.Refused); err != nil {
+			return workflow.Ack{}, err
+		}
 		return workflow.Ack{Version: snapshot.Version}, nil
 	}
 	command := runs.Command{Kind: kind, Traceparent: traceparentOf(input.Run)}
@@ -1228,6 +2100,11 @@ func (e *Executor) Terminalize(ctx context.Context, op workflow.OpID, input work
 	}
 	if lost {
 		return workflow.Ack{Superseded: true}, nil
+	}
+	// Terminal settlement: a refused run releases its budget hold; a failed
+	// run keeps its settled cost held so replacement work reserves on top.
+	if err := e.settleRunBudget(ctx, snapshot, target == runs.Refused); err != nil {
+		return workflow.Ack{}, err
 	}
 	return workflow.Ack{Version: next.Version}, nil
 }
@@ -1321,6 +2198,128 @@ func (e *Executor) resolveDefinition(snapshot runs.Snapshot) (agent.Definition, 
 		return agent.Definition{}, mismatch
 	}
 	return definition, nil
+}
+
+// budgetReservationID derives the deterministic identity of the standing
+// reservation one execution generation of one run holds.
+func budgetReservationID(runID string, generation uint64) budget.ReservationID {
+	return budget.ReservationID("budget:" + runID + ":g" + strconv.FormatUint(generation, 10))
+}
+
+// ensureRunReservation reserves the run's pinned worst-case cost under the
+// active budget generation before the run may execute. The first generation
+// reserves initially; a later generation is replacement work — the prior
+// generation's settled cost stays held, so the replacement must fit in
+// incremental worst-case headroom on top of it. Replay converges on the
+// reservation already made. A typed denial refuses the run.
+func (e *Executor) ensureRunReservation(ctx context.Context, snapshot runs.Snapshot, limits budgetLimits) *problem.Details {
+	policyVersion, policyErr := canonical.Digest(snapshot.Policy)
+	budgetVersion, budgetErr := canonical.Digest(snapshot.Budget)
+	if policyErr != nil || budgetErr != nil {
+		refusal := problem.New(problem.CodeBudgetDenied, "")
+		refusal.Detail = "pinned budget material is not digestible"
+		return &refusal
+	}
+	estimate := budget.Estimate{
+		ReservationID:     budgetReservationID(string(snapshot.RunID), snapshot.ExecutionGeneration),
+		RootRunID:         string(snapshot.RootRunID),
+		RunID:             string(snapshot.RunID),
+		WorkspaceID:       snapshot.WorkspaceID,
+		ProjectID:         snapshot.Target.ProjectID,
+		PolicyVersion:     policyVersion,
+		BudgetVersion:     budgetVersion,
+		MaximumCostMicros: limits.MaximumCostMicros,
+		ExpiresAt:         e.cfg.Clock.Now().Add(e.cfg.BudgetTTL),
+	}
+	generation := budget.Generation(snapshot.ExecutionGeneration)
+	var reserveErr error
+	if snapshot.ExecutionGeneration > 1 {
+		prior := budgetReservationID(string(snapshot.RunID), snapshot.ExecutionGeneration-1)
+		if _, err := e.cfg.Budget.Reservation(ctx, budgetScopeOf(snapshot), prior); err == nil {
+			// The prior generation holds budget: this generation is
+			// replacement work and reserves against it.
+			_, reserveErr = e.cfg.Budget.ReserveReplacement(ctx, estimate, generation, prior)
+		} else {
+			// The prior generation failed before it ever reserved; nothing is
+			// held, so this generation reserves initially.
+			_, reserveErr = e.cfg.Budget.ReserveInitial(ctx, estimate, generation)
+		}
+	} else {
+		_, reserveErr = e.cfg.Budget.ReserveInitial(ctx, estimate, generation)
+	}
+	if reserveErr != nil {
+		var details problem.Details
+		if errors.As(reserveErr, &details) {
+			return &details
+		}
+		refusal := problem.New(problem.CodeBudgetDenied, "")
+		refusal.Detail = "the durable budget reservation could not be made"
+		return &refusal
+	}
+	return nil
+}
+
+// settleRunBudget finalizes and settles the run's standing reservation at its
+// observed cost. Completion, refusal, and discard release the hold; a failed
+// run keeps its settled cost held un-released so an explicit-retry
+// replacement must reserve incremental worst-case headroom on top of it.
+// Settlement converges under replay and is a no-op for a run that never
+// reserved.
+func (e *Executor) settleRunBudget(ctx context.Context, snapshot runs.Snapshot, release bool) error {
+	scope := budgetScopeOf(snapshot)
+	generation := budget.Generation(snapshot.ExecutionGeneration)
+	id := budgetReservationID(string(snapshot.RunID), snapshot.ExecutionGeneration)
+	reservation, err := e.cfg.Budget.Reservation(ctx, scope, id)
+	if err != nil {
+		var details problem.Details
+		if errors.As(err, &details) && details.Code == string(problem.CodeResourceNotFound) {
+			return nil
+		}
+		return fmt.Errorf("read run budget reservation for settlement: %w", err)
+	}
+	if reservation.Released {
+		return nil
+	}
+	if err := e.cfg.Budget.Observe(ctx, budget.Observation{
+		ID:                  "budget:final:" + string(snapshot.RunID) + ":g" + strconv.FormatUint(snapshot.ExecutionGeneration, 10),
+		Scope:               scope,
+		ReservationID:       id,
+		RootRunID:           string(snapshot.RootRunID),
+		RunID:               string(snapshot.RunID),
+		TaskID:              "settlement",
+		AttemptID:           budget.AttemptID("settlement:" + string(id)),
+		ExecutionGeneration: snapshot.ExecutionGeneration,
+		Final:               true,
+	}); err != nil {
+		return fmt.Errorf("finalize run budget reservation: %w", err)
+	}
+	reservation, err = e.cfg.Budget.Reservation(ctx, scope, id)
+	if err != nil {
+		return fmt.Errorf("re-read run budget reservation for settlement: %w", err)
+	}
+	observed := reservation.ObservedMicros
+	if _, err := e.cfg.Budget.Reconcile(ctx, scope, id, generation, &observed, release, budget.SettlementActor); err != nil {
+		return fmt.Errorf("settle run budget reservation: %w", err)
+	}
+	return nil
+}
+
+// budgetScopeOf is the one place a run snapshot becomes a budget scope. The
+// project axis is the run's target project, which is the project the run's
+// spend belongs to — never the caller's ambient project.
+func budgetScopeOf(snapshot runs.Snapshot) budget.Scope {
+	return budget.Scope{WorkspaceID: snapshot.WorkspaceID, ProjectID: snapshot.Target.ProjectID}
+}
+
+// SettleRunBudget is the terminal budget settlement of one run, reachable from
+// the lifecycle paths that terminalize a run outside the durable workflow —
+// cancellation and discard. It performs the same idempotent,
+// generation-fenced final usage reconciliation the workflow's own terminal
+// transitions perform, so a run that ends through the control API accounts
+// for its usage and frees its headroom exactly like one that ends in the
+// workflow.
+func (e *Executor) SettleRunBudget(ctx context.Context, snapshot runs.Snapshot, release bool) error {
+	return e.settleRunBudget(ctx, snapshot, release)
 }
 
 // budgetLimits is the decoded pinned AgentBudget.

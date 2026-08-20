@@ -16,15 +16,22 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent/runner"
 	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
+	"github.com/ancyloce/anvilkit-agent-service/internal/budget"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler"
+	"github.com/ancyloce/anvilkit-agent-service/internal/contractclient"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contracts"
+	"github.com/ancyloce/anvilkit-agent-service/internal/domaincommit"
+	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/execution"
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/modelgateway"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
+	"github.com/ancyloce/anvilkit-agent-service/internal/recovery"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
+	"github.com/ancyloce/anvilkit-agent-service/internal/scheduler"
 	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
+	"github.com/ancyloce/anvilkit-agent-service/internal/usage"
 	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
 	"github.com/ancyloce/anvilkit-agent-service/internal/workflow/memory"
 )
@@ -249,6 +256,18 @@ type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now() }
 
+// deferredSettlement mirrors the composition root's late binding of the
+// executor into the interrupt service's terminal-budget port.
+type deferredSettlement struct{ inner *execution.Executor }
+
+func (d *deferredSettlement) set(executor *execution.Executor) { d.inner = executor }
+func (d *deferredSettlement) SettleRunBudget(ctx context.Context, snapshot runs.Snapshot, release bool) error {
+	if d.inner == nil {
+		return fmt.Errorf("terminal budget settlement is unavailable")
+	}
+	return d.inner.SettleRunBudget(ctx, snapshot, release)
+}
+
 type harness struct {
 	t        *testing.T
 	repo     *interrupts.MemoryRepository
@@ -269,10 +288,27 @@ type harness struct {
 	authoritySource *authority.Static
 	artifacts       *execution.ControlledArtifactPort
 	commitAuthority *execution.ControlledCommitAuthority
+	submissions     *domaincommit.MemoryStore
 	grants          authority.Grants
 	// material is the running tool material the executor checks each run's
 	// frozen tool profile against.
 	material execution.ToolMaterial
+	// budgetController and budgetLedger are the harness's durable-contract
+	// budget authority; tests assert reservations, observations, and
+	// settlement against the ledger.
+	budgetController *budget.Controller
+	budgetLedger     *budget.MemoryLedger
+	// settlement is the deferred terminal-budget port the interrupt service
+	// settles cancellation and discard through.
+	settlement *deferredSettlement
+	// evidence is the immutable evidence store guarded boundaries append to.
+	evidence *events.MemoryEvidence
+	// actorRole is the role the scope's subject register admits the run actor
+	// under; the default is the plain agent actor.
+	actorRole string
+	// executor is the underlying pipeline, exposed for the operator-facing
+	// entry points that live outside the workflow.Operations surface.
+	executor *execution.Executor
 }
 
 // toolMaterial returns the running tool material this harness built from the
@@ -299,10 +335,20 @@ type harnessOptions struct {
 	ledger execution.ScriptLedger
 	// modelRecorder overrides the durable invocation recorder.
 	modelRecorder modelgateway.Recorder
+	// submissions overrides the durable domain-submission journal, so a test
+	// can inject a crash at an exact write-ahead boundary.
+	submissions domaincommit.Store
+	// budgetHeadroomMicros bounds the controller's total held exposure;
+	// reconcileLimit bounds uncertain domain reconciliations before
+	// escalation, and the retry base/cap shape the unsettled-commit backoff.
+	budgetHeadroomMicros int64
+	reconcileLimit       int
+	domainRetryBase      time.Duration
+	domainRetryCap       time.Duration
 }
 
 func defaultHarnessOptions() harnessOptions {
-	return harnessOptions{inputTTL: time.Minute, approvalTTL: time.Minute, maximumCalls: 100, allowedTools: []string{"anvilkit.tool.context-echo", "anvilkit.tool.contract-validate", "anvilkit.tool.artifact-scan"}, allowedCapabilities: []string{"fake.execute", "contract.validate", "artifact.scan"}, domainOutcome: execution.DomainConfirmed, providerAttempts: 1}
+	return harnessOptions{inputTTL: time.Minute, approvalTTL: time.Minute, maximumCalls: 100, allowedTools: []string{"anvilkit.tool.context-echo", "anvilkit.tool.contract-validate", "anvilkit.tool.artifact-scan"}, allowedCapabilities: []string{"fake.execute", "contract.validate", "artifact.scan"}, domainOutcome: execution.DomainConfirmed, providerAttempts: 1, budgetHeadroomMicros: 10_000_000_000, reconcileLimit: 3, domainRetryBase: time.Millisecond, domainRetryCap: 4 * time.Millisecond}
 }
 
 func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) *harness {
@@ -390,6 +436,26 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		t.Fatal(err)
 	}
 	lockDigest := sha256.Sum256(lockBytes)
+	var approvedSchemas []agent.SchemaReference
+	for _, definition := range registry.Definitions() {
+		approvedSchemas = append(approvedSchemas, definition.InputSchema, definition.OutputSchema)
+	}
+	var approvedPolicyDigests []string
+	seenPolicies := map[string]bool{}
+	for _, definition := range registry.Definitions() {
+		if !seenPolicies[definition.GuardrailPolicy.Digest] {
+			seenPolicies[definition.GuardrailPolicy.Digest] = true
+			approvedPolicyDigests = append(approvedPolicyDigests, definition.GuardrailPolicy.Digest)
+		}
+	}
+	controlledRuntime, err := execution.NewControlledContractRuntime(pinnedValidator, approvedSchemas, "sha256:"+hex.EncodeToString(lockDigest[:]), registry.CatalogDigest(), approvedPolicyDigests, execution.StaticBOMAuthority{Digest: validDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractValidator, err := contractclient.New(controlledRuntime, &contractclient.MemoryRecorder{}, execution.BoundedSleeper{}, clock, 3, time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	h := &harness{t: t, adapter: adapter, recorder: recorder, registry: registry,
 		artifacts:       execution.NewControlledArtifactPort(),
@@ -406,7 +472,16 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 	h.journal = journal.NewMemoryStore()
 	h.tool = execution.NewControlledToolExecutor()
 	h.domain = execution.NewControlledDomainPort(options.domainOutcome)
-	service, err := interrupts.NewService(h.repo, interrupts.BoundSchemaValidator{}, allowAllAuthority{}, engineSignals{h}, noLeases{}, clearReconciler{}, allowReservation{}, h.journal, clock, &sequenceIDs{}, interrupts.Limits{ChildDepth: 4, ChildFanout: 16})
+	h.submissions = domaincommit.NewMemoryStore()
+	var submissions domaincommit.Store = h.submissions
+	if options.submissions != nil {
+		submissions = options.submissions
+	}
+	// The interrupt service is composed before the executor exists, so it
+	// receives the same deferred settlement handle production uses; the real
+	// executor is published into it once built.
+	h.settlement = &deferredSettlement{}
+	service, err := interrupts.NewService(h.repo, interrupts.BoundSchemaValidator{}, allowAllAuthority{}, engineSignals{h}, noLeases{}, clearReconciler{}, allowReservation{}, h.settlement, h.journal, clock, &sequenceIDs{}, interrupts.Limits{ChildDepth: 4, ChildFanout: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +500,36 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		toolMaterial = options.toolMaterial
 	}
 	h.material = toolMaterial
+	h.evidence = events.NewMemoryEvidence()
 	h.authoritySource = authority.NewStatic(h.currentAuthority(h.authority(options)))
+	dispatchEffects := &scheduler.MemoryEffects{}
+	dispatchScheduler, err := scheduler.New(execution.DispatchIDs{}, clock, scheduler.PrerequisiteFunc(func(_ context.Context, value scheduler.Create) error {
+		if value.ReservationID == "" || !value.ReservationCurrent || !value.PolicyAllowed {
+			return fmt.Errorf("task prerequisites are unsatisfied")
+		}
+		return nil
+	}), time.Minute, dispatchEffects, dispatchEffects, dispatchEffects, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usagePipeline, err := usage.New(usage.NewMemoryStore(), execution.NewControlledUsageSink())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatchRegister, err := recovery.NewMemoryRegister(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fencedTools, err := execution.NewScheduledToolExecutor(dispatchScheduler, dispatchRegister, h.authoritySource, approvedMaterial, h.tool, usagePipeline, execution.NewMemoryToolReservations(), clock, "executor-test", "sha256:"+hex.EncodeToString(lockDigest[:]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.budgetLedger = budget.NewMemoryLedger(clock.Now)
+	budgetController, err := budget.New(h.budgetLedger, repoGenerations{h.repo}, nullExposure{}, clock, budget.HeadroomPolicy{MaximumReservedMicros: options.budgetHeadroomMicros, ReviewAtBasisPoints: 8000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.budgetController = budgetController
 	executor, err := execution.New(execution.Config{
 		Registry:          registry,
 		Runner:            agentRunner,
@@ -434,26 +538,53 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		InterruptReader:   h.repo,
 		InterruptExpirer:  h.repo,
 		Authority:         h.authoritySource,
-		Tools:             h.tool,
+		Tools:             fencedTools,
 		ToolMaterial:      toolMaterial,
 		Artifacts:         h.artifacts,
 		Domain:            h.domain,
+		Submissions:       submissions,
 		CommitAuthority:   h.commitAuthority,
+		Contracts:         contractValidator,
+		Evidence:          h.evidence,
+		Deltas:            events.NewDeltaBroker(),
 		Decisions:         h.journal,
+		Budget:            budgetController,
 		Clock:             clock,
 		InputTTL:          options.inputTTL,
 		ApprovalTTL:       options.approvalTTL,
+		BudgetTTL:         time.Hour,
 		TurnLimit:         16,
 		ValidatorIdentity: "sha256:" + hex.EncodeToString(lockDigest[:]),
+		ReconcileLimit:    options.reconcileLimit,
+		DomainRetryBase:   options.domainRetryBase,
+		DomainRetryCap:    options.domainRetryCap,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.executor = executor
+	h.settlement.set(executor)
 	h.ops = newCountingOps(executor)
 	h.store = memory.NewStore()
 	h.engine = memory.New(h.store, h.ops)
 	return h
 }
+
+// repoGenerations resolves the active budget generation from the seeded run
+// aggregate, mirroring the production run-store-backed generation authority.
+type repoGenerations struct{ repo *interrupts.MemoryRepository }
+
+func (g repoGenerations) Current(ctx context.Context, workspaceID, projectID, rootRunID string) (budget.Generation, error) {
+	snapshot, err := g.repo.Current(ctx, runs.Scope{WorkspaceID: workspaceID, ProjectID: projectID, ActorID: testActor}, runs.ID(rootRunID))
+	if err != nil {
+		return 0, err
+	}
+	return budget.Generation(snapshot.ExecutionGeneration), nil
+}
+
+type nullExposure struct{}
+
+func (nullExposure) ObserveExposure(context.Context, string, int64, int64, bool) error { return nil }
 
 // harnessBudget parameterizes the pinned AgentBudget the harness seeds, so
 // model-call, token, and cost exhaustion can each be exercised.
@@ -514,7 +645,26 @@ func (h *harness) currentAuthority(material runs.Authority) authority.Current {
 	value := material
 	value.WorkspaceActive, value.ActorActive, value.PermissionActive, value.PolicyActive = true, true, true, true
 	value.Grants = h.grants
+	value.ActorRole = h.actorRole
 	return value
+}
+
+// grantRole republishes the harness's current authority with the actor
+// admitted under the named role, modelling the scope's subject register
+// admitting (or ceasing to admit) an operator.
+func (h *harness) grantRole(role string) {
+	h.t.Helper()
+	material := h.snapshotAuthority()
+	h.actorRole = role
+	h.authoritySource.Replace(h.currentAuthority(material))
+}
+
+// snapshotAuthority is the run's pinned governance material, which current
+// authority must keep agreeing with.
+func (h *harness) snapshotAuthority() runs.Authority {
+	h.t.Helper()
+	snapshot := h.snapshot()
+	return runs.Authority{Definition: snapshot.Definition, ContractBOM: snapshot.ContractBOM, Policy: snapshot.Policy, Budget: snapshot.Budget}
 }
 
 func (h *harness) seedSnapshot(operation string, material runs.Authority) workflow.RunInput {
