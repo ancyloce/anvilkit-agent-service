@@ -45,7 +45,9 @@ func New(repositoryRoot string) (*Adapter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open schema root: %w", err)
 	}
-	defer schemaRoot.Close()
+	// The root is opened only to bound reads; closing it cannot fail in a
+	// way that changes the schemas already loaded.
+	defer func() { _ = schemaRoot.Close() }()
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return nil, fmt.Errorf("read schema directory: %w", err)
