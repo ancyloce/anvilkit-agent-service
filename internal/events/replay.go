@@ -100,6 +100,9 @@ func ValidateBytes(raw []byte, bounds Bounds) error {
 	if event.Kind == "" || event.EventID == "" || event.RunID == "" || event.WorkspaceID == "" || event.ProjectID == "" || event.Sequence == 0 || event.EventType == "" || event.OccurredAt == "" || len(event.Subject) == 0 || len(event.TraceContext) == 0 || len(event.ContractBOMReference) == 0 {
 		return eventProblem("event omits required correlation fields")
 	}
+	if !PublicEventType(event.EventType) {
+		return eventProblem("event type is not in the public registry")
+	}
 	if event.Payload != nil {
 		if len(event.Payload) > bounds.MaximumFields {
 			return eventProblem("event payload has too many fields")

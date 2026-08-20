@@ -20,6 +20,12 @@ type Reader struct {
 	pollInterval time.Duration
 	guard        *contractguard.Guard
 	bounds       events.Bounds
+	// retention is the durable public-cursor retention window: a cursor whose
+	// event is older answers 410 even while its bytes still exist, so clients
+	// recover through the snapshot instead of an unbounded replay contract.
+	// Zero means no age-based expiry (unit-test readers).
+	retention time.Duration
+	now       func() time.Time
 }
 
 func NewReader(database *pgxpool.Pool, guard *contractguard.Guard, configured ...events.Bounds) *Reader {
@@ -27,7 +33,19 @@ func NewReader(database *pgxpool.Pool, guard *contractguard.Guard, configured ..
 	if len(configured) == 1 {
 		bounds = configured[0]
 	}
-	return &Reader{database: database, pollInterval: 25 * time.Millisecond, guard: guard, bounds: bounds}
+	return &Reader{database: database, pollInterval: 25 * time.Millisecond, guard: guard, bounds: bounds, now: time.Now}
+}
+
+// NewRetainedReader builds the production reader with the deployment's
+// declared cursor-retention window.
+func NewRetainedReader(database *pgxpool.Pool, guard *contractguard.Guard, bounds events.Bounds, retention time.Duration, now func() time.Time) (*Reader, error) {
+	if database == nil || guard == nil || retention <= 0 || now == nil {
+		return nil, fmt.Errorf("retained event reader requires database, guard, a positive retention window, and a clock")
+	}
+	reader := NewReader(database, guard, bounds)
+	reader.retention = retention
+	reader.now = now
+	return reader, nil
 }
 
 func (r *Reader) Append(ctx context.Context, scope events.Scope, event events.Event) error {
@@ -79,12 +97,16 @@ func (r *Reader) Replay(ctx context.Context, request events.ReplayRequest) (even
 	}
 	var after uint64
 	if request.AfterEventID != "" {
-		err := r.database.QueryRow(ctx, `SELECT sequence FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND event_id=$4`, request.Scope.WorkspaceID, request.Scope.ProjectID, request.RunID, request.AfterEventID).Scan(&after)
+		var cursorCreatedAt time.Time
+		err := r.database.QueryRow(ctx, `SELECT sequence,created_at FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND event_id=$4`, request.Scope.WorkspaceID, request.Scope.ProjectID, request.RunID, request.AfterEventID).Scan(&after, &cursorCreatedAt)
 		if err != nil {
 			if err == pgx.ErrNoRows {
 				return events.ReplayPage{}, events.CursorExpired()
 			}
 			return events.ReplayPage{}, err
+		}
+		if r.retention > 0 && r.now().Sub(cursorCreatedAt) > r.retention {
+			return events.ReplayPage{}, events.CursorExpired()
 		}
 	}
 	rows, err := r.database.Query(ctx, `SELECT event_id,sequence,event_bytes,created_at FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND sequence>$4 ORDER BY sequence LIMIT $5`, request.Scope.WorkspaceID, request.Scope.ProjectID, request.RunID, after, request.Limit+1)
