@@ -1,0 +1,3 @@
+DROP TRIGGER IF EXISTS controlled_provider_operations_immutable ON agent_workflow.controlled_provider_operations;
+DROP FUNCTION IF EXISTS agent_workflow.guard_controlled_provider_operations();
+DROP TABLE IF EXISTS agent_workflow.controlled_provider_operations;

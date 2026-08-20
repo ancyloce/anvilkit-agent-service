@@ -24,6 +24,7 @@ import (
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/applyauth"
 	applyauthpg "github.com/ancyloce/anvilkit-agent-service/internal/applyauth/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/cancellation"
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler"
 	contextpg "github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler/postgres"
@@ -34,6 +35,8 @@ import (
 	commitpg "github.com/ancyloce/anvilkit-agent-service/internal/domaincommit/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	eventpg "github.com/ancyloce/anvilkit-agent-service/internal/events/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/execution"
+	executionpg "github.com/ancyloce/anvilkit-agent-service/internal/execution/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/idempotency"
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	interruptpg "github.com/ancyloce/anvilkit-agent-service/internal/interrupts/postgres"
@@ -69,7 +72,11 @@ func TestPostgresFoundations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer connection.Close(ctx)
+	defer func() {
+		if err := connection.Close(ctx); err != nil {
+			t.Errorf("close migration connection: %v", err)
+		}
+	}()
 	migrator := persistence.NewMigrator(connection)
 
 	if err := migrator.ApplyThrough(ctx, 1); err != nil {
@@ -124,11 +131,14 @@ func TestPostgresFoundations(t *testing.T) {
 	assertDurableRunCore(t, ctx, authorityPool)
 	assertDurableRunStoreAtomicity(t, ctx, authorityPool)
 	assertControlInterrupts(t, ctx, authorityPool)
+	assertDurableInterruptExpiry(t, ctx, authorityPool, pool)
 	assertModelEvidence(t, ctx, pool)
 	assertCommitBoundaries(t, ctx, pool)
 	assertSchedulerBoundaries(t, ctx, pool)
 	assertWorkflowLeaseCleanup(t, ctx, pool)
 	assertRecoveryBoundaries(t, ctx, pool)
+	assertDurableProviderLedger(t, ctx, pool)
+	assertCancellationReconciliation(t, ctx, pool)
 	if os.Getenv("DURABLE_CREATE_LOAD_TEST") == "1" {
 		assertDurableCreateLatency(t, ctx, authorityPool)
 	}
@@ -141,26 +151,17 @@ func TestPostgresFoundations(t *testing.T) {
 	if err := migrator.Apply(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := migrator.RollbackLast(ctx); err != nil {
-		t.Fatal(err)
+	// Rolling back every embedded migration must remove every service
+	// schema, so the count is derived from the migration set itself and
+	// cannot drift when a migration is added.
+	upMigrations, err := filepath.Glob(filepath.Join("migrations", "*.up.sql"))
+	if err != nil || len(upMigrations) == 0 {
+		t.Fatalf("migration set = %v err = %v", upMigrations, err)
 	}
-	if err := migrator.RollbackLast(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrator.RollbackLast(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrator.RollbackLast(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrator.RollbackLast(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrator.RollbackLast(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrator.RollbackLast(ctx); err != nil {
-		t.Fatal(err)
+	for range upMigrations {
+		if err := migrator.RollbackLast(ctx); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var schemas int
 	if err := connection.QueryRow(ctx, `SELECT count(*) FROM information_schema.schemata WHERE schema_name IN ('agent_control','agent_events','agent_workflow','agent_artifacts','agent_memory','agent_evaluation')`).Scan(&schemas); err != nil || schemas != 0 {
@@ -575,11 +576,12 @@ func schedulerFence(suffix string) string {
 	return "opaque-fence-scheduler" + suffix
 }
 
-type modelIDs struct{}
+// admittingArgumentValidator is a test double for the tool guard argument
+// port; the pinned-schema validator is exercised by the execution suite.
+type admittingArgumentValidator struct{}
 
-func (modelIDs) InvocationID() string { return "invocation-model" }
-func (modelIDs) AttemptID(attempt int) modelgateway.AttemptID {
-	return modelgateway.AttemptID(fmt.Sprintf("attempt-%d", attempt))
+func (admittingArgumentValidator) Validate(context.Context, tools.SchemaReference, json.RawMessage) error {
+	return nil
 }
 
 type modelSleeper struct{}
@@ -590,6 +592,17 @@ type modelKeys struct{ value []byte }
 
 func (keys modelKeys) Key(context.Context, string) ([]byte, error) {
 	return append([]byte(nil), keys.value...), nil
+}
+
+// fixedAttemptBudget authorizes every physical attempt at the request's own
+// ceilings; budget policy itself is exercised by the planning and runner
+// suites.
+type fixedAttemptBudget struct {
+	inputTokens, outputTokens, costMicros int64
+}
+
+func (b fixedAttemptBudget) Authorize(int, modelgateway.Usage) (modelgateway.AttemptLimits, error) {
+	return modelgateway.AttemptLimits{MaximumInputTokens: b.inputTokens, MaximumOutputTokens: b.outputTokens, MaximumTotalTokens: b.inputTokens + b.outputTokens, MaximumCostMicros: b.costMicros}, nil
 }
 
 func assertModelEvidence(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
@@ -611,25 +624,31 @@ func assertModelEvidence(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 		t.Fatal("durable registry version was reused for different content")
 	}
 	recorder, _ := modelpg.NewInvocationRecorder(pool)
-	gateway, err := modelgateway.NewGateway(map[modelgateway.ProviderID]modelgateway.Adapter{modelgateway.FakeProviderID: modelgateway.FakeAdapter{}}, recorder, modelIDs{}, testClock{time.Unix(400, 0)}, modelSleeper{})
+	gateway, err := modelgateway.NewGateway(map[modelgateway.ProviderID]modelgateway.Adapter{modelgateway.FakeProviderID: modelgateway.FakeAdapter{}}, recorder, testClock{time.Unix(400, 0)}, modelSleeper{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	policy := modelgateway.Policy{Version: "policy-v1", AllowedProviders: []modelgateway.ProviderID{modelgateway.FakeProviderID}, AllowedRegions: []string{"test"}, DataClasses: []modelgateway.DataClass{modelgateway.Internal}, Capability: "plan", MinimumSafety: 2, MaximumCostMicros: 1000}
-	_, record, err := gateway.InvokeEligible(ctx, registry, policy, modelgateway.InvokeRequest{RunID: "run-model", WorkspaceID: "workspace-model", ProjectID: "project-model", Context: []byte("minimal"), DataClasses: []modelgateway.DataClass{modelgateway.Internal}, MaximumOutputBytes: 4096, MaximumInputTokens: 256, MaximumOutputTokens: 2000, MaximumCostMicros: 1000, Timeout: time.Second, MaximumAttempts: 1, Scenario: "valid"})
+	_, record, err := gateway.InvokeEligible(ctx, registry, policy, modelgateway.InvokeRequest{RunID: "run-model", WorkspaceID: "workspace-model", ProjectID: "project-model", IdempotencyKey: "run-model:g1:turn-0000", Context: []byte("minimal"), DataClasses: []modelgateway.DataClass{modelgateway.Internal}, MaximumOutputBytes: 4096, MaximumInputTokens: 256, MaximumOutputTokens: 2000, MaximumTotalTokens: 2256, MaximumCostMicros: 1000, Timeout: time.Second, MaximumAttempts: 1, Scenario: "valid", Budget: fixedAttemptBudget{inputTokens: 256, outputTokens: 2000, costMicros: 1000}})
 	if err != nil || len(record.PhysicalAttempts) != 1 {
 		t.Fatalf("durable invocation=%#v err=%v", record, err)
 	}
+	// Provider identities are derived from the caller's durable operation
+	// key, so the durable evidence must carry exactly that identity.
+	invocationID := modelgateway.InvocationIdentity("run-model:g1:turn-0000")
+	if record.InvocationID != invocationID {
+		t.Fatalf("invocation identity %q is not derived from the durable operation key", record.InvocationID)
+	}
 	var attempts []byte
-	if err := pool.QueryRow(ctx, `SELECT physical_attempt_ids FROM agent_workflow.provider_invocations WHERE workspace_id='workspace-model' AND project_id='project-model' AND invocation_id='invocation-model'`).Scan(&attempts); err != nil || !bytes.Contains(attempts, []byte("attempt-1")) {
+	if err := pool.QueryRow(ctx, `SELECT physical_attempt_ids FROM agent_workflow.provider_invocations WHERE workspace_id='workspace-model' AND project_id='project-model' AND invocation_id=$1`, invocationID).Scan(&attempts); err != nil || !bytes.Contains(attempts, []byte(modelgateway.AttemptIdentity(invocationID, 1))) {
 		t.Fatalf("physical attempt was not durable before disclosure: %s %v", attempts, err)
 	}
 	var policyDigest string
 	var policySnapshot []byte
-	if err := pool.QueryRow(ctx, `SELECT policy_digest,policy_snapshot FROM agent_workflow.provider_invocations WHERE workspace_id='workspace-model' AND project_id='project-model' AND invocation_id='invocation-model'`).Scan(&policyDigest, &policySnapshot); err != nil || policyDigest != record.PolicyDigest || !bytes.Contains(policySnapshot, []byte(`"policy-v1"`)) {
+	if err := pool.QueryRow(ctx, `SELECT policy_digest,policy_snapshot FROM agent_workflow.provider_invocations WHERE workspace_id='workspace-model' AND project_id='project-model' AND invocation_id=$1`, invocationID).Scan(&policyDigest, &policySnapshot); err != nil || policyDigest != record.PolicyDigest || !bytes.Contains(policySnapshot, []byte(`"policy-v1"`)) {
 		t.Fatalf("immutable policy evidence digest=%s snapshot=%s err=%v", policyDigest, policySnapshot, err)
 	}
-	durableRecord, err := recorder.Get(ctx, "workspace-model", "project-model", "invocation-model")
+	durableRecord, err := recorder.Get(ctx, "workspace-model", "project-model", invocationID)
 	if err != nil || durableRecord.PolicyDigest != record.PolicyDigest || !reflect.DeepEqual(durableRecord.PolicySnapshot, record.PolicySnapshot) || len(durableRecord.PhysicalAttempts) != 1 {
 		t.Fatalf("durable invocation reload=%#v err=%v", durableRecord, err)
 	}
@@ -641,19 +660,19 @@ func assertModelEvidence(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 	independentRegistry, _ := modelgateway.NewRegistry(snapshot)
 	changedSelection, _ := independentRegistry.Select("workspace-model", changedPolicy)
 	forgedPolicyRecord := record
-	forgedPolicyRecord.InvocationID = "invocation-model-forged-policy"
+	forgedPolicyRecord.InvocationID = invocationID + ".forged-policy"
 	forgedPolicyRecord.PolicyDigest = changedSelection.PolicyDigest
 	forgedPolicyRecord.PolicySnapshot = changedSelection.PolicySnapshot
 	if err := recorder.BeforeDisclosure(ctx, forgedPolicyRecord); err == nil {
 		t.Fatal("durable provider policy version was reused for different content")
 	}
-	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.provider_invocations SET provider='mutated' WHERE workspace_id='workspace-model' AND project_id='project-model' AND invocation_id='invocation-model'`); err == nil {
+	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.provider_invocations SET provider='mutated' WHERE workspace_id='workspace-model' AND project_id='project-model' AND invocation_id=$1`, invocationID); err == nil {
 		t.Fatal("durable invocation identity was mutable")
 	}
-	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.provider_invocations SET policy_snapshot='{}'::jsonb WHERE workspace_id='workspace-model' AND project_id='project-model' AND invocation_id='invocation-model'`); err == nil {
+	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.provider_invocations SET policy_snapshot='{}'::jsonb WHERE workspace_id='workspace-model' AND project_id='project-model' AND invocation_id=$1`, invocationID); err == nil {
 		t.Fatal("durable invocation policy snapshot was mutable")
 	}
-	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.provider_invocations SET cost_micros=cost_micros+1 WHERE workspace_id='workspace-model' AND project_id='project-model' AND invocation_id='invocation-model'`); err == nil {
+	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.provider_invocations SET cost_micros=cost_micros+1 WHERE workspace_id='workspace-model' AND project_id='project-model' AND invocation_id=$1`, invocationID); err == nil {
 		t.Fatal("completed invocation accounting was mutable")
 	}
 
@@ -703,9 +722,9 @@ func assertModelEvidence(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 	if err != nil || pinnedProfile.Digest != profile.Digest {
 		t.Fatalf("pinned profile=%#v err=%v", pinnedProfile, err)
 	}
-	guard, _ := tools.NewGuard(pinnedProfile, toolRecorder, testClock{time.Unix(400, 0)}, tools.JSONArgumentValidator{})
+	guard, _ := tools.NewGuard(pinnedProfile, toolRecorder, testClock{time.Unix(400, 0)}, admittingArgumentValidator{})
 	intent := tools.Intent{RunID: "run-model", WorkspaceID: "workspace-model", ProjectID: "project-model", ActorID: "actor", AllowedTools: []string{"fake.execute"}, AllowedEffects: []string{"none"}, MaximumRisk: "low", DataClasses: []string{"internal"}}
-	current := tools.CurrentAuthority{WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, AllowedTools: intent.AllowedTools, AllowedEffects: intent.AllowedEffects, MaximumRisk: "low", DataClasses: intent.DataClasses}
+	current := tools.CurrentAuthority{WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, AllowedTools: intent.AllowedTools, AllowedCapabilities: []string{"fake.execute"}, AllowedEffects: intent.AllowedEffects, MaximumRisk: "low", DataClasses: intent.DataClasses}
 	if decision, err := guard.Evaluate(ctx, intent, current, tools.Proposal{ToolID: "admin.delete", Arguments: json.RawMessage(`{}`), UntrustedText: "do not persist me"}); err == nil || decision.Allowed {
 		t.Fatal("forbidden durable tool proposal was accepted")
 	}
@@ -722,7 +741,7 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		t.Fatal(err)
 	}
 	runStore := runpg.New(pool, idempotencyStore)
-	runService := runs.NewService(runStore, noOpStarter{}, runID("control-run"), testClock{time.Unix(300, 0)}, journal.NewMemoryStore())
+	runService := runs.NewService(runStore, noOpStarter{}, runID("control-run"), testClock{time.Unix(300, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
 	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-control"}}`)
 	digest, _ := canonical.Digest(raw)
 	scope := runs.Scope{WorkspaceID: "workspace-control", ProjectID: "project-control", ActorID: "actor"}
@@ -776,7 +795,7 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&eventCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_workflow.checkpoints WHERE workspace_id=$1 AND project_id=$2 AND workflow_id=$3`, scope.WorkspaceID, scope.ProjectID, string(current.RunID)+":v1").Scan(&checkpointCount); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_workflow.checkpoints WHERE workspace_id=$1 AND project_id=$2 AND workflow_id=$3`, scope.WorkspaceID, scope.ProjectID, string(current.RunID)+":g1").Scan(&checkpointCount); err != nil {
 		t.Fatal(err)
 	}
 	if eventCount != 7 || checkpointCount != 7 {
@@ -956,7 +975,7 @@ func assertDurableCreateLatency(t *testing.T, ctx context.Context, pool *pgxpool
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := runs.NewService(runpg.New(pool, idempotencyStore), noOpStarter{}, &sequentialRunIDs{}, testClock{time.Now().UTC()}, journal.NewMemoryStore())
+	service := runs.NewService(runpg.New(pool, idempotencyStore), noOpStarter{}, &sequentialRunIDs{}, testClock{time.Now().UTC()}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
 	scope := runs.Scope{WorkspaceID: "workspace-durable-load", ProjectID: "project-durable-load", ActorID: "actor"}
 	authority := durableAuthority()
 	latencies := make([]time.Duration, requests)
@@ -1013,7 +1032,7 @@ func assertDurableCreateLatency(t *testing.T, ctx context.Context, pool *pgxpool
 			P95Milliseconds       float64 `json:"p95Milliseconds"`
 			ThresholdMilliseconds int64   `json:"thresholdMilliseconds"`
 			Passed                bool    `json:"passed"`
-		}{1, "agent-service-load-model-v1", duration.Milliseconds(), requests, 20, float64(p95) / float64(time.Millisecond), 300, p95 < 300*time.Millisecond}
+		}{1, "agent-service-load-model", duration.Milliseconds(), requests, 20, float64(p95) / float64(time.Millisecond), 300, p95 < 300*time.Millisecond}
 		raw, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
 			t.Fatal(err)
@@ -1048,7 +1067,7 @@ func assertDurableRunCore(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	}
 	store := runpg.New(pool, idempotencyStore)
 	starter := &durableStarter{store: store, started: make(map[string]bool)}
-	service := runs.NewService(store, starter, runID("durable-run"), testClock{time.Unix(200, 0)}, journal.NewMemoryStore())
+	service := runs.NewService(store, starter, runID("durable-run"), testClock{time.Unix(200, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
 	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-durable"}}`)
 	digest, _ := canonical.Digest(raw)
 	scope := runs.Scope{WorkspaceID: "workspace-durable", ProjectID: "project-durable", ActorID: "actor"}
@@ -1210,13 +1229,13 @@ func assertDurableRunStoreAtomicity(t *testing.T, ctx context.Context, pool *pgx
 			}
 			return nil
 		})
-		service := runs.NewService(store, noOpStarter{}, runIDGenerator(runID), testClock{time.Unix(250, 0)}, journal.NewMemoryStore())
+		service := runs.NewService(store, noOpStarter{}, runIDGenerator(runID), testClock{time.Unix(250, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
 		if _, err := service.Create(ctx, runs.CreateInput{Scope: scope, Key: fmt.Sprintf("atomic-create-%d", index), ClaimedDigest: digest, Traceparent: traceparent, Raw: raw, Authority: durableAuthority()}); err == nil {
 			t.Fatalf("create failure %s did not abort", point)
 		}
 		assertDurableAtomicCounts(t, ctx, pool, scope, runID, 0, 0)
 
-		base := runs.NewService(runpg.New(pool, idempotencyStore), noOpStarter{}, runIDGenerator(runID), testClock{time.Unix(250, 0)}, journal.NewMemoryStore())
+		base := runs.NewService(runpg.New(pool, idempotencyStore), noOpStarter{}, runIDGenerator(runID), testClock{time.Unix(250, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
 		created, err := base.Create(ctx, runs.CreateInput{Scope: scope, Key: fmt.Sprintf("atomic-base-%d", index), ClaimedDigest: digest, Traceparent: traceparent, Raw: raw, Authority: durableAuthority()})
 		if err != nil {
 			t.Fatal(err)
@@ -1245,7 +1264,7 @@ func assertDurableAtomicCounts(t *testing.T, ctx context.Context, pool *pgxpool.
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.outbox WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, runID).Scan(&outboxCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_workflow.checkpoints WHERE workspace_id=$1 AND project_id=$2 AND workflow_id=$3`, scope.WorkspaceID, scope.ProjectID, string(runID)+":v1").Scan(&checkpointCount); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_workflow.checkpoints WHERE workspace_id=$1 AND project_id=$2 AND workflow_id=$3`, scope.WorkspaceID, scope.ProjectID, string(runID)+":g1").Scan(&checkpointCount); err != nil {
 		t.Fatal(err)
 	}
 	if eventCount != wantEvidence || outboxCount != wantEvidence || checkpointCount != wantEvidence {
@@ -1287,7 +1306,7 @@ func (s *durableStarter) Ensure(ctx context.Context, start runs.Start) error {
 	if _, err := s.store.Get(ctx, start.Scope, start.RunID); err != nil {
 		return fmt.Errorf("workflow started before durable run: %w", err)
 	}
-	s.started[start.WorkflowID] = true
+	s.started[fmt.Sprintf("%s:g%d", start.RunID, start.Generation)] = true
 	return nil
 }
 func (s *durableStarter) Count() int { s.lock.Lock(); defer s.lock.Unlock(); return len(s.started) }
@@ -1515,5 +1534,343 @@ func isolatedDatabase(t *testing.T, ctx context.Context, baseURL string) (string
 	return databaseURL, func() {
 		_, _ = admin.Exec(context.Background(), fmt.Sprintf(`DROP DATABASE IF EXISTS %s WITH (FORCE)`, pgx.Identifier{name}.Sanitize()))
 		_ = admin.Close(context.Background())
+	}
+}
+
+// assertDurableInterruptExpiry proves the atomic expiry seam against real
+// SQL: expiry and acceptance contend for the same request row, exactly one
+// wins, and the durable marker makes the loser fail closed.
+func assertDurableInterruptExpiry(t *testing.T, ctx context.Context, pool *pgxpool.Pool, admin *pgxpool.Pool) {
+	t.Helper()
+	idempotencyStore, err := idempotency.New(pool, idempotency.Config{Retention: 48 * time.Hour, MinimumLifetime: 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := interruptpg.New(pool, idempotencyStore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+	schema := json.RawMessage(`{"type":"object","required":["answer"],"properties":{"answer":{"type":"string"}},"additionalProperties":false}`)
+	now := time.Now().UTC()
+	failure := problem.New(problem.CodeInputRequestExpired, "")
+	failure.Detail = "the durable input deadline elapsed before a response was accepted"
+
+	awaiting := func(suffix string) (runs.Scope, runs.Snapshot, interrupts.InputRequest, interrupts.OperationResult) {
+		t.Helper()
+		runStore := runpg.New(pool, idempotencyStore)
+		runService := runs.NewService(runStore, noOpStarter{}, runID("expiry-run-"+suffix), testClock{time.Unix(300, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
+		raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-expiry"}}`)
+		digest, _ := canonical.Digest(raw)
+		scope := runs.Scope{WorkspaceID: "workspace-expiry-" + suffix, ProjectID: "project-expiry", ActorID: "actor"}
+		created, err := runService.Create(ctx, runs.CreateInput{Scope: scope, Key: "create", ClaimedDigest: digest, Traceparent: trace, Raw: raw, Authority: durableAuthority()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		current, err := runService.Transition(ctx, scope, created.Snapshot.RunID, 1, runs.Command{Kind: runs.BeginPreparation, Traceparent: trace})
+		if err != nil {
+			t.Fatal(err)
+		}
+		current, err = runService.Transition(ctx, scope, current.RunID, current.Version, runs.Command{Kind: runs.PreparationReady, Traceparent: trace})
+		if err != nil {
+			t.Fatal(err)
+		}
+		write := interrupts.Write{Scope: scope, RunID: current.RunID, ExpectedVersion: current.Version, IdempotencyKey: "open-input", Traceparent: trace}
+		request, opened, err := store.OpenInput(ctx, write, interrupts.InputRequest{ID: interrupts.RequestID("input-expiry-" + suffix), RunID: current.RunID, Version: 1, Question: "question", ResponseSchema: schema, ExpiresAt: now.Add(time.Hour), ResumeCheckpoint: "planning", CreatedAt: now}, "sha256:open-"+suffix)
+		if err != nil || opened.Snapshot.Status != runs.AwaitingInput {
+			t.Fatalf("open input result=%#v err=%v", opened, err)
+		}
+		return scope, current, request, opened
+	}
+
+	// Expiry commits: the run fails, the request is durably expired, and a
+	// response inside its original deadline can no longer revive it.
+	scope, current, request, opened := awaiting("expired")
+	expireWrite := interrupts.Write{Scope: scope, RunID: current.RunID, ExpectedVersion: opened.Snapshot.Version, IdempotencyKey: "expire-input", Traceparent: trace}
+	expiry, err := store.ExpireInput(ctx, expireWrite, request.ID, failure, now)
+	if err != nil || expiry.Raced || expiry.Superseded || expiry.Snapshot.Status != runs.Failed {
+		t.Fatalf("durable expiry=%#v err=%v", expiry, err)
+	}
+	stored, err := store.Input(ctx, scope, current.RunID, request.ID)
+	if err != nil || stored.ExpiredAt == nil || stored.Response != nil {
+		t.Fatalf("expired request=%#v err=%v", stored, err)
+	}
+	respondWrite := interrupts.Write{Scope: scope, RunID: current.RunID, ExpectedVersion: expiry.Snapshot.Version, IdempotencyKey: "respond-late", Traceparent: trace}
+	_, err = store.AcceptInput(ctx, respondWrite, interrupts.InputResponseCommand{RequestID: request.ID, RequestVersion: request.Version, Value: json.RawMessage(`{"answer":"late"}`)}, "sha256:late", now)
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeInputRequestExpired) {
+		t.Fatalf("late response error=%v", err)
+	}
+	replayedExpiry, err := store.ExpireInput(ctx, expireWrite, request.ID, failure, now)
+	if err != nil || replayedExpiry.Snapshot.Version != expiry.Snapshot.Version {
+		t.Fatalf("replayed expiry=%#v err=%v", replayedExpiry, err)
+	}
+
+	// Acceptance wins: expiry reports the race, writes no marker, and leaves
+	// the answered run alive for its workflow.
+	answeredScope, answered, answeredRequest, answeredOpened := awaiting("answered")
+	acceptWrite := interrupts.Write{Scope: answeredScope, RunID: answered.RunID, ExpectedVersion: answeredOpened.Snapshot.Version, IdempotencyKey: "respond-input", Traceparent: trace}
+	accepted, err := store.AcceptInput(ctx, acceptWrite, interrupts.InputResponseCommand{RequestID: answeredRequest.ID, RequestVersion: answeredRequest.Version, Value: json.RawMessage(`{"answer":"yes"}`)}, "sha256:answered", now)
+	if err != nil || accepted.Snapshot.Status != runs.Planning {
+		t.Fatalf("accepted response=%#v err=%v", accepted, err)
+	}
+	raced, err := store.ExpireInput(ctx, interrupts.Write{Scope: answeredScope, RunID: answered.RunID, ExpectedVersion: accepted.Snapshot.Version, IdempotencyKey: "expire-answered", Traceparent: trace}, answeredRequest.ID, failure, now)
+	if err != nil || !raced.Raced {
+		t.Fatalf("answered request lost the race: %#v err=%v", raced, err)
+	}
+	answeredStored, err := store.Input(ctx, answeredScope, answered.RunID, answeredRequest.ID)
+	if err != nil || answeredStored.ExpiredAt != nil {
+		t.Fatalf("answered request was also expired: %#v err=%v", answeredStored, err)
+	}
+	if final, err := store.Current(ctx, answeredScope, answered.RunID); err != nil || final.Status != runs.Planning {
+		t.Fatalf("answered run=%#v err=%v", final, err)
+	}
+
+	// Another authority moved the run out of the waiting state first. That is
+	// the explicit concurrency conflict the superseded outcome exists for: the
+	// expiry writes nothing and reports it.
+	staleScope, stale, staleRequest, staleOpened := awaiting("stale")
+	staleRuns := runs.NewService(runpg.New(pool, idempotencyStore), noOpStarter{}, runID(stale.RunID), testClock{time.Unix(300, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
+	cancelling, err := staleRuns.Transition(ctx, staleScope, stale.RunID, staleOpened.Snapshot.Version, runs.Command{Kind: runs.RequestCancellation, Traceparent: trace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	superseded, err := store.ExpireInput(ctx, interrupts.Write{Scope: staleScope, RunID: stale.RunID, ExpectedVersion: cancelling.Version, IdempotencyKey: "expire-stale", Traceparent: trace}, staleRequest.ID, failure, now)
+	if err != nil || !superseded.Superseded {
+		t.Fatalf("superseded expiry=%#v err=%v", superseded, err)
+	}
+	if current, err := store.Current(ctx, staleScope, stale.RunID); err != nil || current.Status != runs.Cancelling {
+		t.Fatalf("superseded expiry moved the run: %#v err=%v", current, err)
+	}
+	if storedStale, err := store.Input(ctx, staleScope, stale.RunID, staleRequest.ID); err != nil || storedStale.ExpiredAt != nil {
+		t.Fatalf("superseded expiry marked the request expired: %#v err=%v", storedStale, err)
+	}
+
+	// Infrastructure failures are not concurrency conflicts. A rejected
+	// checkpoint and a rejected outbox write must surface as errors so the
+	// durable caller retries; reporting either as superseded would record an
+	// interrupt as settled that no transaction ever settled.
+	for _, injection := range []struct {
+		name, suffix, install, remove string
+	}{
+		{
+			name:   "checkpoint",
+			suffix: "checkpointfail",
+			install: `CREATE OR REPLACE FUNCTION agent_workflow.probe_checkpoint_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.workflow_id LIKE 'expiry-run-checkpointfail%' THEN
+        RAISE EXCEPTION 'injected checkpoint failure';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER probe_checkpoint_failure BEFORE INSERT ON agent_workflow.checkpoints FOR EACH ROW EXECUTE FUNCTION agent_workflow.probe_checkpoint_failure();`,
+			remove: `DROP TRIGGER IF EXISTS probe_checkpoint_failure ON agent_workflow.checkpoints; DROP FUNCTION IF EXISTS agent_workflow.probe_checkpoint_failure();`,
+		},
+		{
+			name:   "outbox",
+			suffix: "outboxfail",
+			install: `CREATE OR REPLACE FUNCTION agent_events.probe_outbox_failure() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.run_id LIKE 'expiry-run-outboxfail%' THEN
+        RAISE EXCEPTION 'injected outbox failure';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER probe_outbox_failure BEFORE INSERT ON agent_events.outbox FOR EACH ROW EXECUTE FUNCTION agent_events.probe_outbox_failure();`,
+			remove: `DROP TRIGGER IF EXISTS probe_outbox_failure ON agent_events.outbox; DROP FUNCTION IF EXISTS agent_events.probe_outbox_failure();`,
+		},
+	} {
+		t.Run("expiry-propagates-"+injection.name+"-failure", func(t *testing.T) {
+			failScope, failRun, failRequest, failOpened := awaiting(injection.suffix)
+			if _, err := admin.Exec(ctx, injection.install); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if _, err := admin.Exec(ctx, injection.remove); err != nil {
+					t.Errorf("remove %s failure injection: %v", injection.name, err)
+				}
+			}()
+			expiry, err := store.ExpireInput(ctx, interrupts.Write{Scope: failScope, RunID: failRun.RunID, ExpectedVersion: failOpened.Snapshot.Version, IdempotencyKey: "expire-" + injection.suffix, Traceparent: trace}, failRequest.ID, failure, now)
+			if err == nil {
+				t.Fatalf("%s failure was swallowed: %#v", injection.name, expiry)
+			}
+			if expiry.Superseded || expiry.Raced {
+				t.Fatalf("%s failure was reported as a concurrency outcome: %#v", injection.name, expiry)
+			}
+			current, err := store.Current(ctx, failScope, failRun.RunID)
+			if err != nil || current.Status != runs.AwaitingInput {
+				t.Fatalf("%s failure left the run at %#v err=%v", injection.name, current, err)
+			}
+			stored, err := store.Input(ctx, failScope, failRun.RunID, failRequest.ID)
+			if err != nil || stored.ExpiredAt != nil {
+				t.Fatalf("%s failure durably expired the request anyway: %#v err=%v", injection.name, stored, err)
+			}
+		})
+	}
+}
+
+// assertDurableProviderLedger proves the controlled model adapter's provider
+// idempotency, settled outcomes, script position, and usage evidence survive a
+// process restart: a brand new adapter over the same rows replays instead of
+// calling the provider again.
+func assertDurableProviderLedger(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	ledger, err := executionpg.NewScriptLedger(pool, "ledger-durability")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := []byte(`{"kind":"TypedPlan","steps":[{"tool":"agent.final","arguments":{}}]}`)
+	second := []byte(`{"kind":"TypedPlan","steps":[{"tool":"agent.continue","arguments":{}}]}`)
+	adapter, err := execution.NewScriptedAdapter(ledger, first, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := modelgateway.AdapterRequest{
+		InvocationID: "invocation.durable", IdempotencyKey: "attempt.durable",
+		Provider: execution.ControlledProviderID, Context: []byte("context"),
+		MaximumOutputBytes: 65536, MaximumInputTokens: 1000, MaximumOutputTokens: 1000, MaximumTotalTokens: 2000, MaximumCostMicros: 1_000_000,
+	}
+	original, err := adapter.Invoke(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	billed, err := adapter.Billed(ctx)
+	if err != nil || billed != 1 {
+		t.Fatalf("billed = %d err = %v", billed, err)
+	}
+
+	// A new adapter over the same durable rows is what a restarted process is.
+	restarted, err := execution.NewScriptedAdapter(ledger, first, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := restarted.Invoke(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(replayed.Output) != string(original.Output) || replayed.InputTokens != original.InputTokens || replayed.CostMicros != original.CostMicros {
+		t.Fatalf("restart replay = %+v, want the settled outcome %+v", replayed, original)
+	}
+	billed, err = restarted.Billed(ctx)
+	if err != nil || billed != 1 {
+		t.Fatalf("billed after restart = %d err = %v, want no duplicate billing", billed, err)
+	}
+	next := request
+	next.IdempotencyKey = "attempt.durable.next"
+	advanced, err := restarted.Invoke(ctx, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(advanced.Output) == string(original.Output) {
+		t.Fatal("a new operation did not advance the durable script position after restart")
+	}
+	billed, err = restarted.Billed(ctx)
+	if err != nil || billed != 2 {
+		t.Fatalf("billed = %d err = %v, want two distinct settled operations", billed, err)
+	}
+
+	// A settled operation is history: the store refuses to rewrite or drop it.
+	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.controlled_provider_operations SET script_position=script_position+1 WHERE ledger='ledger-durability'`); err == nil {
+		t.Fatal("a settled provider operation was rewritten")
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM agent_workflow.controlled_provider_operations WHERE ledger='ledger-durability'`); err == nil {
+		t.Fatal("a settled provider operation was deleted")
+	}
+}
+
+// assertCancellationReconciliation proves cancellation is declared safe only
+// after the authoritative provider, worker, tool, artifact, and domain-effect
+// records say every external effect is settled.
+func assertCancellationReconciliation(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	reconciler, err := cancellation.New(cancellation.Pools{Control: pool, Workflow: pool, Artifacts: pool, Events: pool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := runs.Scope{WorkspaceID: "workspace-cancel", ProjectID: "project-cancel", ActorID: "actor"}
+	digest := "sha256:" + strings.Repeat("c", 64)
+
+	// A run with no recorded external effect at all is clear.
+	clear, authoritative, err := reconciler.Reconcile(ctx, scope, "run-cancel-clean", false)
+	if err != nil || !clear || authoritative != nil {
+		t.Fatalf("clean run reconcile = (%t, %v, %v)", clear, authoritative, err)
+	}
+
+	// An in-flight provider invocation is an unresolved external effect.
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_control.provider_policy_snapshots(workspace_id,project_id,policy_version,policy_digest,policy_snapshot) VALUES($1,$2,'cancel-policy',$3,'{}'::jsonb) ON CONFLICT DO NOTHING`, scope.WorkspaceID, scope.ProjectID, digest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_workflow.provider_invocations(workspace_id,project_id,run_id,invocation_id,registry_snapshot_digest,policy_version,policy_digest,policy_snapshot,provider,model_version,region,disclosed_data_classes,started_at) VALUES($1,$2,'run-cancel-provider','invocation-cancel',$3,'cancel-policy',$3,'{}'::jsonb,'provider','model','region','[]'::jsonb,now())`, scope.WorkspaceID, scope.ProjectID, digest); err != nil {
+		t.Fatal(err)
+	}
+	clear, _, err = reconciler.Reconcile(ctx, scope, "run-cancel-provider", false)
+	if err != nil || clear {
+		t.Fatalf("an in-flight provider invocation was reported clear: %t %v", clear, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.provider_invocations SET completed_at=now() WHERE workspace_id=$1 AND project_id=$2 AND invocation_id='invocation-cancel'`, scope.WorkspaceID, scope.ProjectID); err != nil {
+		t.Fatal(err)
+	}
+	clear, _, err = reconciler.Reconcile(ctx, scope, "run-cancel-provider", false)
+	if err != nil || !clear {
+		t.Fatalf("a completed provider invocation was not reported clear: %t %v", clear, err)
+	}
+
+	// A tool dispatch may still be running while an executor lease survives.
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_workflow.executor_leases(workspace_id,project_id,workflow_id,executor_id,lease_epoch,expires_at) VALUES($1,$2,'run-cancel-tool:g1','executor-cancel',1,now()+interval '1 hour')`, scope.WorkspaceID, scope.ProjectID); err != nil {
+		t.Fatal(err)
+	}
+	clear, _, err = reconciler.Reconcile(ctx, scope, "run-cancel-tool", false)
+	if err != nil || clear {
+		t.Fatalf("a live executor lease was reported clear: %t %v", clear, err)
+	}
+
+	// An artifact the run left pending is an unsettled external effect.
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_artifacts.metadata(workspace_id,project_id,artifact_id,run_id,digest,state,lineage) VALUES($1,$2,'artifact-cancel','run-cancel-artifact',$3,'pending','{}'::jsonb)`, scope.WorkspaceID, scope.ProjectID, digest); err != nil {
+		t.Fatal(err)
+	}
+	clear, _, err = reconciler.Reconcile(ctx, scope, "run-cancel-artifact", false)
+	if err != nil || clear {
+		t.Fatalf("a pending artifact was reported clear: %t %v", clear, err)
+	}
+
+	// An unacknowledged queue delivery is dispatched work nothing has taken.
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_events.queue_deliveries(workspace_id,project_id,message_id,run_id,task_id,topic,payload,payload_digest) VALUES($1,$2,'message-cancel','run-cancel-queue','task-cancel','agent.public-events','\x7b7d'::bytea,$3)`, scope.WorkspaceID, scope.ProjectID, digest); err != nil {
+		t.Fatal(err)
+	}
+	clear, _, err = reconciler.Reconcile(ctx, scope, "run-cancel-queue", false)
+	if err != nil || clear {
+		t.Fatalf("an unacknowledged queue delivery was reported clear: %t %v", clear, err)
+	}
+
+	// A governed effect the domain owner already applied is authoritative:
+	// cancellation cannot overwrite it, and the real outcome is reported.
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_control.apply_authorizations(workspace_id,project_id,run_id,authorization_id,key_id,payload_digest,token_digest,issued_at,expires_at) VALUES($1,$2,'run-cancel-domain','authorization-cancel','key',$3,$3,now(),now()+interval '1 hour')`, scope.WorkspaceID, scope.ProjectID, digest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_control.domain_operations(workspace_id,project_id,run_id,operation_id,authorization_id,authorization_jws,action_digest,artifact_digest,expected_revision,idempotency_key,request_digest,status,created_at,updated_at) VALUES($1,$2,'run-cancel-domain','operation-cancel','authorization-cancel','jws',$3,$3,'rev','key',$3,'awaiting-domain-confirmation',now(),now())`, scope.WorkspaceID, scope.ProjectID, digest); err != nil {
+		t.Fatal(err)
+	}
+	clear, authoritative, err = reconciler.Reconcile(ctx, scope, "run-cancel-domain", false)
+	if err != nil || clear || authoritative != nil {
+		t.Fatalf("an unsettled domain effect reconcile = (%t, %v, %v)", clear, authoritative, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_control.domain_operations SET status='applied',authorization_consumed=true,updated_at=now() WHERE workspace_id=$1 AND project_id=$2 AND operation_id='operation-cancel'`, scope.WorkspaceID, scope.ProjectID); err != nil {
+		t.Fatal(err)
+	}
+	clear, authoritative, err = reconciler.Reconcile(ctx, scope, "run-cancel-domain", false)
+	if err != nil || clear || authoritative == nil || *authoritative != runs.Completed {
+		t.Fatalf("an applied domain effect reconcile = (%t, %v, %v)", clear, authoritative, err)
+	}
+
+	// Cancellation arriving inside the commit boundary with no settled record
+	// can never be declared safe.
+	clear, _, err = reconciler.Reconcile(ctx, scope, "run-cancel-clean", true)
+	if err != nil || clear {
+		t.Fatalf("commit-phase cancellation was declared safe: %t %v", clear, err)
+	}
+
+	// A reconciler that cannot read an effect domain must not exist at all.
+	if _, err := cancellation.New(cancellation.Pools{Control: pool, Workflow: pool, Artifacts: pool}); err == nil {
+		t.Fatal("a reconciler was built without every effect store")
 	}
 }
