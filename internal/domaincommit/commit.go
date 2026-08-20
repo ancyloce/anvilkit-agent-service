@@ -18,9 +18,14 @@ type Scope struct{ WorkspaceID, ProjectID string }
 type Status string
 
 const (
-	Recorded   Status = "recorded"
-	Issued     Status = "issued"
-	Awaiting   Status = "awaiting-domain-confirmation"
+	Recorded Status = "recorded"
+	Issued   Status = "issued"
+	Awaiting Status = "awaiting-domain-confirmation"
+	// Escalated marks a submitted-but-uncertain operation whose bounded
+	// reconciliation window elapsed without the authoritative owner deciding
+	// it. It is still the run's one active operation; leaving it requires an
+	// audited operator resolution or the owner's late answer.
+	Escalated  Status = "escalated"
 	Applied    Status = "applied"
 	Conflicted Status = "conflict"
 	Rejected   Status = "rejected"
@@ -36,7 +41,15 @@ type Operation struct {
 	IdempotencyKey, RequestDigest                  string
 	Status                                         Status
 	AuthorizationConsumed                          bool
-	CreatedAt, UpdatedAt                           time.Time
+	// ReconcileAttempts counts the durable uncertain reconciliations of a
+	// submitted operation; FirstUncertainAt stamps when uncertainty began and
+	// EscalatedAt when the bounded window elapsed. ResolvedBy and
+	// ResolutionBasis audit the operator resolution of an escalated
+	// operation; both are empty for owner-decided outcomes.
+	ReconcileAttempts             uint64
+	FirstUncertainAt, EscalatedAt time.Time
+	ResolvedBy, ResolutionBasis   string
+	CreatedAt, UpdatedAt          time.Time
 }
 type Store interface {
 	ActiveForRun(context.Context, Scope, runs.ID) (Operation, bool, error)
@@ -44,6 +57,21 @@ type Store interface {
 	MarkIssued(context.Context, Scope, string, time.Time) error
 	MarkAwaiting(context.Context, Scope, string, time.Time) error
 	Finalize(context.Context, Scope, string, Status, time.Time) error
+	// RecordReconcile durably counts one uncertain reconciliation of a
+	// submitted operation and stamps when uncertainty began, so recovery is
+	// bounded by a durable count rather than process memory.
+	RecordReconcile(context.Context, Scope, string, time.Time) (Operation, error)
+	// Escalate marks a bounded-out submitted operation as requiring operator
+	// resolution. Escalating an already-escalated operation converges.
+	Escalate(context.Context, Scope, string, time.Time) error
+	// Resolve records an audited operator resolution of an escalated
+	// operation: the decided terminal outcome, the resolving operator, and
+	// the reference to the authoritative evidence the decision is based on.
+	// It never applies to an operation the owner already decided.
+	Resolve(ctx context.Context, scope Scope, id string, outcome Status, resolvedBy, basis string, at time.Time) (Operation, error)
+	// LatestForRun answers the most recently created operation for the run,
+	// decided or not — the record an operator settlement resolves from.
+	LatestForRun(context.Context, Scope, runs.ID) (Operation, bool, error)
 	Get(context.Context, Scope, string) (Operation, error)
 }
 type RunStore interface {
@@ -290,7 +318,7 @@ func (s *MemoryStore) ActiveForRun(_ context.Context, scope Scope, runID runs.ID
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	for _, value := range s.values {
-		if value.Scope == scope && value.RunID == runID && (value.Status == Recorded || value.Status == Issued || value.Status == Awaiting) {
+		if value.Scope == scope && value.RunID == runID && (value.Status == Recorded || value.Status == Issued || value.Status == Awaiting || value.Status == Escalated) {
 			return value, true, nil
 		}
 	}
@@ -300,7 +328,7 @@ func (s *MemoryStore) Create(_ context.Context, value Operation) error {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	for _, prior := range s.values {
-		if prior.Scope == value.Scope && prior.RunID == value.RunID && (prior.Status == Recorded || prior.Status == Issued || prior.Status == Awaiting) {
+		if prior.Scope == value.Scope && prior.RunID == value.RunID && (prior.Status == Recorded || prior.Status == Issued || prior.Status == Awaiting || prior.Status == Escalated) {
 			if prior == value {
 				return nil
 			}
@@ -347,6 +375,79 @@ func (s *MemoryStore) Finalize(_ context.Context, scope Scope, id string, status
 	defer s.lock.Unlock()
 	return s.update(scope, id, status, now, true)
 }
+func (s *MemoryStore) RecordReconcile(_ context.Context, scope Scope, id string, now time.Time) (Operation, error) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	key := operationKey(scope, id)
+	value, ok := s.values[key]
+	if !ok {
+		return Operation{}, problem.New(problem.CodeResourceNotFound, "")
+	}
+	if value.Status != Issued && value.Status != Awaiting {
+		return Operation{}, problem.New(problem.CodeInvalidTransition, "")
+	}
+	if now.Before(value.UpdatedAt) {
+		return Operation{}, problem.New(problem.CodeInvalidTransition, "")
+	}
+	value.ReconcileAttempts++
+	if value.FirstUncertainAt.IsZero() {
+		value.FirstUncertainAt = now
+	}
+	value.UpdatedAt = now
+	s.values[key] = value
+	return value, nil
+}
+func (s *MemoryStore) Escalate(_ context.Context, scope Scope, id string, now time.Time) error {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	key := operationKey(scope, id)
+	value, ok := s.values[key]
+	if !ok {
+		return problem.New(problem.CodeResourceNotFound, "")
+	}
+	if value.Status == Escalated {
+		return nil
+	}
+	if err := s.update(scope, id, Escalated, now, false); err != nil {
+		return err
+	}
+	value = s.values[key]
+	value.EscalatedAt = now
+	s.values[key] = value
+	return nil
+}
+func (s *MemoryStore) Resolve(_ context.Context, scope Scope, id string, outcome Status, resolvedBy, basis string, now time.Time) (Operation, error) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	if outcome != Applied && outcome != Conflicted && outcome != Rejected {
+		return Operation{}, problem.New(problem.CodeInvalidTransition, "")
+	}
+	if resolvedBy == "" || basis == "" {
+		return Operation{}, problem.New(problem.CodeRequestInvalid, "")
+	}
+	key := operationKey(scope, id)
+	value, ok := s.values[key]
+	if !ok {
+		return Operation{}, problem.New(problem.CodeResourceNotFound, "")
+	}
+	if value.Status != Escalated {
+		// Two operators submitting the identical audited decision converge on
+		// the one that landed; anything else is refused rather than
+		// overwriting a decision already made.
+		if value.Status == outcome && value.ResolvedBy == resolvedBy && value.ResolutionBasis == basis {
+			return value, nil
+		}
+		return Operation{}, problem.New(problem.CodeInvalidTransition, "")
+	}
+	if err := s.update(scope, id, outcome, now, true); err != nil {
+		return Operation{}, err
+	}
+	value = s.values[key]
+	value.ResolvedBy = resolvedBy
+	value.ResolutionBasis = basis
+	s.values[key] = value
+	return value, nil
+}
 
 func statusTransition(current, next Status) bool {
 	if current == next {
@@ -356,12 +457,30 @@ func statusTransition(current, next Status) bool {
 	case Recorded:
 		return next == Issued
 	case Issued:
-		return next == Awaiting || next == Applied || next == Conflicted || next == Rejected
+		return next == Awaiting || next == Escalated || next == Applied || next == Conflicted || next == Rejected
 	case Awaiting:
+		return next == Escalated || next == Applied || next == Conflicted || next == Rejected
+	case Escalated:
 		return next == Applied || next == Conflicted || next == Rejected
 	default:
 		return false
 	}
+}
+func (s *MemoryStore) LatestForRun(_ context.Context, scope Scope, runID runs.ID) (Operation, bool, error) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	var latest Operation
+	found := false
+	for _, value := range s.values {
+		if value.Scope != scope || value.RunID != runID {
+			continue
+		}
+		if !found || value.CreatedAt.After(latest.CreatedAt) {
+			latest = value
+			found = true
+		}
+	}
+	return latest, found, nil
 }
 func (s *MemoryStore) Get(_ context.Context, scope Scope, id string) (Operation, error) {
 	s.lock.Lock()
