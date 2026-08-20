@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/config"
 	"github.com/ancyloce/anvilkit-agent-service/internal/execution"
+	"github.com/ancyloce/anvilkit-agent-service/internal/persistence"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runapp"
 )
 
@@ -15,32 +17,52 @@ import (
 
 func TestSelectImplementationsFailClosedWithoutExplicitSelection(t *testing.T) {
 	cfg := config.Config{}
-	if _, err := selectModelImplementation(cfg, runapp.SystemClock{}); err == nil {
+	if _, err := selectModelImplementation(cfg, persistence.Pools{}, runapp.SystemClock{}, missingModelPolicies{}); err == nil {
 		t.Fatal("unset model implementation must fail closed")
 	}
 	if _, _, err := selectToolImplementation(cfg); err == nil {
 		t.Fatal("unset tool implementation must fail closed")
 	}
-	if _, _, err := selectDomainImplementation(cfg); err == nil {
+	if _, _, _, err := selectDomainImplementation(cfg); err == nil {
 		t.Fatal("unset domain implementation must fail closed")
 	}
 	cfg.ModelImplementation = "provider-x"
-	if _, err := selectModelImplementation(cfg, runapp.SystemClock{}); err == nil {
+	if _, err := selectModelImplementation(cfg, persistence.Pools{}, runapp.SystemClock{}, missingModelPolicies{}); err == nil {
 		t.Fatal("unknown model implementation must fail closed")
 	}
 }
 
-func TestControlledImplementationsAreExplicitlySelectable(t *testing.T) {
-	cfg := config.Config{ModelImplementation: execution.ControlledImplementation, ToolImplementation: execution.ControlledImplementation, DomainImplementation: execution.ControlledImplementation}
-	if _, err := selectModelImplementation(cfg, runapp.SystemClock{}); err != nil {
-		t.Fatal(err)
+// The controlled model stack keeps its provider idempotency, settled
+// outcomes, script position, and usage evidence in a durable process-external
+// ledger. Without the database that holds it, the composition must refuse to
+// build a model stack at all rather than fall back to process memory.
+func TestControlledModelStackRefusesToBuildWithoutItsDurableLedger(t *testing.T) {
+	cfg := config.Config{ModelImplementation: execution.ControlledImplementation, ExecutorID: "executor-1"}
+	_, err := selectModelImplementation(cfg, persistence.Pools{}, runapp.SystemClock{}, missingModelPolicies{})
+	if err == nil {
+		t.Fatal("the controlled model stack was built without its durable provider ledger")
 	}
+	if !strings.Contains(err.Error(), "durable provider ledger") {
+		t.Fatalf("error = %v, want it to name the missing durable ledger", err)
+	}
+}
+
+func TestControlledImplementationsAreExplicitlySelectable(t *testing.T) {
+	cfg := config.Config{ToolImplementation: execution.ControlledImplementation, DomainImplementation: execution.ControlledImplementation}
 	if _, _, err := selectToolImplementation(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := selectDomainImplementation(cfg); err != nil {
+	if _, _, _, err := selectDomainImplementation(cfg); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// missingModelPolicies carries no approved model policy, which is what an
+// unattested or unresolvable policy reference looks like to selection.
+type missingModelPolicies struct{}
+
+func (missingModelPolicies) ModelPolicy(string, string) (agent.ModelPolicy, bool) {
+	return agent.ModelPolicy{}, false
 }
 
 func TestProductionConfigurationRejectsControlledImplementations(t *testing.T) {

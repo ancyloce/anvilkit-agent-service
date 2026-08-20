@@ -53,15 +53,19 @@ func main() {
 		return
 	}
 
-	ctx, err := dbos.NewDBOSContext(context.Background(), dbos.Config{
-		AppName: "anvilkit-agent-dbos-restart", ApplicationVersion: "dbos-restart-v1",
+	ctx, err := dbos.NewContext(context.Background(), dbos.Config{
+		AppName: "anvilkit-agent-dbos-restart", ApplicationVersion: "dbos-restart-probe",
 		SystemDBPool: pool, DatabaseSchema: "dbos_restart_probe", ExecutorID: "dbos-restart-executor",
 		Logger: slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
 	})
 	if err != nil {
 		panic(err)
 	}
-	defer dbos.Shutdown(ctx, 10*time.Second)
+	defer func() {
+		if shutdownErr := dbos.Shutdown(ctx, 10*time.Second); shutdownErr != nil {
+			fmt.Fprintf(os.Stderr, "shutdown DBOS context: %v\n", shutdownErr)
+		}
+	}()
 	datasource, err := dbos.NewDataSource(ctx, pool, dbos.WithDataSourceName("restart-effects"))
 	if err != nil {
 		panic(err)
@@ -71,7 +75,7 @@ func main() {
 		WorkflowID string `json:"workflowId"`
 		Checkpoint int    `json:"checkpoint"`
 	}
-	workflow := func(workflowContext dbos.DBOSContext, input restartInput) (string, error) {
+	workflow := func(workflowContext dbos.Context, input restartInput) (string, error) {
 		for stepIndex := 1; stepIndex <= 3; stepIndex++ {
 			_, transactionErr := dbos.RunAsTransaction(workflowContext, datasource,
 				func(stepContext context.Context, transaction dbos.Tx) (int64, error) {

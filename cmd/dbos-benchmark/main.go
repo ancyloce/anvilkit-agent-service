@@ -87,9 +87,9 @@ func main() {
 		}
 	}
 
-	ctx, err := dbos.NewDBOSContext(context.Background(), dbos.Config{
+	ctx, err := dbos.NewContext(context.Background(), dbos.Config{
 		AppName:            "anvilkit-agent-dbos-benchmark",
-		ApplicationVersion: "dbos-benchmark-v0200",
+		ApplicationVersion: "dbos-benchmark",
 		DatabaseURL:        databaseURL,
 		DatabaseSchema:     "dbos_benchmark",
 		ExecutorID:         "dbos-benchmark",
@@ -99,9 +99,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "create DBOS context: %v\n", err)
 		os.Exit(1)
 	}
-	defer dbos.Shutdown(ctx, 30*time.Second)
+	defer func() {
+		if shutdownErr := dbos.Shutdown(ctx, 30*time.Second); shutdownErr != nil {
+			fmt.Fprintf(os.Stderr, "shutdown DBOS context: %v\n", shutdownErr)
+		}
+	}()
 
-	workflow := func(workflowContext dbos.DBOSContext, input int) (int, error) {
+	workflow := func(workflowContext dbos.Context, input int) (int, error) {
 		return dbos.RunAsStep(workflowContext, func(context.Context) (int, error) {
 			return input * 2, nil
 		}, dbos.WithStepName("durable-create-proof"))
@@ -173,8 +177,8 @@ finished:
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
 	report := result{
-		LoadModel:             "agent-service-load-model-v1",
-		SDK:                   "github.com/dbos-inc/dbos-transact-golang@v0.20.0",
+		LoadModel:             "agent-service-load-model",
+		SDK:                   "github.com/dbos-inc/dbos-transact-golang@v1.1.0",
 		Postgres:              *postgresVersion,
 		Concurrency:           *concurrency,
 		ArrivalRatePerSecond:  *arrivalRate,

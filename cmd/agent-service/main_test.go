@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/config"
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/queue"
-	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
 )
 
 type queuePublisherCapture struct{ message queue.Message }
@@ -67,14 +67,14 @@ func TestRunAuthorityFileIsStrictAndContractValid(t *testing.T) {
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadRunAuthority(path, guard); err != nil {
+	if _, err := loadRunAuthority(path, guard, testGrants()); err != nil {
 		t.Fatal(err)
 	}
-	provider, err := newFileRunAuthority(path, guard)
+	provider, err := newFileRunAuthority(path, guard, testGrants())
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, err := provider.Current(context.Background(), runs.Scope{})
+	initial, err := provider.Current(context.Background(), authority.Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,14 +82,14 @@ func TestRunAuthorityFileIsStrictAndContractValid(t *testing.T) {
 	if err := os.WriteFile(path, []byte(rotatedRaw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rotated, err := provider.Current(context.Background(), runs.Scope{})
+	rotated, err := provider.Current(context.Background(), authority.Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"})
 	if err != nil || string(rotated.Policy) == string(initial.Policy) {
 		t.Fatalf("authority provider did not reload rotated policy: %v", err)
 	}
 	if err := os.WriteFile(path, []byte(raw[:len(raw)-1]+`,"actorId":"attacker"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadRunAuthority(path, guard); err == nil {
+	if _, err := loadRunAuthority(path, guard, testGrants()); err == nil {
 		t.Fatal("unknown server-authority field was accepted")
 	}
 }
@@ -136,5 +136,16 @@ func TestOpenPersistencePoolsRejectsSplitPlatformDatabases(t *testing.T) {
 	_, err := openPersistencePools(context.Background(), cfg)
 	if err == nil || !strings.Contains(err.Error(), "same Platform Postgres database") {
 		t.Fatalf("split database topology was accepted: %v", err)
+	}
+}
+
+// testGrants is the dispatch grant set the single authority source serves
+// alongside the pinned run material.
+func testGrants() authority.Grants {
+	return authority.Grants{
+		AllowedTools:   []string{"anvilkit.tool.context-echo"},
+		AllowedEffects: []string{"read"},
+		MaximumRisk:    "low",
+		DataClasses:    []string{"public", "internal"},
 	}
 }

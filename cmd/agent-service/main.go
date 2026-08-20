@@ -25,12 +25,15 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent/runner"
 	"github.com/ancyloce/anvilkit-agent-service/internal/api"
 	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
+	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
+	"github.com/ancyloce/anvilkit-agent-service/internal/cancellation"
 	"github.com/ancyloce/anvilkit-agent-service/internal/config"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler"
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	eventpg "github.com/ancyloce/anvilkit-agent-service/internal/events/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/execution"
+	executionpg "github.com/ancyloce/anvilkit-agent-service/internal/execution/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/idempotency"
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	interruptpg "github.com/ancyloce/anvilkit-agent-service/internal/interrupts/postgres"
@@ -38,7 +41,9 @@ import (
 	journalpg "github.com/ancyloce/anvilkit-agent-service/internal/journal/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/lifecycle"
 	lifecyclepg "github.com/ancyloce/anvilkit-agent-service/internal/lifecycle/postgres"
+	modelpg "github.com/ancyloce/anvilkit-agent-service/internal/modelgateway/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/persistence"
+	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/queue"
 	queuepg "github.com/ancyloce/anvilkit-agent-service/internal/queue/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runapp"
@@ -86,7 +91,11 @@ func main() {
 			logger.Error("migration connection failed", "error", err)
 			os.Exit(1)
 		}
-		defer migrationConnection.Close(context.Background())
+		defer func() {
+			if closeErr := migrationConnection.Close(context.Background()); closeErr != nil {
+				logger.Warn("migration connection close failed", "error", closeErr)
+			}
+		}()
 		migrator := persistence.NewMigrator(migrationConnection)
 		if cfg.MigrationMode == "apply" {
 			err = migrator.Apply(ctx)
@@ -172,7 +181,9 @@ func main() {
 		if err != nil {
 			return err
 		}
-		defer connection.Close(checkContext)
+		// The readiness answer is the ping; a failure to close the probe
+		// connection afterwards cannot change it.
+		defer func() { _ = connection.Close(checkContext) }()
 		return connection.Ping(checkContext)
 	})
 	migrationCheck := lifecycle.CheckFunc(func(checkContext context.Context) error {
@@ -192,6 +203,19 @@ func main() {
 	})
 	contractCheck := lifecycle.CheckFunc(func(context.Context) error {
 		return contractguard.VerifyPinnedMaterial(cfg.ContractRoot)
+	})
+	// Trust material is revalidated on every readiness probe, not trusted
+	// because it verified at startup: a trust root past its declared freshness
+	// bound, a statement outside its validity interval, or a revoked signing
+	// key must take the service out of rotation while it is still running.
+	definitionTrustCheck := lifecycle.CheckFunc(func(context.Context) error {
+		if core.trust == nil {
+			if cfg.Environment == config.EnvironmentProduction {
+				return errors.New("definition catalog attestation unavailable")
+			}
+			return nil
+		}
+		return core.trust.Verify(clock.Now())
 	})
 	policyCheck := lifecycle.FileCheck(cfg.PolicySnapshot)
 	if cfg.Environment != config.EnvironmentProduction && cfg.PolicySnapshot == "" {
@@ -214,6 +238,7 @@ func main() {
 		lifecycle.Dependency{Name: "signing", Check: signingCheck},
 		lifecycle.Dependency{Name: "contract-material", Check: contractCheck},
 		lifecycle.Dependency{Name: "policy-material", Check: policyCheck},
+		lifecycle.Dependency{Name: "definition-trust", Check: definitionTrustCheck},
 		lifecycle.Dependency{Name: "protected-audit", Check: endpointOrDevelopment(cfg.ProtectedAudit.URL, cfg.Environment)},
 	)
 
@@ -273,11 +298,15 @@ type runtimeCore struct {
 	interruptStore   *interruptpg.Store
 	interruptService *interrupts.Service
 	idempotency      *idempotency.Store
-	authority        runapp.AuthorityProvider
+	authority        authority.Source
 	receipts         journal.Store
 	guard            *contractguard.Guard
 	clock            applicationTime
 	eventBounds      events.Bounds
+	// trust revalidates the catalog attestation. It is nil only where no
+	// attestation is configured at all, which production configuration
+	// rejects before this point.
+	trust *agent.CatalogTrust
 }
 
 // buildRuntimeCore wires the real Agent execution pipeline. Every
@@ -290,9 +319,16 @@ func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.
 	}
 	eventBounds := events.Bounds{MaximumBytes: cfg.Limits.EventBytes, MaximumFields: 32, MaximumFieldBytes: 512}
 	runStore := runpg.NewConfigured(pools.Authority, idempotencyStore, eventBounds, nil)
-	var authority runapp.AuthorityProvider = runapp.StaticAuthority{}
+	toolExecutor, grants, err := selectToolImplementation(cfg)
+	if err != nil {
+		return nil, err
+	}
+	// One current-authority source serves the whole runtime: run creation,
+	// Manager turns, the Tool Guard, delegation, retry, approval, and commit
+	// all re-read this value and no other.
+	var authoritySource authority.Source = authority.NewStatic(authority.Current{Grants: grants})
 	if cfg.RunAuthorityFile != "" {
-		authority, err = newFileRunAuthority(cfg.RunAuthorityFile, guard)
+		authoritySource, err = newFileRunAuthority(cfg.RunAuthorityFile, guard, grants)
 		if err != nil {
 			return nil, err
 		}
@@ -301,7 +337,7 @@ func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.
 	if err != nil {
 		return nil, err
 	}
-	interruptAuthority, err := interrupts.NewCurrentAuthority(interruptStore, authority)
+	interruptAuthority, err := interrupts.NewCurrentAuthority(interruptStore, authoritySource)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +345,14 @@ func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.
 	if err != nil {
 		return nil, err
 	}
-	interruptService, err := interrupts.NewService(interruptStore, interrupts.BoundSchemaValidator{}, interruptAuthority, runtimeSignals{handle}, workflowLeaseRevoker{pools.Workflow}, safeCancellationReconciler{}, childBudget, receipts, clock, runapp.RandomIDs{}, interrupts.Limits{ChildDepth: cfg.Limits.ChildDepth, ChildFanout: cfg.Limits.ChildFanout})
+	// Cancellation is only safe once every external effect the run caused is
+	// known to be settled, so the reconciler reads the authoritative provider,
+	// worker, tool, artifact, and domain-effect records.
+	cancellationReconciler, err := cancellation.New(cancellation.Pools{Control: pools.Control, Workflow: pools.Workflow, Artifacts: pools.Artifacts, Events: pools.Events})
+	if err != nil {
+		return nil, err
+	}
+	interruptService, err := interrupts.NewService(interruptStore, interrupts.BoundSchemaValidator{}, interruptAuthority, runtimeSignals{handle}, workflowLeaseRevoker{pools.Workflow}, cancellationReconciler, childBudget, receipts, clock, runapp.RandomIDs{}, interrupts.Limits{ChildDepth: cfg.Limits.ChildDepth, ChildFanout: cfg.Limits.ChildFanout})
 	if err != nil {
 		return nil, err
 	}
@@ -330,29 +373,62 @@ func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.
 	if err != nil {
 		return nil, fmt.Errorf("load pinned runtime validator: %w", err)
 	}
-	registry, err := agent.NewRegistry(ctx, agent.RegistryConfig{Source: agent.EmbeddedCatalog{}, Validator: schemaValidator, DefinitionSchemaURI: agent.DefinitionSchemaURI(definitionSchema)})
+	// The approved definition catalog is authenticated against the contract
+	// identity this service verified at startup, so a definition set produced
+	// against a different canonical profile or lock cannot be executed.
+	pinnedIdentity, err := contractguard.PinnedIdentity(cfg.ContractRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve pinned contract identity: %w", err)
+	}
+	registry, err := agent.NewRegistry(ctx, agent.RegistryConfig{
+		Source:              agent.EmbeddedCatalog{},
+		Validator:           schemaValidator,
+		DefinitionSchemaURI: agent.DefinitionSchemaURI(definitionSchema),
+		Approval: agent.Approval{
+			ProfileDigest: pinnedIdentity.ProfileDigest,
+			LockDigest:    pinnedIdentity.LockDigest,
+			SchemaDigests: pinnedIdentity.SchemaDigests,
+		},
+	})
 	if err != nil {
 		return nil, err
+	}
+	trust, err := definitionTrust(cfg, registry.CatalogDigest())
+	if err != nil {
+		return nil, err
+	}
+	if trust != nil {
+		if err := trust.Verify(clock.Now()); err != nil {
+			return nil, err
+		}
 	}
 	pinnedValidator, err := execution.NewPinnedSchemaValidator(cfg.ContractRoot)
 	if err != nil {
 		return nil, err
 	}
 
-	modelStack, err := selectModelImplementation(cfg, clock)
+	modelStack, err := selectModelImplementation(cfg, pools, clock, registry)
 	if err != nil {
 		return nil, err
 	}
-	toolExecutor, authorityView, err := selectToolImplementation(cfg)
-	if err != nil {
-		return nil, err
-	}
-	domainPort, commitAuthority, err := selectDomainImplementation(cfg)
+	domainPort, artifactPort, commitAuthority, err := selectDomainImplementation(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	toolProfile, err := execution.NewControlledToolProfile(digestOfBytes(toolSchema))
+	toolArguments, err := execution.NewPinnedToolArgumentValidator()
+	if err != nil {
+		return nil, err
+	}
+	// The running tool profile is derived from the catalog's signed
+	// ToolDefinitions, so the capability, side-effect class, risk, approval
+	// policy, timeout, and retry policy the process dispatches under are the
+	// ones the approved catalog attests.
+	toolProfile, err := execution.NewApprovedToolProfile(registry.ToolBindings(), digestOfBytes(toolSchema), registry.CatalogDigest(), toolArguments)
+	if err != nil {
+		return nil, err
+	}
+	toolMaterial, err := execution.NewToolMaterial(toolProfile, toolArguments)
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +439,7 @@ func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.
 			return nil, err
 		}
 	}
-	toolGuard, err := tools.NewGuard(toolProfile, toolRecorder, clockOf{clock}, tools.JSONArgumentValidator{})
+	toolGuard, err := tools.NewGuard(toolProfile, toolRecorder, clockOf{clock}, toolArguments)
 	if err != nil {
 		return nil, err
 	}
@@ -374,7 +450,6 @@ func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.
 		Selector:  modelStack,
 		Invoker:   modelStack,
 		Guard:     toolGuard,
-		Authority: authorityView,
 		Validator: pinnedValidator,
 		Clock:     clockOf{clock},
 		Limits: runner.Limits{
@@ -396,8 +471,11 @@ func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.
 		Runs:              runStore,
 		InterruptWriter:   interruptService,
 		InterruptReader:   interruptStore,
-		Authority:         authority,
+		InterruptExpirer:  interruptStore,
+		Authority:         authoritySource,
 		Tools:             toolExecutor,
+		ToolMaterial:      toolMaterial,
+		Artifacts:         artifactPort,
 		Domain:            domainPort,
 		CommitAuthority:   commitAuthority,
 		Decisions:         receipts,
@@ -410,17 +488,34 @@ func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.
 	if err != nil {
 		return nil, err
 	}
-	return &runtimeCore{executor: executor, runStore: runStore, interruptStore: interruptStore, interruptService: interruptService, idempotency: idempotencyStore, authority: authority, receipts: receipts, guard: guard, clock: clock, eventBounds: eventBounds}, nil
+	return &runtimeCore{executor: executor, runStore: runStore, interruptStore: interruptStore, interruptService: interruptService, idempotency: idempotencyStore, authority: authoritySource, receipts: receipts, guard: guard, clock: clock, eventBounds: eventBounds, trust: trust}, nil
 }
 
 // selectModelImplementation returns the explicitly configured model stack.
-// No implementation is ever selected implicitly, and production
-// configuration rejects the controlled value before this point.
-func selectModelImplementation(cfg config.Config, clock applicationTime) (*execution.ControlledModelStack, error) {
+// No implementation is ever selected implicitly, and production configuration
+// rejects the controlled value before this point. Provider idempotency,
+// settled outcomes, script position, and usage evidence are all durable and
+// process-external, so a restart replays what happened instead of calling the
+// provider again.
+func selectModelImplementation(cfg config.Config, pools persistence.Pools, clock applicationTime, policies execution.ModelPolicySource) (*execution.ControlledModelStack, error) {
 	switch cfg.ModelImplementation {
 	case execution.ControlledImplementation:
-		adapter := execution.NewScriptedAdapter(execution.PlanStep("agent.final", map[string]json.RawMessage{"candidate": execution.ControlledCandidate(), "summary": json.RawMessage(`"controlled candidate"`)}))
-		return execution.NewControlledModelStack(adapter, clockOf{clock})
+		if pools.Workflow == nil {
+			return nil, fmt.Errorf("the model implementation requires the workflow database for its durable provider ledger")
+		}
+		ledger, err := executionpg.NewScriptLedger(pools.Workflow, cfg.ExecutorID+":controlled-model")
+		if err != nil {
+			return nil, err
+		}
+		adapter, err := execution.NewScriptedAdapter(ledger, execution.PlanStep("agent.final", map[string]json.RawMessage{"candidate": execution.ControlledCandidate(), "summary": json.RawMessage(`"controlled candidate"`)}))
+		if err != nil {
+			return nil, err
+		}
+		recorder, err := modelpg.NewInvocationRecorder(pools.Workflow)
+		if err != nil {
+			return nil, err
+		}
+		return execution.NewControlledModelStack(adapter, clockOf{clock}, recorder, policies)
 	case "":
 		return nil, fmt.Errorf("ANVILKIT_MODEL_IMPLEMENTATION must be explicitly selected; no model integration is assumed")
 	default:
@@ -428,27 +523,78 @@ func selectModelImplementation(cfg config.Config, clock applicationTime) (*execu
 	}
 }
 
-func selectToolImplementation(cfg config.Config) (execution.ToolExecutor, runner.AuthorityView, error) {
+// selectToolImplementation returns the explicitly configured tool executor
+// and the dispatch grants the current-authority source serves with it. The
+// grants are authority state, not tool state, so they are resolved here once
+// and read back through the single authority source at every boundary.
+func selectToolImplementation(cfg config.Config) (execution.ToolExecutor, authority.Grants, error) {
 	switch cfg.ToolImplementation {
 	case execution.ControlledImplementation:
-		view := execution.ControlledAuthorityView{AllowedTools: []string{"anvilkit.tool.context-echo", "anvilkit.tool.contract-validate", "anvilkit.tool.artifact-scan"}}
-		return execution.NewControlledToolExecutor(), view, nil
+		grants := authority.Grants{
+			AllowedTools:        []string{"anvilkit.tool.context-echo", "anvilkit.tool.contract-validate", "anvilkit.tool.artifact-scan"},
+			AllowedCapabilities: []string{"fake.execute", "contract.validate", "artifact.scan"},
+			AllowedEffects:      []string{"read"},
+			MaximumRisk:         "low",
+			DataClasses:         []string{"public", "internal"},
+		}
+		return execution.NewControlledToolExecutor(), grants, nil
 	case "":
-		return nil, nil, fmt.Errorf("ANVILKIT_TOOL_IMPLEMENTATION must be explicitly selected; no tool integration is assumed")
+		return nil, authority.Grants{}, fmt.Errorf("ANVILKIT_TOOL_IMPLEMENTATION must be explicitly selected; no tool integration is assumed")
 	default:
-		return nil, nil, fmt.Errorf("tool implementation %q is not available", cfg.ToolImplementation)
+		return nil, authority.Grants{}, fmt.Errorf("tool implementation %q is not available", cfg.ToolImplementation)
 	}
 }
 
-func selectDomainImplementation(cfg config.Config) (execution.DomainPort, execution.CommitAuthority, error) {
+func selectDomainImplementation(cfg config.Config) (execution.DomainPort, execution.ArtifactPort, execution.CommitAuthority, error) {
 	switch cfg.DomainImplementation {
 	case execution.ControlledImplementation:
-		return execution.NewControlledDomainPort(execution.DomainConfirmed), &execution.ControlledCommitAuthority{}, nil
+		return execution.NewControlledDomainPort(execution.DomainConfirmed), execution.NewControlledArtifactPort(), &execution.ControlledCommitAuthority{}, nil
 	case "":
-		return nil, nil, fmt.Errorf("ANVILKIT_DOMAIN_IMPLEMENTATION must be explicitly selected; no domain integration is assumed")
+		return nil, nil, nil, fmt.Errorf("ANVILKIT_DOMAIN_IMPLEMENTATION must be explicitly selected; no domain integration is assumed")
 	default:
-		return nil, nil, fmt.Errorf("domain implementation %q is not available", cfg.DomainImplementation)
+		return nil, nil, nil, fmt.Errorf("domain implementation %q is not available", cfg.DomainImplementation)
 	}
+}
+
+// definitionTrust builds the revalidating gate over the operator-distributed
+// trust material that authenticates the approved definition catalog.
+// Production configuration requires both the trust root and the statement, so
+// there is no environment in which an unattested catalog runs in production.
+// The gate re-reads and re-verifies on every check, which is what makes trust
+// material that expires or is revoked after startup stop new work.
+func definitionTrust(cfg config.Config, catalogDigest string) (*agent.CatalogTrust, error) {
+	if cfg.DefinitionTrustRoot == "" && cfg.DefinitionAttestation == "" {
+		if cfg.Environment == config.EnvironmentProduction {
+			return nil, fmt.Errorf("definition catalog attestation is required in production")
+		}
+		return nil, nil
+	}
+	if cfg.DefinitionTrustRoot == "" || cfg.DefinitionAttestation == "" {
+		return nil, fmt.Errorf("definition catalog attestation requires both a trust root and a signature statement")
+	}
+	return agent.NewCatalogTrust(cfg.DefinitionTrustRoot, cfg.DefinitionAttestation, catalogDigest)
+}
+
+// trustAdmission is the run-creation gate. It revalidates the catalog trust
+// material immediately before a new run is admitted, so a trust root past its
+// freshness bound, a statement outside its validity interval, or a revoked
+// signing key stops new work even though the process started while all three
+// were valid.
+type trustAdmission struct {
+	trust *agent.CatalogTrust
+	clock applicationTime
+}
+
+func (a trustAdmission) Admit(context.Context, runs.Scope) error {
+	if a.trust == nil {
+		return nil
+	}
+	if err := a.trust.Verify(a.clock.Now()); err != nil {
+		details := problem.New(problem.CodeAuthorityStale, "")
+		details.Detail = "the approved definition catalog is no longer attested by current trust material"
+		return details
+	}
+	return nil
 }
 
 func digestOfBytes(raw []byte) string {
@@ -624,7 +770,7 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	if err != nil {
 		return nil, err
 	}
-	runService := runs.NewService(core.runStore, runapp.NewRuntimeStarter(runtime), runapp.RandomIDs{}, core.clock, core.receipts)
+	runService := runs.NewService(core.runStore, runapp.NewRuntimeStarter(runtime), runapp.RandomIDs{}, core.clock, core.receipts, trustAdmission{trust: core.trust, clock: core.clock})
 	reader := eventpg.NewReader(pools.Authority, core.guard, core.eventBounds)
 	application := runapp.New(validator, runService, reader, events.StreamConfig{Heartbeat: cfg.Limits.SSEHeartbeat, Revalidation: cfg.AuthRevalidation, ReplayLimit: 100, Bounds: core.eventBounds, Observer: observability}, core.authority)
 	application.WithInterrupts(core.interruptService)
@@ -708,12 +854,6 @@ func (r workflowLeaseRevoker) RevokeRun(ctx context.Context, scope runs.Scope, i
 	return err
 }
 
-type safeCancellationReconciler struct{}
-
-func (safeCancellationReconciler) Reconcile(_ context.Context, _ runs.Scope, _ runs.ID, commit bool) (bool, *runs.State, error) {
-	return !commit, nil, nil
-}
-
 type operatorAlert struct{}
 
 func (operatorAlert) Alert(_ context.Context, kind string, scope runs.Scope, id runs.ID, state runs.State) error {
@@ -721,7 +861,7 @@ func (operatorAlert) Alert(_ context.Context, kind string, scope runs.Scope, id 
 	return nil
 }
 
-func loadRunAuthority(path string, guard *contractguard.Guard) (runs.Authority, error) {
+func loadRunAuthority(path string, guard *contractguard.Guard, grants authority.Grants) (runs.Authority, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return runs.Authority{}, fmt.Errorf("read run authority: %w", err)
@@ -744,8 +884,8 @@ func loadRunAuthority(path string, guard *contractguard.Guard) (runs.Authority, 
 	if len(payload.Definition) == 0 || len(payload.ContractBOM) == 0 || len(payload.Policy) == 0 || len(payload.Budget) == 0 {
 		return runs.Authority{}, fmt.Errorf("run authority is incomplete")
 	}
-	authority := runs.Authority{Definition: payload.Definition, ContractBOM: payload.ContractBOM, Policy: payload.Policy, Budget: payload.Budget}
-	probe := runs.Snapshot{Kind: "AgentRun", RunID: "run.authority-validation", RootRunID: "run.authority-validation", WorkspaceID: "workspace.authority-validation", ActorID: "actor.authority-validation", Domain: "platform-agent", Operation: "artifact-validation", Target: runs.Target{Type: "page", ID: "page.authority-validation", WorkspaceID: "workspace.authority-validation", ProjectID: "project.authority-validation"}, Definition: authority.Definition, ContractBOM: authority.ContractBOM, Policy: authority.Policy, Budget: authority.Budget, Idempotency: runs.IdempotencyProjection{Scope: "workspace.authority-validation:create-run", Key: "authority-validation", CanonicalRequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Status: runs.Created, Version: 1, ExecutionGeneration: 1, CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0)}
+	current := runs.Authority{Definition: payload.Definition, ContractBOM: payload.ContractBOM, Policy: payload.Policy, Budget: payload.Budget, WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, Grants: grants}
+	probe := runs.Snapshot{Kind: "AgentRun", RunID: "run.authority-validation", RootRunID: "run.authority-validation", WorkspaceID: "workspace.authority-validation", ActorID: "actor.authority-validation", Domain: "platform-agent", Operation: "artifact-validation", Target: runs.Target{Type: "page", ID: "page.authority-validation", WorkspaceID: "workspace.authority-validation", ProjectID: "project.authority-validation"}, Definition: current.Definition, ContractBOM: current.ContractBOM, Policy: current.Policy, Budget: current.Budget, Idempotency: runs.IdempotencyProjection{Scope: "workspace.authority-validation:create-run", Key: "authority-validation", CanonicalRequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Status: runs.Created, Version: 1, ExecutionGeneration: 1, CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0)}
 	probeBytes, err := json.Marshal(probe)
 	if err != nil {
 		return runs.Authority{}, fmt.Errorf("marshal run authority probe: %w", err)
@@ -754,26 +894,30 @@ func loadRunAuthority(path string, guard *contractguard.Guard) (runs.Authority, 
 	if len(findings) != 0 {
 		return runs.Authority{}, fmt.Errorf("run authority violates pinned AgentRun references: %v", findings)
 	}
-	return authority, nil
+	return current, nil
 }
 
 type fileRunAuthority struct {
-	path  string
-	guard *contractguard.Guard
+	path   string
+	guard  *contractguard.Guard
+	grants authority.Grants
 }
 
-func newFileRunAuthority(path string, guard *contractguard.Guard) (*fileRunAuthority, error) {
+func newFileRunAuthority(path string, guard *contractguard.Guard, grants authority.Grants) (*fileRunAuthority, error) {
 	if path == "" || guard == nil {
 		return nil, fmt.Errorf("file run authority requires path and contract guard")
 	}
-	if _, err := loadRunAuthority(path, guard); err != nil {
+	if _, err := loadRunAuthority(path, guard, grants); err != nil {
 		return nil, err
 	}
-	return &fileRunAuthority{path: path, guard: guard}, nil
+	return &fileRunAuthority{path: path, guard: guard, grants: grants}, nil
 }
 
-func (a *fileRunAuthority) Current(context.Context, runs.Scope) (runs.Authority, error) {
-	return loadRunAuthority(a.path, a.guard)
+func (a *fileRunAuthority) Current(_ context.Context, scope authority.Scope) (authority.Current, error) {
+	if scope.WorkspaceID == "" || scope.ProjectID == "" || scope.ActorID == "" {
+		return authority.Current{}, fmt.Errorf("current authority: workspace, project, and actor identity are required")
+	}
+	return loadRunAuthority(a.path, a.guard, a.grants)
 }
 
-var _ runapp.AuthorityProvider = (*fileRunAuthority)(nil)
+var _ authority.Source = (*fileRunAuthority)(nil)
