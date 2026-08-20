@@ -162,6 +162,10 @@ func TestAuditFailureAndCallerAuthoredPayloadCannotEscape(t *testing.T) {
 	value := binding()
 	authority := &fixedAuthority{proof: Proof{Approved: value, Current: value, ApprovalCurrent: true, ArtifactEligible: true}}
 	ring, _ := NewMemoryKeyRing("urn:anvilkit:key:apply-2026-08-a")
+	// Marshalling a struct with no exported fields is exactly the property
+	// under test: the key ring must serialize to an empty object, so no
+	// private signing state can reach a log, an event, or an audit record.
+	//nolint:staticcheck // SA9005: serializing to "{}" is the assertion.
 	serializedRing, marshalErr := json.Marshal(ring)
 	if marshalErr != nil || strings.Contains(string(serializedRing), "private") || len(serializedRing) > 2 {
 		t.Fatalf("private signing state escaped serialization: %s %v", serializedRing, marshalErr)

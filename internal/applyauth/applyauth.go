@@ -259,7 +259,7 @@ func validKeyID(value string) bool {
 		return false
 	}
 	suffix := strings.TrimPrefix(value, "urn:anvilkit:key:")
-	if suffix == "" || !((suffix[0] >= 'a' && suffix[0] <= 'z') || (suffix[0] >= '0' && suffix[0] <= '9')) {
+	if suffix == "" || !lowerAlphanumeric(rune(suffix[0])) {
 		return false
 	}
 	for _, character := range value {
@@ -461,4 +461,11 @@ func (a *MemoryAudit) Record(_ context.Context, record AuditRecord) error {
 	defer a.lock.Unlock()
 	a.Records = append(a.Records, record)
 	return nil
+}
+
+// lowerAlphanumeric reports whether the character is a lower-case letter or a
+// digit. Key identities are lower-case only, so an upper-case character is
+// rejected rather than normalized.
+func lowerAlphanumeric(character rune) bool {
+	return character >= 'a' && character <= 'z' || character >= '0' && character <= '9'
 }
