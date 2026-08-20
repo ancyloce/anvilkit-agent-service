@@ -3,6 +3,7 @@ package runs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
+	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 )
 
 func TestCreateCommandStructurallyOmitsServerAuthority(t *testing.T) {
@@ -48,7 +50,7 @@ func TestCreateCommandStructurallyOmitsServerAuthority(t *testing.T) {
 func TestCreateIsDurableBeforeWorkflowAndReplayIsStable(t *testing.T) {
 	store := &fakeStore{}
 	starter := &checkingStarter{store: store}
-	service := NewService(store, starter, fixedID("run-1"), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore())
+	service := NewService(store, starter, fixedID("run-1"), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), admitAll())
 	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
 	digest, _ := canonical.Digest(raw)
 	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Raw: raw, Authority: testAuthority()}
@@ -79,7 +81,7 @@ func TestConversationalAndHeadlessCreateHaveInteractionParity(t *testing.T) {
 	digest, _ := canonical.Digest(raw)
 	create := func(runID, key string) CreateOutcome {
 		store := &fakeStore{}
-		service := NewService(store, &checkingStarter{store: store}, fixedID(runID), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore())
+		service := NewService(store, &checkingStarter{store: store}, fixedID(runID), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), admitAll())
 		outcome, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: key, ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()})
 		if err != nil {
 			t.Fatal(err)
@@ -98,7 +100,7 @@ func TestCreateCannotAcknowledgeWhenReceiptJournalIsUnavailable(t *testing.T) {
 	starter := &checkingStarter{store: store}
 	receipts := journal.NewMemoryStore()
 	receipts.SetAvailable(false)
-	service := NewService(store, starter, fixedID("run-journal"), fixedClock{time.Unix(100, 0)}, receipts)
+	service := NewService(store, starter, fixedID("run-journal"), fixedClock{time.Unix(100, 0)}, receipts, admitAll())
 	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
 	digest, _ := canonical.Digest(raw)
 	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "journal-key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()}
@@ -135,7 +137,7 @@ func TestTraceparentAndAuthorityIdentitiesUseClosedBounds(t *testing.T) {
 
 func TestCreateRejectsGeneratedIdentityThatCannotProduceBoundedEventIDs(t *testing.T) {
 	store := &fakeStore{}
-	service := NewService(store, &checkingStarter{store: store}, fixedID(strings.Repeat("r", 108)), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore())
+	service := NewService(store, &checkingStarter{store: store}, fixedID(strings.Repeat("r", 108)), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), admitAll())
 	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
 	digest, _ := canonical.Digest(raw)
 	_, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()})
@@ -174,12 +176,14 @@ func (*fakeStore) Transition(context.Context, Scope, ID, uint64, Command) (Snaps
 type checkingStarter struct {
 	store         *fakeStore
 	beforeDurable bool
+	started       int
 }
 
 func (s *checkingStarter) Ensure(context.Context, Start) error {
 	if s.store.created == nil {
 		s.beforeDurable = true
 	}
+	s.started++
 	return nil
 }
 func testAuthority() Authority {
@@ -193,3 +197,49 @@ func testAuthority() Authority {
 }
 
 const testTraceparent = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+
+// admitAll is the admission gate for tests whose subject is not the trust
+// boundary. Production composition supplies the real revalidating gate.
+func admitAll() Admission {
+	return AdmitFunc(func(context.Context, Scope) error { return nil })
+}
+
+// The admission gate is where service-wide trust material is revalidated
+// before a new run exists. A refusal must stop creation outright: no run
+// identity, no durable record, and no workflow.
+func TestRefusedAdmissionCreatesNothing(t *testing.T) {
+	store := &fakeStore{}
+	starter := &checkingStarter{store: store}
+	stale := problem.New(problem.CodeAuthorityStale, "")
+	service := NewService(store, starter, fixedID("run-refused"), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), AdmitFunc(func(context.Context, Scope) error { return stale }))
+	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
+	digest, _ := canonical.Digest(raw)
+	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Raw: raw, Authority: testAuthority(), Traceparent: testTraceparent}
+	_, err := service.Create(context.Background(), input)
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeAuthorityStale) {
+		t.Fatalf("create error = %v, want %s", err, problem.CodeAuthorityStale)
+	}
+	if store.created != nil {
+		t.Fatal("a durable run record was written behind a refused admission")
+	}
+	if starter.started != 0 {
+		t.Fatalf("workflow starts = %d, want none behind a refused admission", starter.started)
+	}
+}
+
+// A service composed without an admission gate refuses to create runs rather
+// than admitting them unchecked.
+func TestMissingAdmissionGateFailsClosed(t *testing.T) {
+	store := &fakeStore{}
+	service := NewService(store, &checkingStarter{store: store}, fixedID("run-ungated"), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), nil)
+	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
+	digest, _ := canonical.Digest(raw)
+	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Raw: raw, Authority: testAuthority(), Traceparent: testTraceparent}
+	if _, err := service.Create(context.Background(), input); err == nil {
+		t.Fatal("a run was created with no admission gate configured")
+	}
+	if store.created != nil {
+		t.Fatal("a durable run record was written with no admission gate configured")
+	}
+}

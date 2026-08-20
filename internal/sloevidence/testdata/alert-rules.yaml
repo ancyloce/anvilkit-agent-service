@@ -1,0 +1,45 @@
+groups:
+  - name: agent-service-safety-absolute
+    rules:
+      - alert: AgentServiceDuplicateEffect
+        expr: increase(agent_safety_violation_total{kind="duplicate-effect"}[1m]) > 0
+        for: 0m
+        labels: {severity: page, gate: absolute}
+      - alert: AgentServiceApprovalBypass
+        expr: increase(agent_safety_violation_total{kind="approval-bypass"}[1m]) > 0
+        for: 0m
+        labels: {severity: page, gate: absolute}
+      - alert: AgentServiceForbiddenTool
+        expr: increase(agent_safety_violation_total{kind="forbidden-tool"}[1m]) > 0
+        for: 0m
+        labels: {severity: page, gate: absolute}
+      - alert: AgentServiceCrossTenant
+        expr: increase(agent_safety_violation_total{kind="cross-tenant"}[1m]) > 0
+        for: 0m
+        labels: {severity: page, gate: absolute}
+      - alert: AgentServiceStaleResult
+        expr: increase(agent_safety_violation_total{kind="stale-result"}[1m]) > 0
+        for: 0m
+        labels: {severity: page, gate: absolute}
+      - alert: AgentServiceUnauthorizedDisclosure
+        expr: increase(agent_safety_violation_total{kind="unauthorized-disclosure"}[1m]) > 0
+        for: 0m
+        labels: {severity: page, gate: absolute}
+  - name: agent-service-operations-draft-gate-h
+    rules:
+      - alert: AgentServiceStuckRun
+        expr: agent_run_dwell_overdue_seconds > 300
+        for: 0m
+        labels: {severity: page, approval: gate-h-pending}
+      - alert: AgentServiceReservationExposure
+        expr: agent_reservation_exposure_ratio >= 0.8
+        for: 5m
+        labels: {severity: ticket, approval: gate-h-pending}
+      - alert: AgentServiceDLQBacklog
+        expr: agent_dlq_depth > 0
+        for: 5m
+        labels: {severity: ticket, approval: gate-h-pending}
+      - alert: AgentServiceReconciliationAge
+        expr: agent_reconciliation_age_seconds > 300
+        for: 0m
+        labels: {severity: page, approval: gate-h-pending}

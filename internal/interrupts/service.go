@@ -219,11 +219,11 @@ func (s *Service) Cancel(ctx context.Context, write Write) (OperationResult, err
 	if err != nil {
 		return result, fmt.Errorf("load cancellation descendants: %w", err)
 	}
-	if _, isChild, err := s.repository.Parent(ctx, write.Scope, write.RunID); err != nil {
+	// Descendants already contains only children below the requested run; the
+	// parent lookup proves the requested run is resolvable inside this
+	// hierarchy before any descendant is stopped.
+	if _, _, err := s.repository.Parent(ctx, write.Scope, write.RunID); err != nil {
 		return result, err
-	} else if isChild {
-		// Descendants already contains only children below the requested run;
-		// parent lookup proves the requested run is scoped to this hierarchy.
 	}
 	for _, child := range descendants {
 		childSnapshot, err := currentSnapshot(ctx, s.repository, Write{Scope: write.Scope, RunID: child.RunID})
@@ -268,6 +268,13 @@ func (s *Service) Retry(ctx context.Context, write Write) (RetryOutcome, error) 
 	digest, _ := digestFor(write, struct{}{})
 	if outcome, ok, err := s.repository.RecordedRetry(ctx, write, digest); err != nil || ok {
 		if err != nil {
+			return RetryOutcome{}, err
+		}
+		// Replaying a recorded retry still starts a workflow. Authority
+		// revoked between the recording and this replay must stop the resume,
+		// so the complete material set is revalidated before the runtime is
+		// asked to run anything.
+		if err := s.authority.AuthorizeResume(ctx, write.Scope, outcome.Snapshot); err != nil {
 			return RetryOutcome{}, err
 		}
 		if err := s.runtime.ResumeRun(ctx, write.Scope, outcome.Snapshot, outcome.ResumeCheckpoint, ""); err != nil {

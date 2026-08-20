@@ -10,12 +10,19 @@ import (
 	"time"
 
 	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
+	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 )
 
 type Scope struct{ WorkspaceID, ProjectID, ActorID string }
+
+// AuthorityScope projects the run scope onto the shared authority scope so
+// every module resolves current authority through one port.
+func (s Scope) AuthorityScope() authority.Scope {
+	return authority.Scope{WorkspaceID: s.WorkspaceID, ProjectID: s.ProjectID, ActorID: s.ActorID}
+}
 
 func (s Scope) Validate() error {
 	if !validOpaqueID(s.WorkspaceID) || !validOpaqueID(s.ProjectID) || !validOpaqueID(s.ActorID) {
@@ -36,12 +43,11 @@ type TargetCommand struct {
 	ID   string `json:"targetId"`
 }
 
-type Authority struct {
-	Definition  json.RawMessage
-	ContractBOM json.RawMessage
-	Policy      json.RawMessage
-	Budget      json.RawMessage
-}
+// Authority is the one current-authority observation type, shared with every
+// other boundary in the runtime. Run creation pins the material fields onto
+// the run; the activation and grant fields are re-read at every later
+// boundary through the same source.
+type Authority = authority.Current
 type Target struct {
 	Type        string `json:"targetType"`
 	ID          string `json:"targetId"`
@@ -157,16 +163,31 @@ type Store interface {
 }
 type IDGenerator interface{ NewID() (ID, error) }
 type Clock interface{ Now() time.Time }
-type Service struct {
-	store    Store
-	starter  Starter
-	ids      IDGenerator
-	clock    Clock
-	receipts journal.Store
+
+// Admission is the gate a new run must pass before it exists. It is where
+// service-wide trust material is revalidated: material that was valid when the
+// process started can expire or be revoked while it runs, and new work must
+// stop at that point instead of inheriting a decision made at startup.
+type Admission interface {
+	Admit(context.Context, Scope) error
 }
 
-func NewService(store Store, starter Starter, ids IDGenerator, clock Clock, receipts journal.Store) *Service {
-	return &Service{store: store, starter: starter, ids: ids, clock: clock, receipts: receipts}
+// AdmitFunc adapts a function to the Admission gate.
+type AdmitFunc func(context.Context, Scope) error
+
+func (f AdmitFunc) Admit(ctx context.Context, scope Scope) error { return f(ctx, scope) }
+
+type Service struct {
+	store     Store
+	starter   Starter
+	ids       IDGenerator
+	clock     Clock
+	receipts  journal.Store
+	admission Admission
+}
+
+func NewService(store Store, starter Starter, ids IDGenerator, clock Clock, receipts journal.Store, admission Admission) *Service {
+	return &Service{store: store, starter: starter, ids: ids, clock: clock, receipts: receipts, admission: admission}
 }
 
 func DecodeCreateRequest(raw []byte) (CreateRequest, error) {
@@ -194,6 +215,15 @@ func DecodeCreateRequest(raw []byte) (CreateRequest, error) {
 func (s *Service) Create(ctx context.Context, input CreateInput) (CreateOutcome, error) {
 	if err := input.Scope.Validate(); err != nil {
 		return CreateOutcome{}, requestProblem(err.Error())
+	}
+	// Nothing is decoded, allocated, or persisted before admission: trust
+	// material that has expired or been revoked since startup stops new runs
+	// here rather than after a run identity exists.
+	if s.admission == nil {
+		return CreateOutcome{}, fmt.Errorf("create run: no admission gate is configured")
+	}
+	if err := s.admission.Admit(ctx, input.Scope); err != nil {
+		return CreateOutcome{}, err
 	}
 	request, err := DecodeCreateRequest(input.Raw)
 	if err != nil {
@@ -337,7 +367,7 @@ func validTraceparent(value string) bool {
 		if index == 2 || index == 35 || index == 52 {
 			continue
 		}
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+		if !lowerHexDigit(character) {
 			return false
 		}
 	}
@@ -389,4 +419,11 @@ func ParseETag(value string, id ID) (uint64, error) {
 		return 0, problem.New(problem.CodeVersionConflict, "")
 	}
 	return version, nil
+}
+
+// lowerHexDigit reports whether the character is a lower-case hexadecimal
+// digit. Digest and trace identities are lower-case only, so an upper-case
+// digit is rejected rather than normalized.
+func lowerHexDigit(character rune) bool {
+	return character >= '0' && character <= '9' || character >= 'a' && character <= 'f'
 }

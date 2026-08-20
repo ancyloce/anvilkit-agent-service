@@ -12,6 +12,17 @@ import (
 	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 )
 
+// admittingValidator is a test double for the argument validator port: it
+// admits strictly parseable arguments so the guard's other policy dimensions
+// can be exercised in isolation. Production wires the pinned-schema
+// validator, which additionally enforces the digest-pinned input schema.
+type admittingValidator struct{}
+
+func (admittingValidator) Validate(_ context.Context, _ SchemaReference, value json.RawMessage) error {
+	_, err := contractvalidator.Admit(value)
+	return err
+}
+
 type recording struct{ values []Decision }
 
 func (r *recording) Record(_ context.Context, _ Intent, _ Proposal, d Decision) error {
@@ -41,7 +52,7 @@ func TestProfileBoundAndPinnedImmutably(t *testing.T) {
 		t.Fatal("profile with invalid top-level policy accepted")
 	}
 	value := profile(t)
-	guard, _ := NewGuard(value, &recording{}, clock{}, JSONArgumentValidator{})
+	guard, _ := NewGuard(value, &recording{}, clock{}, admittingValidator{})
 	pinned := guard.Profile()
 	value.Definitions[0].ToolID = "admin.delete"
 	value.Policy.Version = "v2"
@@ -53,7 +64,7 @@ func TestProfileBoundAndPinnedImmutably(t *testing.T) {
 	}
 	forged := pinned
 	forged.Definitions[0].ToolID = "admin.delete"
-	if _, err := NewGuard(forged, &recording{}, clock{}, JSONArgumentValidator{}); err == nil {
+	if _, err := NewGuard(forged, &recording{}, clock{}, admittingValidator{}); err == nil {
 		t.Fatal("forged pinned profile digest accepted")
 	}
 	tooMany := make([]Definition, 8)
@@ -78,9 +89,9 @@ func TestProfileBoundAndPinnedImmutably(t *testing.T) {
 
 func TestGuardRejectsMalformedOrUnboundedAuthorityEvidence(t *testing.T) {
 	record := &recording{}
-	guard, _ := NewGuard(profile(t), record, clock{}, JSONArgumentValidator{})
+	guard, _ := NewGuard(profile(t), record, clock{}, admittingValidator{})
 	intent := Intent{RunID: "run", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor", AllowedTools: []string{"fake.execute", "fake.execute"}, AllowedEffects: []string{"none"}, MaximumRisk: "low", DataClasses: []string{"internal"}}
-	current := CurrentAuthority{WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, AllowedTools: []string{"fake.execute"}, AllowedEffects: []string{"none"}, MaximumRisk: "low", DataClasses: []string{"internal"}}
+	current := CurrentAuthority{WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, AllowedTools: []string{"fake.execute"}, AllowedCapabilities: []string{"fake.execute"}, AllowedEffects: []string{"none"}, MaximumRisk: "low", DataClasses: []string{"internal"}}
 	decision, err := guard.Evaluate(context.Background(), intent, current, Proposal{ToolID: "fake.execute", Arguments: json.RawMessage(`{}`)})
 	if err == nil || decision.Allowed || decision.Code != "AUTHORITY_STALE" || len(record.values) != 1 {
 		t.Fatalf("malformed authority decision=%#v recorded=%d err=%v", decision, len(record.values), err)
@@ -88,9 +99,9 @@ func TestGuardRejectsMalformedOrUnboundedAuthorityEvidence(t *testing.T) {
 }
 func TestGuardBlocksEveryPolicyDimensionAndEmbeddedInstructions(t *testing.T) {
 	record := &recording{}
-	guard, _ := NewGuard(profile(t), record, clock{}, JSONArgumentValidator{})
+	guard, _ := NewGuard(profile(t), record, clock{}, admittingValidator{})
 	intent := Intent{RunID: "run", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor", AllowedTools: []string{"fake.execute", "contract.validate", "artifact.write"}, AllowedEffects: []string{"none", "read", "artifact-write"}, MaximumRisk: "medium", DataClasses: []string{"internal"}}
-	current := CurrentAuthority{WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, AllowedTools: append([]string(nil), intent.AllowedTools...), AllowedEffects: append([]string(nil), intent.AllowedEffects...), MaximumRisk: "medium", DataClasses: []string{"internal"}}
+	current := CurrentAuthority{WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, AllowedTools: append([]string(nil), intent.AllowedTools...), AllowedCapabilities: []string{"fake.execute"}, AllowedEffects: append([]string(nil), intent.AllowedEffects...), MaximumRisk: "medium", DataClasses: []string{"internal"}}
 	cases := []struct {
 		name   string
 		mutate func(*Intent, *CurrentAuthority, *Proposal)
@@ -136,9 +147,9 @@ func TestGuardBlocksDeclaredSchemaAndApprovalViolations(t *testing.T) {
 	value.Definitions[0] = definition("domain.apply", "domain-effect", "medium", "internal")
 	value, _ = NewProfile(value.ID, value.Version, value.Policy, value.Definitions)
 	intent := Intent{RunID: "run", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor", AllowedTools: []string{"domain.apply", "contract.validate", "artifact.write"}, AllowedEffects: []string{"domain-effect", "read", "artifact-write"}, MaximumRisk: "medium", DataClasses: []string{"internal"}, ApprovalDecisionVersion: 7}
-	current := CurrentAuthority{WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, AllowedTools: intent.AllowedTools, AllowedEffects: intent.AllowedEffects, MaximumRisk: "medium", DataClasses: []string{"internal"}, ApprovalDecisionVersion: 6}
+	current := CurrentAuthority{WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, AllowedTools: intent.AllowedTools, AllowedCapabilities: []string{"fake.execute"}, AllowedEffects: intent.AllowedEffects, MaximumRisk: "medium", DataClasses: []string{"internal"}, ApprovalDecisionVersion: 6}
 	record := &recording{}
-	guard, _ := NewGuard(value, record, clock{}, JSONArgumentValidator{})
+	guard, _ := NewGuard(value, record, clock{}, admittingValidator{})
 	if decision, err := guard.Evaluate(context.Background(), intent, current, Proposal{ToolID: "domain.apply", Arguments: json.RawMessage(`{}`)}); err == nil || decision.Code != "APPROVAL_REQUIRED" {
 		t.Fatalf("stale approval accepted: %#v %v", decision, err)
 	}

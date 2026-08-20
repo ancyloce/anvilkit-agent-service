@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
@@ -26,8 +27,23 @@ type policyAuthority struct {
 	err       error
 }
 
-func (a policyAuthority) Current(context.Context, runs.Scope) (runs.Authority, error) {
+func (a policyAuthority) Current(context.Context, authority.Scope) (authority.Current, error) {
 	return a.authority, a.err
+}
+
+// currentReviewerAuthority is a complete, active current-authority
+// observation carrying the reviewer policy in force.
+func currentReviewerAuthority(policy json.RawMessage) authority.Current {
+	return authority.Current{
+		Definition:       json.RawMessage(`{"definitionId":"definition.test"}`),
+		ContractBOM:      json.RawMessage(`{"bom":"test"}`),
+		Policy:           policy,
+		Budget:           json.RawMessage(`{"budget":"test"}`),
+		WorkspaceActive:  true,
+		ActorActive:      true,
+		PermissionActive: true,
+		PolicyActive:     true,
+	}
 }
 
 func TestCurrentAuthorityEnforcesSeparationAndCurrentReviewerPolicy(t *testing.T) {
@@ -55,7 +71,7 @@ func TestCurrentAuthorityEnforcesSeparationAndCurrentReviewerPolicy(t *testing.T
 			snapshot.Policy = test.runPolicy
 			request := baseRequest
 			request.ReviewerPolicy = test.requestPolicy
-			authority, err := NewCurrentAuthority(authorityRunReader{snapshot: snapshot}, policyAuthority{authority: runs.Authority{Policy: test.currentPolicy}})
+			authority, err := NewCurrentAuthority(authorityRunReader{snapshot: snapshot}, policyAuthority{authority: currentReviewerAuthority(test.currentPolicy)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -81,16 +97,15 @@ func TestCurrentAuthorityFailsClosedWhenAuthorityCannotBeResolved(t *testing.T) 
 }
 
 func TestCurrentAuthorityRestrictsInputToRunActor(t *testing.T) {
-	policy := policyReference("policy.reviewers", "v1", 'a')
-	authority, err := NewCurrentAuthority(authorityRunReader{snapshot: runs.Snapshot{RunID: "run", ActorID: "run-actor", Policy: policy}}, policyAuthority{authority: runs.Authority{Policy: policy}})
+	authority, err := NewCurrentAuthority(authorityRunReader{snapshot: materialSnapshot(runs.AwaitingInput)}, policyAuthority{authority: materialAuthority()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	request := InputRequest{RunID: "run"}
-	if err := authority.AuthorizeInput(context.Background(), runs.Scope{ActorID: "run-actor"}, request); err != nil {
+	if err := authority.AuthorizeInput(context.Background(), materialScope("run-actor"), request); err != nil {
 		t.Fatalf("run actor was denied: %v", err)
 	}
-	err = authority.AuthorizeInput(context.Background(), runs.Scope{ActorID: "different-actor"}, request)
+	err = authority.AuthorizeInput(context.Background(), materialScope("different-actor"), request)
 	var details problem.Details
 	if !errors.As(err, &details) || details.Code != string(problem.CodeAuthorizationDenied) {
 		t.Fatalf("different actor was not denied: %v", err)

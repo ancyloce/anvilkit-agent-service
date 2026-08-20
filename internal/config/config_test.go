@@ -116,3 +116,63 @@ func TestCandidateMutationGateRequiresControlDatabase(t *testing.T) {
 		t.Fatalf("candidate mutations accepted without control authority database: %v", err)
 	}
 }
+
+// The approved Agent definition catalog must be authenticated against an
+// operator-distributed trust root in production. The repository ships no
+// signing key, so a production deployment that supplies none is rejected
+// rather than trusting its own copy of the catalog.
+func TestProductionRequiresAnOperatorDistributedDefinitionTrustRoot(t *testing.T) {
+	required := requiredProductionSettings()
+	for _, missing := range []string{"ANVILKIT_DEFINITION_TRUST_ROOT", "ANVILKIT_DEFINITION_ATTESTATION"} {
+		t.Run(missing, func(t *testing.T) {
+			for name, value := range required {
+				if name != missing {
+					t.Setenv(name, value)
+				}
+			}
+			_, err := Load()
+			var details problem.Details
+			if !errors.As(err, &details) || details.Fields[missing] == "" {
+				t.Fatalf("production configuration without %s was accepted: %v", missing, err)
+			}
+		})
+	}
+	// With both present, the definition trust material is no longer what
+	// blocks the configuration.
+	for name, value := range required {
+		t.Setenv(name, value)
+	}
+	_, err := Load()
+	var details problem.Details
+	if errors.As(err, &details) {
+		for _, name := range []string{"ANVILKIT_DEFINITION_TRUST_ROOT", "ANVILKIT_DEFINITION_ATTESTATION"} {
+			if details.Fields[name] != "" {
+				t.Fatalf("a supplied %s was still reported missing: %v", name, details.Fields)
+			}
+		}
+	}
+}
+
+// requiredProductionSettings is the environment a production configuration
+// needs before the definition trust material is the only thing left to check.
+func requiredProductionSettings() map[string]string {
+	return map[string]string{
+		"ANVILKIT_ENVIRONMENT":             "production",
+		"ANVILKIT_AUTH_TRUST_SNAPSHOT":     "/etc/anvilkit/trust.json",
+		"ANVILKIT_AUTH_ISSUERS":            "urn:anvilkit:issuer:platform",
+		"ANVILKIT_MIGRATION_DATABASE_URL":  "postgres://owner@db.internal:5432/anvilkit",
+		"ANVILKIT_CONTROL_DATABASE_URL":    "postgres://owner@db.internal:5432/anvilkit",
+		"ANVILKIT_WORKFLOW_DATABASE_URL":   "postgres://owner@db.internal:5432/anvilkit",
+		"ANVILKIT_EVENTS_DATABASE_URL":     "postgres://owner@db.internal:5432/anvilkit",
+		"ANVILKIT_ARTIFACTS_DATABASE_URL":  "postgres://owner@db.internal:5432/anvilkit",
+		"ANVILKIT_EVALUATION_DATABASE_URL": "postgres://owner@db.internal:5432/anvilkit",
+		"ANVILKIT_RECEIPT_JOURNAL_URL":     "https://journal.internal",
+		"ANVILKIT_RECOVERY_REGISTER_URL":   "https://register.internal",
+		"ANVILKIT_AUTHORITATIVE_TIME_URL":  "https://time.internal",
+		"ANVILKIT_PROTECTED_AUDIT_URL":     "https://audit.internal",
+		"ANVILKIT_POLICY_SNAPSHOT":         "/etc/anvilkit/policy.json",
+		"ANVILKIT_CAPABILITY_SNAPSHOT":     "/etc/anvilkit/capability.json",
+		"ANVILKIT_DEFINITION_TRUST_ROOT":   "/etc/anvilkit/definition-trust-root.json",
+		"ANVILKIT_DEFINITION_ATTESTATION":  "/etc/anvilkit/definition-catalog.dsse.json",
+	}
+}

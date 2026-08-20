@@ -40,6 +40,8 @@ func (i *testIDs) NewRunID() (runs.ID, error) {
 
 type testAuthority struct {
 	denyInput, denyReview bool
+	denyResume            bool
+	retryErr              error
 	retry                 bool
 	checkpoint            string
 }
@@ -57,7 +59,16 @@ func (a *testAuthority) AuthorizeReviewer(context.Context, runs.Scope, ApprovalR
 	return nil
 }
 func (a *testAuthority) RetryEligibility(_ context.Context, _ runs.Scope, snapshot runs.Snapshot) (bool, string, error) {
+	if a.retryErr != nil {
+		return false, "", a.retryErr
+	}
 	return a.retry && snapshot.Status == runs.Failed, a.checkpoint, nil
+}
+func (a *testAuthority) AuthorizeResume(context.Context, runs.Scope, runs.Snapshot) error {
+	if a.denyResume {
+		return problem.New(problem.CodeAuthorityStale, "")
+	}
+	return nil
 }
 
 type signal struct {
@@ -793,5 +804,70 @@ func TestDwellMonitorCoversEveryNonterminalStateWithoutTransition(t *testing.T) 
 		if current.Status != state || current.Version != 1 {
 			t.Fatalf("dwell invented outcome for %s", state)
 		}
+	}
+}
+
+// TestStaleAuthorityStopsRetryBeforeGenerationAndWorkflow proves the retry
+// boundary is an authorization decision, not a bookkeeping step: a stale
+// current-authority answer stops the command before the execution generation
+// is incremented and before any workflow is resumed.
+func TestStaleAuthorityStopsRetryBeforeGenerationAndWorkflow(t *testing.T) {
+	repository := NewMemoryRepository()
+	failed := snapshot("run", runs.Failed, 6)
+	failure := problem.New(problem.CodeProviderUnavailable, "")
+	failure.Retryability = "safe-after-backoff"
+	failed.Problem = &failure
+	if err := repository.Seed(scope(), failed); err != nil {
+		t.Fatal(err)
+	}
+	stale := problem.New(problem.CodeAuthorityStale, "")
+	authority := &testAuthority{retry: true, checkpoint: "preparing:authority", retryErr: stale}
+	service, runtime, _ := newTestService(t, repository, &testClock{now: testNow}, authority, &testReconciler{clear: true}, &testReservation{})
+	_, err := service.Retry(context.Background(), write("run", 6, "retry-stale"))
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeAuthorityStale) {
+		t.Fatalf("retry error = %v, want %s", err, problem.CodeAuthorityStale)
+	}
+	current, err := repository.Current(context.Background(), scope(), "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ExecutionGeneration != failed.ExecutionGeneration || current.Status != runs.Failed || current.Version != failed.Version {
+		t.Fatalf("stale retry moved the run: %+v", current)
+	}
+	if len(runtime.resumed) != 0 {
+		t.Fatalf("stale retry resumed a workflow: %v", runtime.resumed)
+	}
+}
+
+// TestRecordedRetryIsNotResumedAfterAuthorityIsRevoked proves the replay of an
+// already-recorded retry is authorized in its own right: the resume is a fresh
+// start of real execution, so revoked authority stops it.
+func TestRecordedRetryIsNotResumedAfterAuthorityIsRevoked(t *testing.T) {
+	repository := NewMemoryRepository()
+	failed := snapshot("run", runs.Failed, 6)
+	failure := problem.New(problem.CodeProviderUnavailable, "")
+	failure.Retryability = "safe-after-backoff"
+	failed.Problem = &failure
+	if err := repository.Seed(scope(), failed); err != nil {
+		t.Fatal(err)
+	}
+	authority := &testAuthority{retry: true, checkpoint: "preparing:authority"}
+	service, runtime, _ := newTestService(t, repository, &testClock{now: testNow}, authority, &testReconciler{clear: true}, &testReservation{})
+	first, err := service.Retry(context.Background(), write("run", 6, "retry-once"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Snapshot.ExecutionGeneration != failed.ExecutionGeneration+1 || len(runtime.resumed) != 1 {
+		t.Fatalf("first retry did not record and resume: %+v resumed=%v", first.Snapshot, runtime.resumed)
+	}
+	authority.denyResume = true
+	_, err = service.Retry(context.Background(), write("run", 6, "retry-once"))
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeAuthorityStale) {
+		t.Fatalf("recorded retry replay error = %v, want %s", err, problem.CodeAuthorityStale)
+	}
+	if len(runtime.resumed) != 1 {
+		t.Fatalf("revoked authority still resumed the recorded retry: %v", runtime.resumed)
 	}
 }

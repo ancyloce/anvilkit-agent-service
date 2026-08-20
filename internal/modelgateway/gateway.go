@@ -251,28 +251,114 @@ func selectSnapshot(snapshot Snapshot, workspace string, policy Policy) (Selecti
 
 type AttemptID string
 type InvokeRequest struct {
-	RunID, WorkspaceID                      string
-	ProjectID                               string
+	RunID, WorkspaceID string
+	ProjectID          string
+	// IdempotencyKey is the caller's durable operation identity. It is
+	// required: the gateway derives every recorded and provider-visible
+	// identity from it, so a replayed durable step produces the same
+	// invocation and attempt identities instead of a fresh one.
+	IdempotencyKey                          string
 	Selection                               Selection
 	Context                                 []byte
 	DataClasses                             []DataClass
 	MaximumOutputBytes                      int
 	MaximumInputTokens, MaximumOutputTokens int64
-	MaximumCostMicros                       int64
-	Timeout                                 time.Duration
-	MaximumAttempts                         int
-	RetryBudget                             time.Duration
-	Scenario                                string
+	// MaximumTotalTokens is the aggregate input+output ceiling for the whole
+	// invocation. Separate input and output ceilings alone let an invocation
+	// spend twice the tokens the pinned budget authorized, so the aggregate
+	// is carried and enforced in its own right.
+	MaximumTotalTokens int64
+	MaximumCostMicros  int64
+	Timeout            time.Duration
+	MaximumAttempts    int
+	RetryBudget        time.Duration
+	Scenario           string
+	// Budget authorizes each physical attempt. It is required: an invocation
+	// with no attempt budget could spend the pinned budget several times over
+	// through transport retries alone.
+	Budget AttemptBudget
 }
 type AdapterRequest struct {
-	InvocationID       string
+	InvocationID string
+	// IdempotencyKey is the provider-visible deduplication identity for this
+	// physical attempt. Adapters must treat a repeat as the same call.
+	IdempotencyKey     string
 	PhysicalAttemptID  AttemptID
 	Provider           ProviderID
 	ModelVersion       string
 	Context            []byte
 	Scenario           string
 	MaximumOutputBytes int
+	// The token and cost ceilings this attempt is authorized to spend.
+	// Adapters must enforce them against the provider request and must not
+	// return a response that exceeds them.
+	MaximumInputTokens  int64
+	MaximumOutputTokens int64
+	MaximumTotalTokens  int64
+	MaximumCostMicros   int64
 }
+
+const maximumIdempotencyKeyBytes = 512
+
+// Usage is the consumption one invocation has already caused, counting every
+// physical provider attempt including the ones that failed.
+type Usage struct {
+	ModelCalls   int64
+	InputTokens  int64
+	OutputTokens int64
+	CostMicros   int64
+}
+
+func (u Usage) plus(other Usage) Usage {
+	return Usage{
+		ModelCalls:   u.ModelCalls + other.ModelCalls,
+		InputTokens:  u.InputTokens + other.InputTokens,
+		OutputTokens: u.OutputTokens + other.OutputTokens,
+		CostMicros:   u.CostMicros + other.CostMicros,
+	}
+}
+
+// AttemptLimits bound exactly one physical provider attempt. They are handed
+// to the adapter, not merely checked after the fact, so the provider is told
+// what it may spend.
+type AttemptLimits struct {
+	MaximumInputTokens  int64
+	MaximumOutputTokens int64
+	// MaximumTotalTokens bounds input+output for this one attempt. It is
+	// authorized separately from the two component ceilings because the
+	// pinned AgentBudget states an aggregate limit of its own.
+	MaximumTotalTokens int64
+	MaximumCostMicros  int64
+}
+
+func (l AttemptLimits) valid() bool {
+	return l.MaximumInputTokens >= 1 && l.MaximumOutputTokens >= 1 && l.MaximumTotalTokens >= 1 && l.MaximumCostMicros >= 0
+}
+
+// AttemptBudget authorizes every physical provider attempt. The gateway
+// consults it before the first attempt and before every retry, and reports
+// the consumption of each completed attempt back through the used argument.
+// No physical attempt is exempt, so a retry can never spend past the budget
+// the run was pinned to.
+type AttemptBudget interface {
+	Authorize(attempt int, used Usage) (AttemptLimits, error)
+}
+
+// InvocationIdentity derives the deterministic provider invocation identity
+// from a durable operation key. Recovery re-running the same durable step
+// reproduces the identity exactly.
+func InvocationIdentity(idempotencyKey string) string {
+	sum := sha256.Sum256([]byte("anvilkit/model-invocation\x00" + idempotencyKey))
+	return "invocation." + hex.EncodeToString(sum[:16])
+}
+
+// AttemptIdentity derives the deterministic physical attempt identity inside
+// one invocation.
+func AttemptIdentity(invocationID string, attempt int) AttemptID {
+	sum := sha256.Sum256(fmt.Appendf(nil, "anvilkit/model-attempt\x00%s\x00%d", invocationID, attempt))
+	return AttemptID("attempt." + hex.EncodeToString(sum[:12]))
+}
+
 type AdapterResponse struct {
 	Output                                []byte
 	InputTokens, OutputTokens, CostMicros int64
@@ -303,10 +389,6 @@ type InvocationRecord struct {
 	OutputDigest                          string
 	Problem                               *problem.Details
 }
-type IDs interface {
-	InvocationID() string
-	AttemptID(int) AttemptID
-}
 type Clock interface{ Now() time.Time }
 type Sleeper interface {
 	Sleep(context.Context, time.Duration) error
@@ -314,13 +396,12 @@ type Sleeper interface {
 type Gateway struct {
 	adapters map[ProviderID]Adapter
 	recorder Recorder
-	ids      IDs
 	clock    Clock
 	sleeper  Sleeper
 }
 
-func NewGateway(adapters map[ProviderID]Adapter, recorder Recorder, ids IDs, clock Clock, sleeper Sleeper) (*Gateway, error) {
-	if len(adapters) == 0 || recorder == nil || ids == nil || clock == nil || sleeper == nil {
+func NewGateway(adapters map[ProviderID]Adapter, recorder Recorder, clock Clock, sleeper Sleeper) (*Gateway, error) {
+	if len(adapters) == 0 || recorder == nil || clock == nil || sleeper == nil {
 		return nil, fmt.Errorf("gateway dependencies required")
 	}
 	copyAdapters := map[ProviderID]Adapter{}
@@ -330,45 +411,92 @@ func NewGateway(adapters map[ProviderID]Adapter, recorder Recorder, ids IDs, clo
 		}
 		copyAdapters[id] = adapter
 	}
-	return &Gateway{copyAdapters, recorder, ids, clock, sleeper}, nil
+	return &Gateway{copyAdapters, recorder, clock, sleeper}, nil
 }
 func (g *Gateway) Invoke(ctx context.Context, request InvokeRequest) (AdapterResponse, InvocationRecord, error) {
 	policyDigest, policyErr := policyDigest(request.Selection.PolicySnapshot)
-	if !request.Selection.eligible || request.Selection.Provider.ID == "" || request.Selection.Region == "" || !contains(request.Selection.Provider.Regions, request.Selection.Region) || !isSHA256(request.Selection.SnapshotDigest) || policyErr != nil || policyDigest != request.Selection.PolicyDigest || request.Selection.PolicyVersion != request.Selection.PolicySnapshot.Version || request.RunID == "" || request.WorkspaceID == "" || request.ProjectID == "" || len(request.Context) == 0 || len(request.DataClasses) == 0 || !uniqueDataClasses(request.DataClasses) || !containsAllClasses(request.Selection.Provider.DataClasses, request.DataClasses) || !containsAllClasses(request.Selection.DataClasses, request.DataClasses) || request.MaximumInputTokens < 1 || request.MaximumInputTokens > 1_000_000_000 || request.MaximumOutputTokens < 1 || request.MaximumOutputTokens > 1_000_000_000 || int64(len(request.Context)) > request.MaximumInputTokens*4 || request.MaximumCostMicros < 0 || request.MaximumCostMicros > request.Selection.MaximumCostMicros || request.MaximumOutputBytes < 1 || request.MaximumOutputBytes > 16*1024*1024 || request.MaximumAttempts < 1 || request.MaximumAttempts > 100 || request.Timeout <= 0 || request.Timeout > 30*time.Minute || request.RetryBudget < 0 || request.RetryBudget > 24*time.Hour {
+	if !request.Selection.eligible || request.Selection.Provider.ID == "" || request.Selection.Region == "" || !contains(request.Selection.Provider.Regions, request.Selection.Region) || !isSHA256(request.Selection.SnapshotDigest) || policyErr != nil || policyDigest != request.Selection.PolicyDigest || request.Selection.PolicyVersion != request.Selection.PolicySnapshot.Version || request.RunID == "" || request.WorkspaceID == "" || request.ProjectID == "" || request.IdempotencyKey == "" || len(request.IdempotencyKey) > maximumIdempotencyKeyBytes || len(request.Context) == 0 || len(request.DataClasses) == 0 || !uniqueDataClasses(request.DataClasses) || !containsAllClasses(request.Selection.Provider.DataClasses, request.DataClasses) || !containsAllClasses(request.Selection.DataClasses, request.DataClasses) || request.MaximumInputTokens < 1 || request.MaximumInputTokens > 1_000_000_000 || request.MaximumOutputTokens < 1 || request.MaximumOutputTokens > 1_000_000_000 || request.MaximumTotalTokens < 1 || request.MaximumTotalTokens > 2_000_000_000 || int64(len(request.Context)) > request.MaximumInputTokens*4 || request.MaximumCostMicros < 0 || request.MaximumCostMicros > request.Selection.MaximumCostMicros || request.MaximumOutputBytes < 1 || request.MaximumOutputBytes > 16*1024*1024 || request.MaximumAttempts < 1 || request.MaximumAttempts > 100 || request.Timeout <= 0 || request.Timeout > 30*time.Minute || request.RetryBudget < 0 || request.RetryBudget > 24*time.Hour || request.Budget == nil {
 		return AdapterResponse{}, InvocationRecord{}, problem.New(problem.CodeRequestInvalid, "")
 	}
 	adapter := g.adapters[request.Selection.Provider.ID]
 	if adapter == nil {
 		return AdapterResponse{}, InvocationRecord{}, problem.New(problem.CodeNoEligibleProvider, "")
 	}
-	invocationID := g.ids.InvocationID()
-	if invocationID == "" {
-		return AdapterResponse{}, InvocationRecord{}, fmt.Errorf("empty provider invocation identity")
-	}
+	invocationID := InvocationIdentity(request.IdempotencyKey)
 	record := InvocationRecord{InvocationID: invocationID, RunID: request.RunID, WorkspaceID: request.WorkspaceID, ProjectID: request.ProjectID, RegistrySnapshotDigest: request.Selection.SnapshotDigest, PolicyVersion: request.Selection.PolicyVersion, PolicyDigest: request.Selection.PolicyDigest, PolicySnapshot: clonePolicy(request.Selection.PolicySnapshot), Provider: request.Selection.Provider.ID, ModelVersion: request.Selection.Provider.ModelVersion, Region: request.Selection.Region, DisclosedDataClasses: append([]DataClass(nil), request.DataClasses...), StartedAt: g.clock.Now()}
 	if err := g.recorder.BeforeDisclosure(ctx, record); err != nil {
 		return AdapterResponse{}, record, fmt.Errorf("record invocation before disclosure: %w", err)
 	}
 	started := g.clock.Now()
 	var last error
+	used := Usage{}
 	for attempt := 1; attempt <= request.MaximumAttempts; attempt++ {
 		elapsed := g.clock.Now().Sub(started)
 		if elapsed > request.RetryBudget && attempt > 1 {
 			break
 		}
-		attemptID := g.ids.AttemptID(attempt)
-		if attemptID == "" {
-			last = fmt.Errorf("empty physical provider attempt identity")
+		// Every physical attempt is authorized before it happens and
+		// accounted after it happens, whether it succeeds or fails. A denial
+		// on the first attempt is the caller's typed budget problem and is
+		// returned unchanged; a denial on a retry ends the invocation with
+		// what has already been recorded.
+		limits, budgetErr := request.Budget.Authorize(attempt, used)
+		if budgetErr != nil {
+			last = budgetErr
 			break
 		}
-		record.PhysicalAttempts = append(record.PhysicalAttempts, attemptID)
-		if err := g.recorder.BeforeAttempt(ctx, record); err != nil {
+		if !limits.valid() {
+			last = problem.New(problem.CodeRequestInvalid, "")
+			break
+		}
+		limits.MaximumInputTokens = minimum(limits.MaximumInputTokens, request.MaximumInputTokens)
+		limits.MaximumOutputTokens = minimum(limits.MaximumOutputTokens, request.MaximumOutputTokens)
+		limits.MaximumTotalTokens = minimum(limits.MaximumTotalTokens, request.MaximumTotalTokens)
+		limits.MaximumCostMicros = minimum(limits.MaximumCostMicros, request.MaximumCostMicros)
+		// A physical attempt becomes real only once the recorder has accepted
+		// it. The attempt identity is offered to the recorder on a candidate
+		// record; it is charged to the invocation — and the provider is
+		// called — only after that write succeeds. A recorder failure
+		// therefore consumes no model call, no token, no cost, and no retry
+		// slot, and leaves no attempt in the durable evidence.
+		attemptID := AttemptIdentity(invocationID, attempt)
+		accepted := record
+		accepted.PhysicalAttempts = append(append([]AttemptID(nil), record.PhysicalAttempts...), attemptID)
+		if err := g.recorder.BeforeAttempt(ctx, accepted); err != nil {
 			last = fmt.Errorf("record physical attempt before disclosure: %w", err)
 			break
 		}
+		record = accepted
 		attemptCtx, cancel := context.WithTimeout(ctx, request.Timeout)
-		response, err := adapter.Invoke(attemptCtx, AdapterRequest{record.InvocationID, attemptID, request.Selection.Provider.ID, request.Selection.Provider.ModelVersion, append([]byte(nil), request.Context...), request.Scenario, request.MaximumOutputBytes})
+		response, err := adapter.Invoke(attemptCtx, AdapterRequest{
+			InvocationID:        record.InvocationID,
+			IdempotencyKey:      string(attemptID),
+			PhysicalAttemptID:   attemptID,
+			Provider:            request.Selection.Provider.ID,
+			ModelVersion:        request.Selection.Provider.ModelVersion,
+			Context:             append([]byte(nil), request.Context...),
+			Scenario:            request.Scenario,
+			MaximumOutputBytes:  request.MaximumOutputBytes,
+			MaximumInputTokens:  limits.MaximumInputTokens,
+			MaximumOutputTokens: limits.MaximumOutputTokens,
+			MaximumTotalTokens:  limits.MaximumTotalTokens,
+			MaximumCostMicros:   limits.MaximumCostMicros,
+		})
 		cancel()
+		// A failed attempt still consumed provider budget when the adapter
+		// reports it, so accounting happens before the error is classified.
+		spent := Usage{ModelCalls: 1, InputTokens: response.InputTokens, OutputTokens: response.OutputTokens, CostMicros: response.CostMicros}
+		if spent.InputTokens < 0 || spent.OutputTokens < 0 || spent.CostMicros < 0 {
+			// Negative consumption is unaccountable. The attempt is already
+			// recorded as a physical attempt, and the invocation fails closed
+			// rather than letting an adapter report its way out of the budget.
+			last = problem.New(problem.CodeProviderLimitExceeded, "")
+			break
+		}
+		used = used.plus(spent)
+		record.InputTokens += spent.InputTokens
+		record.OutputTokens += spent.OutputTokens
+		record.CostMicros += spent.CostMicros
 		if err != nil {
 			last = err
 			if !retryable(err) || attempt == request.MaximumAttempts {
@@ -385,13 +513,10 @@ func (g *Gateway) Invoke(ctx context.Context, request InvokeRequest) (AdapterRes
 			}
 			continue
 		}
-		if len(response.Output) > request.MaximumOutputBytes || len(response.Continuation) > 16384 || response.InputTokens < 0 || response.OutputTokens < 0 || response.CostMicros < 0 || response.InputTokens > request.MaximumInputTokens || response.OutputTokens > request.MaximumOutputTokens || response.CostMicros > request.MaximumCostMicros || response.CostMicros > request.Selection.Provider.MaximumCostMicros {
+		if len(response.Output) > request.MaximumOutputBytes || len(response.Continuation) > 16384 || response.InputTokens > limits.MaximumInputTokens || response.OutputTokens > limits.MaximumOutputTokens || response.InputTokens+response.OutputTokens > limits.MaximumTotalTokens || response.CostMicros > limits.MaximumCostMicros || response.CostMicros > request.Selection.Provider.MaximumCostMicros {
 			last = problem.New(problem.CodeProviderLimitExceeded, "")
 			break
 		}
-		record.InputTokens += response.InputTokens
-		record.OutputTokens += response.OutputTokens
-		record.CostMicros += response.CostMicros
 		record.OutputDigest = digest(response.Output)
 		completed := g.clock.Now()
 		record.CompletedAt = &completed
@@ -436,6 +561,12 @@ type RetryableError struct{ Err error }
 func (e RetryableError) Error() string { return e.Err.Error() }
 func (e RetryableError) Unwrap() error { return e.Err }
 func retryable(err error) bool         { var value RetryableError; return errors.As(err, &value) }
+func minimum(left, right int64) int64 {
+	if left < right {
+		return left
+	}
+	return right
+}
 func snapshotDigest(snapshot Snapshot) (string, error) {
 	copyValue := normalizeSnapshot(snapshot)
 	copyValue.Digest = ""

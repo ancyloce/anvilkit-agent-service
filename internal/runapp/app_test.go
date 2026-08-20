@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
+	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
@@ -69,17 +70,31 @@ func (eventReader) Wait(context.Context, events.Scope, string, uint64, time.Dura
 	return nil
 }
 
-type authority struct{}
+type appAuthoritySource struct{}
 
-func (authority) Current(context.Context, runs.Scope) (runs.Authority, error) {
-	return runs.Authority{}, nil
+func (appAuthoritySource) Current(context.Context, authority.Scope) (authority.Current, error) {
+	return testAuthority(), nil
+}
+
+// testAuthority is a complete, active current-authority observation.
+func testAuthority() authority.Current {
+	return authority.Current{
+		Definition:       []byte(`{"definitionId":"definition.test","definitionDigest":"sha256:` + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `"}`),
+		ContractBOM:      []byte(`{"bom":"test"}`),
+		Policy:           []byte(`{"policyId":"policy.test","version":"v1"}`),
+		Budget:           []byte(`{"budget":"test"}`),
+		WorkspaceActive:  true,
+		ActorActive:      true,
+		PermissionActive: true,
+		PolicyActive:     true,
+	}
 }
 
 func TestServerScopeComesOnlyFromVerifiedClaimsAndCrossWorkspaceIs404(t *testing.T) {
 	now := time.Now()
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent", MaximumClockSkew: time.Second}, trust{}, clock{now})
 	runStore := &store{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 3}}
-	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore()), eventReader{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.Bounds{MaximumBytes: 1000, MaximumFields: 10, MaximumFieldBytes: 100}}, authority{})
+	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil })), eventReader{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.Bounds{MaximumBytes: 1000, MaximumFields: 10, MaximumFieldBytes: 100}}, appAuthoritySource{})
 	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead, auth.ScopeWrite}, ExpiresAt: now.Add(time.Hour)}
 	result, err := app.Get(context.Background(), claims, "workspace", "run")
 	if err != nil || result.ETag != `"run:v3"` {
@@ -97,7 +112,7 @@ func TestStrongETagPreconditionAllowsOneMutation(t *testing.T) {
 	now := time.Now()
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent"}, trust{}, clock{now})
 	runStore := &store{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 3}}
-	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore()), eventReader{}, events.StreamConfig{}, authority{})
+	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil })), eventReader{}, events.StreamConfig{}, appAuthoritySource{})
 	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeWrite}, ExpiresAt: now.Add(time.Hour)}
 	first, err := app.Transition(context.Background(), claims, auth.OpCancel, "workspace", "run", `"run:v3"`, runs.Command{Kind: runs.RequestCancellation, Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"})
 	if err != nil || first.ETag != `"run:v4"` {

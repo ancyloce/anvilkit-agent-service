@@ -20,19 +20,23 @@ const ProbeDigest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 // engine semantics — checkpointing, recovery, durable waits, cancellation —
 // can be proven without external infrastructure.
 type ProbeOps struct {
-	lock         sync.Mutex
-	calls        map[string]int
-	NeedInput    bool
-	Governed     bool
-	InputTimeout time.Duration
-	inputOpened  time.Time
-	accepted     bool
-	approved     bool
-	value        json.RawMessage
+	lock      sync.Mutex
+	calls     map[string]int
+	NeedInput bool
+	Governed  bool
+	// Delegate makes the first turn delegate, and DelegateTurns bounds how
+	// many Specialist turns the delegation runs before concluding.
+	Delegate      bool
+	DelegateTurns int
+	InputTimeout  time.Duration
+	inputOpened   time.Time
+	accepted      bool
+	approved      bool
+	value         json.RawMessage
 }
 
 func NewProbeOps() *ProbeOps {
-	return &ProbeOps{calls: make(map[string]int), InputTimeout: 30 * time.Second}
+	return &ProbeOps{calls: make(map[string]int), InputTimeout: 30 * time.Second, DelegateTurns: 2}
 }
 
 func (p *ProbeOps) count(op workflow.OpID) {
@@ -71,6 +75,9 @@ func (p *ProbeOps) ExecuteTurn(_ context.Context, op workflow.OpID, input workfl
 	if p.NeedInput && input.Turn == 0 {
 		return workflow.TurnResult{Decision: agent.TurnDecision{Kind: agent.DecisionNeedInput, NeedInput: &agent.NeedInputDecision{Question: "probe question"}}, Carry: carry}, nil
 	}
+	if p.Delegate && input.Turn == 0 {
+		return workflow.TurnResult{Decision: agent.TurnDecision{Kind: agent.DecisionDelegate, Delegate: &agent.DelegateDecision{DelegateID: "definition.probe.specialist", Input: json.RawMessage(`{"task":"draft"}`)}}, Carry: carry}, nil
+	}
 	return workflow.TurnResult{Decision: agent.TurnDecision{Kind: agent.DecisionFinal, Final: &agent.FinalDecision{Candidate: json.RawMessage(`{"kind":"probe"}`)}}, Carry: carry}, nil
 }
 
@@ -82,6 +89,18 @@ func (p *ProbeOps) RecordDecision(_ context.Context, op workflow.OpID, _ workflo
 func (p *ProbeOps) ExecuteAction(_ context.Context, op workflow.OpID, _ workflow.ActionInput) (workflow.ActionResult, error) {
 	p.count(op)
 	return workflow.ActionResult{}, nil
+}
+
+func (p *ProbeOps) OpenDelegation(_ context.Context, op workflow.OpID, input workflow.DelegationInput) (workflow.DelegationOpened, error) {
+	p.count(op)
+	return workflow.DelegationOpened{TurnLimit: p.DelegateTurns, SpecialistID: "definition.probe.specialist", SpecialistDigest: ProbeDigest, Carry: input.Carry}, nil
+}
+
+func (p *ProbeOps) ExecuteDelegateTurn(_ context.Context, op workflow.OpID, input workflow.DelegateTurnInput) (workflow.DelegateTurnResult, error) {
+	p.count(op)
+	// The delegation concludes on its last bounded turn, so every earlier
+	// Specialist turn is a separate durable boundary.
+	return workflow.DelegateTurnResult{Done: input.Last, Carry: input.Carry}, nil
 }
 
 func (p *ProbeOps) OpenInput(_ context.Context, op workflow.OpID, input workflow.InterruptOpen) (workflow.InterruptOpened, error) {

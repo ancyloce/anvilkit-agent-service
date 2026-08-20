@@ -13,8 +13,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 )
 
 type ProfileID string
@@ -98,10 +96,15 @@ type Intent struct {
 type CurrentAuthority struct {
 	WorkspaceActive, ActorActive, PermissionActive, PolicyActive bool
 	AllowedTools                                                 []string
-	AllowedEffects                                               []string
-	MaximumRisk                                                  string
-	DataClasses                                                  []string
-	ApprovalDecisionVersion                                      uint64
+	// AllowedCapabilities is the capability set the actor currently holds.
+	// The signed ToolDefinition names the capability a dispatch exercises, so
+	// a tool whose capability is not granted is denied even when the tool
+	// identity itself is allowed.
+	AllowedCapabilities     []string
+	AllowedEffects          []string
+	MaximumRisk             string
+	DataClasses             []string
+	ApprovalDecisionVersion uint64
 }
 type Proposal struct {
 	ToolID        string
@@ -113,7 +116,30 @@ type Decision struct {
 	Code, Reason                 string
 	ProfileDigest, PolicyVersion string
 	RecordedAt                   time.Time
+	// Dispatch carries the signed execution envelope of the allowed tool.
+	// The caller executes inside it rather than deciding for itself how long
+	// a tool may run or how often it may be attempted.
+	Dispatch DispatchEnvelope
 }
+
+// DispatchEnvelope is the part of the signed ToolDefinition that governs the
+// execution the guard just allowed.
+type DispatchEnvelope struct {
+	Capability          string
+	SideEffectClass     string
+	RiskClass           string
+	TimeoutMilliseconds int
+	MaximumAttempts     int
+	BackoffMilliseconds int
+	Retryability        []string
+}
+
+// RetryableImmediately reports whether the signed retry policy permits an
+// immediate re-attempt of a failed dispatch.
+func (e DispatchEnvelope) RetryableImmediately() bool {
+	return contains(e.Retryability, "safe-immediate")
+}
+
 type Recorder interface {
 	Record(context.Context, Intent, Proposal, Decision) error
 }
@@ -121,13 +147,6 @@ type Clock interface{ Now() time.Time }
 type ArgumentValidator interface {
 	Validate(context.Context, SchemaReference, json.RawMessage) error
 }
-type JSONArgumentValidator struct{}
-
-func (JSONArgumentValidator) Validate(_ context.Context, _ SchemaReference, value json.RawMessage) error {
-	_, err := contractvalidator.Admit(value)
-	return err
-}
-
 type Guard struct {
 	profile   Profile
 	recorder  Recorder
@@ -175,6 +194,12 @@ func (g *Guard) Evaluate(ctx context.Context, intent Intent, current CurrentAuth
 	if risk(definition.RiskClass) > risk(intent.MaximumRisk) || risk(definition.RiskClass) > risk(current.MaximumRisk) {
 		return deny("RISK_DENIED", "risk exceeds current authority")
 	}
+	// The capability is part of the signed ToolDefinition, so it is authorized
+	// like every other part of it: holding the tool identity is not holding
+	// the capability the tool exercises.
+	if definition.Capability == "" || !contains(current.AllowedCapabilities, definition.Capability) {
+		return deny("CAPABILITY_DENIED", "the signed tool capability is not granted by current authority")
+	}
 	if !allContained(intent.DataClasses, definition.AcceptedDataClasses) || !allContained(intent.DataClasses, current.DataClasses) {
 		return deny("DATA_CLASS_DENIED", "data class is not accepted")
 	}
@@ -184,8 +209,20 @@ func (g *Guard) Evaluate(ctx context.Context, intent Intent, current CurrentAuth
 	if err := g.validator.Validate(ctx, definition.InputSchema, proposal.Arguments); err != nil {
 		return deny("ARGUMENT_SCHEMA_INVALID", "tool arguments violate the declared input schema")
 	}
+	if definition.TimeoutPolicy.TimeoutMilliseconds < 1 || definition.RetryPolicy.MaximumAttempts < 1 {
+		return deny("DISPATCH_ENVELOPE_INVALID", "the signed tool timeout and retry policy do not bound a dispatch")
+	}
 	decision.Allowed = true
 	decision.Code = "ALLOWED"
+	decision.Dispatch = DispatchEnvelope{
+		Capability:          definition.Capability,
+		SideEffectClass:     definition.SideEffectClass,
+		RiskClass:           definition.RiskClass,
+		TimeoutMilliseconds: definition.TimeoutPolicy.TimeoutMilliseconds,
+		MaximumAttempts:     definition.RetryPolicy.MaximumAttempts,
+		BackoffMilliseconds: definition.RetryPolicy.BackoffMilliseconds,
+		Retryability:        append([]string(nil), definition.RetryPolicy.Retryability...),
+	}
 	if err := g.recorder.Record(ctx, intent, proposal, decision); err != nil {
 		return decision, err
 	}

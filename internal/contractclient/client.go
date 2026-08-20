@@ -83,11 +83,11 @@ func (o *Orchestrator) Validate(ctx context.Context, request Request) (Evidence,
 			continue
 		}
 		if !validResult(result) {
-			return Evidence{}, fmt.Errorf("Contract Runtime returned invalid bounded evidence")
+			return Evidence{}, fmt.Errorf("evidence returned by the Contract Runtime is not bounded")
 		}
 		validatedAt := o.clock.Now()
 		if validatedAt.IsZero() {
-			return Evidence{}, fmt.Errorf("Contract Runtime evidence time is unavailable")
+			return Evidence{}, fmt.Errorf("evidence time from the Contract Runtime is unavailable")
 		}
 		evidence := Evidence{request.WorkspaceID, request.ProjectID, request.RunID, request.Kind, request.BOMDigest, request.SchemaDigest, result.ValidatorVersion, request.CatalogDigest, result.Valid, append([]problem.FieldError(nil), result.Findings...), validatedAt}
 		if err := o.recorder.Record(ctx, evidence); err != nil {

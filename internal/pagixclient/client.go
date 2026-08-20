@@ -19,7 +19,7 @@ type Metadata struct{ WorkloadIdentity, Traceparent, WorkspaceID, ProjectID, Act
 
 func (m Metadata) Validate() error {
 	if !bounded(m.WorkloadIdentity, 512) || !traceparent(m.Traceparent) || !bounded(m.WorkspaceID, 128) || !bounded(m.ProjectID, 128) || !bounded(m.ActorID, 128) || !bounded(m.Operation, 64) || !bounded(m.IdempotencyKey, 256) || !digest(m.RequestDigest) {
-		return fmt.Errorf("Pagix write metadata is incomplete")
+		return fmt.Errorf("write metadata for Pagix is incomplete")
 	}
 	return nil
 }
@@ -98,7 +98,7 @@ type Client struct {
 
 func New(port Port, inbox Inbox) (*Client, error) {
 	if port == nil || inbox == nil {
-		return nil, fmt.Errorf("Pagix port and inbox are required")
+		return nil, fmt.Errorf("port and inbox for Pagix are required")
 	}
 	return &Client{port: port, inbox: inbox}, nil
 }

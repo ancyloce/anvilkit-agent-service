@@ -1,0 +1,137 @@
+{
+  "deployAndRollback": "Deploy and rollback",
+  "subjects": [
+    {
+      "index": 1,
+      "title": "Database point-in-time restore and mandatory order",
+      "exercise": "TestMandatoryThirteenStepOrderAndProbes",
+      "reviewers": [
+        "Platform SRE"
+      ]
+    },
+    {
+      "index": 2,
+      "title": "Logical-RPO-0 acknowledgement reconstruction",
+      "exercise": "TestRestoreRebuildsLostAcknowledgements",
+      "reviewers": [
+        "Platform SRE",
+        "Security"
+      ]
+    },
+    {
+      "index": 3,
+      "title": "Recovery-epoch rotation and register disaster procedure",
+      "exercise": "TestConditionalIncrementIsSerializedAndFailsClosed",
+      "reviewers": [
+        "Platform SRE",
+        "Security"
+      ]
+    },
+    {
+      "index": 4,
+      "title": "Queue and DLQ replay",
+      "exercise": "TestQueueFailureInjectionAndDeadLetterReplay",
+      "reviewers": [
+        "Platform SRE"
+      ]
+    },
+    {
+      "index": 5,
+      "title": "Transactional outbox rebuild and inbox deduplication",
+      "exercise": "TestOutboxRebuildAndInboxDeduplication",
+      "reviewers": [
+        "Platform SRE"
+      ]
+    },
+    {
+      "index": 6,
+      "title": "Apply authorization and authoritative-effect reconciliation",
+      "exercise": "TestDomainCommitUncertaintyReconciliation",
+      "reviewers": [
+        "Platform SRE",
+        "Security"
+      ]
+    },
+    {
+      "index": 7,
+      "title": "All-attempt usage and budget-reservation reconciliation",
+      "exercise": "TestAllAttemptUsageAndBudgetReconciliation",
+      "reviewers": [
+        "Platform SRE"
+      ]
+    },
+    {
+      "index": 8,
+      "title": "Artifact reconciliation and signed-grant revocation",
+      "exercise": "TestArtifactLifecycleAccessQuarantineAndRevocation",
+      "reviewers": [
+        "Platform SRE",
+        "Security"
+      ]
+    },
+    {
+      "index": 9,
+      "title": "Workspace deletion and current-authority reconciliation",
+      "exercise": "TestAuthorityFreshnessMatrix",
+      "reviewers": [
+        "Platform SRE",
+        "Security"
+      ]
+    },
+    {
+      "index": 10,
+      "title": "Provider disablement and propagation verification",
+      "exercise": "TestModelRegistryEligibilityAndDisablement",
+      "reviewers": [
+        "Platform SRE"
+      ]
+    },
+    {
+      "index": 11,
+      "title": "Signing-key and trust revocation and rollover",
+      "exercise": "TestSigningOverlapAndEmergencyRevocation",
+      "reviewers": [
+        "Platform SRE",
+        "Security"
+      ]
+    },
+    {
+      "index": 12,
+      "title": "Protected-audit outage or tamper response",
+      "exercise": "TestProtectedSinkOutageAndTamperDetection",
+      "reviewers": [
+        "Platform SRE",
+        "Security"
+      ]
+    },
+    {
+      "index": 13,
+      "title": "Authoritative-time skew or rollback response",
+      "exercise": "TestSkewBoundaryRollbackAndOutage",
+      "reviewers": [
+        "Platform SRE",
+        "Security"
+      ]
+    },
+    {
+      "index": 14,
+      "title": "Overload shedding and stuck-run diagnosis",
+      "exercise": "TestNoisyNeighbourAndQueueCapShedding",
+      "reviewers": [
+        "Platform SRE"
+      ]
+    }
+  ],
+  "review": [
+    {
+      "reviewer": "Platform SRE",
+      "scope": "All subjects, production products and topology, drills and paging",
+      "pendingGates": "Pending Gates F/G/H"
+    },
+    {
+      "reviewer": "Security",
+      "scope": "Epoch and register, authority and deletion, key, audit, time, adversarial response",
+      "pendingGates": "Pending Gates F/G"
+    }
+  ]
+}

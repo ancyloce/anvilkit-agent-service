@@ -42,69 +42,93 @@ type canonicalLock struct {
 	Sources     map[string]string `json:"sources"`
 }
 
+// Identity is the verified pinned contract identity: the canonical profile
+// and lock this service intake is bound to, and the digest of every canonical
+// schema the lock governs, keyed by canonical component name. Anything the
+// service authenticates against the approved boundary is checked against this
+// value rather than against its own copy of a digest.
+type Identity struct {
+	ProfileDigest string
+	LockDigest    string
+	SchemaDigests map[string]string
+}
+
 // VerifyPinnedMaterial verifies the local pin, the pinned canonical profile
-// and lock copies, and every canonical schema byte binding. It is
-// self-contained: only material inside the service checkout is read, so the
-// same verification runs at production startup and readiness boundaries.
+// and lock copies, and every canonical schema byte binding.
 func VerifyPinnedMaterial(repositoryRoot string) error {
+	_, err := PinnedIdentity(repositoryRoot)
+	return err
+}
+
+// PinnedIdentity performs the same verification as VerifyPinnedMaterial and
+// returns the verified identity. It is self-contained: only material inside
+// the service checkout is read, so the same verification runs at production
+// startup and readiness boundaries.
+func PinnedIdentity(repositoryRoot string) (Identity, error) {
 	contractRoot, err := os.OpenRoot(filepath.Join(repositoryRoot, "contracts"))
 	if err != nil {
-		return fmt.Errorf("open pinned contract root: %w", err)
+		return Identity{}, fmt.Errorf("open pinned contract root: %w", err)
 	}
-	defer contractRoot.Close()
+	// The root bounds reads only; a close failure cannot invalidate material
+	// that was already read and digest-verified.
+	defer func() { _ = contractRoot.Close() }()
 
 	pinBytes, err := readRegularMaterial(contractRoot, "pin.json")
 	if err != nil {
-		return err
+		return Identity{}, err
 	}
 	var pin materialPin
 	if err := decodeStrict(pinBytes, &pin); err != nil {
-		return fmt.Errorf("decode contract pin: %w", err)
+		return Identity{}, fmt.Errorf("decode contract pin: %w", err)
 	}
 	if pin.PinVersion != 1 || pin.State != "canonical" || pin.Source == "" {
-		return errors.New("contract pin metadata is incomplete or not canonical")
+		return Identity{}, errors.New("contract pin metadata is incomplete or not canonical")
 	}
 	if pin.Profile.Path != "agent/profile/p0-kernel-profile.json" || pin.Lock.Path != "agent/lock/contracts.lock.json" {
-		return errors.New("contract pin does not reference the canonical profile and lock")
+		return Identity{}, errors.New("contract pin does not reference the canonical profile and lock")
 	}
 	if !validDigest(pin.Profile.SHA256) || !validDigest(pin.Lock.SHA256) {
-		return errors.New("contract pin digests are invalid")
+		return Identity{}, errors.New("contract pin digests are invalid")
 	}
 
 	profileBytes, err := readRegularMaterial(contractRoot, pin.Profile.Path)
 	if err != nil {
-		return err
+		return Identity{}, err
 	}
 	if !equalDigest(digestOf(profileBytes), pin.Profile.SHA256) {
-		return errors.New("pinned profile bytes do not match the pin digest")
+		return Identity{}, errors.New("pinned profile bytes do not match the pin digest")
 	}
 	lockBytes, err := readRegularMaterial(contractRoot, pin.Lock.Path)
 	if err != nil {
-		return err
+		return Identity{}, err
 	}
 	if !equalDigest(digestOf(lockBytes), pin.Lock.SHA256) {
-		return errors.New("pinned lock bytes do not match the pin digest")
+		return Identity{}, errors.New("pinned lock bytes do not match the pin digest")
 	}
 	if _, err := validator.Admit(lockBytes); err != nil {
-		return fmt.Errorf("admit canonical lock: %w", err)
+		return Identity{}, fmt.Errorf("admit canonical lock: %w", err)
 	}
 	var lock canonicalLock
 	if err := json.Unmarshal(lockBytes, &lock); err != nil {
-		return fmt.Errorf("decode canonical lock: %w", err)
+		return Identity{}, fmt.Errorf("decode canonical lock: %w", err)
 	}
 	if lock.LockVersion != 1 || len(lock.Sources) == 0 {
-		return errors.New("canonical lock is incomplete")
+		return Identity{}, errors.New("canonical lock is incomplete")
 	}
 	if !equalDigest(lock.Profile.SHA256, pin.Profile.SHA256) {
-		return errors.New("canonical lock does not bind the pinned profile")
+		return Identity{}, errors.New("canonical lock does not bind the pinned profile")
 	}
-	return verifySchemaBindings(contractRoot, lock.Sources)
+	schemaDigests, err := verifySchemaBindings(contractRoot, lock.Sources)
+	if err != nil {
+		return Identity{}, err
+	}
+	return Identity{ProfileDigest: pin.Profile.SHA256, LockDigest: pin.Lock.SHA256, SchemaDigests: schemaDigests}, nil
 }
 
 // verifySchemaBindings requires every canonical schema recorded in the lock to
 // be present in the intake with exactly the locked bytes, and rejects any
 // intake schema absent from the lock.
-func verifySchemaBindings(contractRoot *os.Root, sources map[string]string) error {
+func verifySchemaBindings(contractRoot *os.Root, sources map[string]string) (map[string]string, error) {
 	const lockPrefix = "contracts/agent/schemas/"
 	expected := make(map[string]string)
 	for path, digest := range sources {
@@ -112,18 +136,19 @@ func verifySchemaBindings(contractRoot *os.Root, sources map[string]string) erro
 			continue
 		}
 		if !validDigest(digest) {
-			return fmt.Errorf("canonical lock digest for %s is invalid", path)
+			return nil, fmt.Errorf("canonical lock digest for %s is invalid", path)
 		}
 		expected[strings.TrimPrefix(path, "contracts/")] = digest
 	}
 	if len(expected) == 0 {
-		return errors.New("canonical lock contains no schema sources")
+		return nil, errors.New("canonical lock contains no schema sources")
 	}
 	seen := 0
+	components := make(map[string]string, len(expected))
 	for _, directory := range []string{"agent/schemas", "agent/schemas/meta"} {
 		entries, err := fs.ReadDir(contractRoot.FS(), directory)
 		if err != nil {
-			return fmt.Errorf("read pinned schema directory %s: %w", directory, err)
+			return nil, fmt.Errorf("read pinned schema directory %s: %w", directory, err)
 		}
 		for _, entry := range entries {
 			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".schema.json") {
@@ -132,22 +157,32 @@ func verifySchemaBindings(contractRoot *os.Root, sources map[string]string) erro
 			name := directory + "/" + entry.Name()
 			digest, ok := expected[name]
 			if !ok {
-				return fmt.Errorf("pinned schema %s is absent from the canonical lock", name)
+				return nil, fmt.Errorf("pinned schema %s is absent from the canonical lock", name)
 			}
 			raw, err := readRegularMaterial(contractRoot, name)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if !equalDigest(digestOf(raw), digest) {
-				return fmt.Errorf("pinned schema %s does not match the canonical lock", name)
+				return nil, fmt.Errorf("pinned schema %s does not match the canonical lock", name)
+			}
+			if directory == "agent/schemas" {
+				components[SchemaComponentName(strings.TrimSuffix(entry.Name(), ".schema.json"))] = digest
 			}
 			seen++
 		}
 	}
 	if seen != len(expected) {
-		return errors.New("canonical schema set is incomplete on disk")
+		return nil, errors.New("canonical schema set is incomplete on disk")
 	}
-	return nil
+	return components, nil
+}
+
+// SchemaComponentName is the canonical component identity of one governed
+// schema file. Definitions reference schemas by this name, so authentication
+// against the lock uses the same vocabulary the definitions do.
+func SchemaComponentName(fileStem string) string {
+	return "anvilkit.contract.schema." + fileStem
 }
 
 func digestOf(raw []byte) string {
@@ -167,7 +202,7 @@ func readRegularMaterial(root *os.Root, name string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open pinned material %s: %w", name, err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(file, maximumMaterialBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read pinned material %s: %w", name, err)

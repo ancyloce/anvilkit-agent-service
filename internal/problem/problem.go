@@ -200,7 +200,7 @@ func (f FieldError) MarshalJSON() ([]byte, error) {
 		SchemaPath   string `json:"schemaPath"`
 		Message      string `json:"message"`
 	}
-	return json.Marshal(wire{Code: f.Code, InstancePath: f.InstancePath, SchemaPath: f.SchemaPath, Message: f.Message})
+	return json.Marshal(wire(f))
 }
 
 // MarshalJSON prevents transport-only status and internal diagnostic fields

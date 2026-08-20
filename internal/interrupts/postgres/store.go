@@ -219,9 +219,11 @@ func (s *Store) DecideApproval(ctx context.Context, write interrupts.Write, comm
 	return result, nil
 }
 
-// errExpirySuperseded rolls the expiry transaction back when another
-// authority already moved the run; the caller reports it as superseded.
-var errExpirySuperseded = errors.New("interrupt expiry superseded")
+// supersededExpiry rolls the expiry transaction back when another authority
+// already moved the run; the caller reports it as superseded.
+type supersededExpiry struct{}
+
+func (supersededExpiry) Error() string { return "interrupt expiry superseded" }
 
 type expiryEnvelope struct {
 	Raced      bool          `json:"raced"`
@@ -271,18 +273,30 @@ func (s *Store) expire(ctx context.Context, write interrupts.Write, operation, l
 		}
 		snapshot, err := s.transition(ctx, tx, write, runs.Command{Kind: runs.RecordFailure, Failure: &failure, Traceparent: write.Traceparent}, now)
 		if err != nil {
-			return nil, errExpirySuperseded
+			// Only an explicit expiry-versus-response concurrency conflict may
+			// be reported as a superseded expiry. Everything else — a missing
+			// run, a database, transaction, or serialization failure, a
+			// rejected checkpoint, a rejected event, a failed outbox write —
+			// is propagated so the durable caller retries. Reporting those as
+			// superseded would durably record an interrupt as settled that
+			// this transaction never settled.
+			if expirySuperseded(err) {
+				return nil, supersededExpiry{}
+			}
+			return nil, err
 		}
 		tag, err := tx.Exec(ctx, markQuery, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, id, now)
 		if err != nil {
 			return nil, err
 		}
 		if tag.RowsAffected() != 1 {
-			return nil, errExpirySuperseded
+			// The response or decision landed between the lock and the mark;
+			// that is the concurrency conflict this branch exists for.
+			return nil, supersededExpiry{}
 		}
 		return expiryEnvelope{Snapshot: snapshot, Version: snapshot.Version}, nil
 	}, &value)
-	if errors.Is(err, errExpirySuperseded) {
+	if errors.Is(err, supersededExpiry{}) {
 		return interrupts.Expiry{Superseded: true}, nil
 	}
 	if err != nil {
@@ -290,6 +304,25 @@ func (s *Store) expire(ctx context.Context, write interrupts.Write, operation, l
 	}
 	value.Snapshot.Version = value.Version
 	return interrupts.Expiry{Raced: value.Raced, Superseded: value.Superseded, Snapshot: value.Snapshot}, nil
+}
+
+// expirySuperseded reports whether a failed expiry state transition is an
+// explicit concurrency conflict between the elapsed deadline and an accepted
+// response: the run version moved under the expiry, or the run has already
+// left the state an expiry may fail from. Those two outcomes mean another
+// authority settled the interrupt first. No other failure does, and treating
+// one as superseded would lose a durable retry.
+func expirySuperseded(err error) bool {
+	var details problem.Details
+	if !errors.As(err, &details) {
+		return false
+	}
+	switch details.Code {
+	case string(problem.CodeVersionConflict), string(problem.CodeInvalidTransition):
+		return true
+	default:
+		return false
+	}
 }
 
 func expiryDigest(write interrupts.Write, operation string, id interrupts.RequestID, failure problem.Details) (string, error) {

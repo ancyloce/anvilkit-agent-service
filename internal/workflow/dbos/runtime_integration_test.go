@@ -78,7 +78,7 @@ func TestDBOSPostgresRestartAndReplay(t *testing.T) {
 	if err := second.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer second.Stop(context.Background())
+	defer stopRuntime(t, second)
 	ops.Accept(json.RawMessage(`{"answer":"pg"}`))
 	if err := second.Signal(context.Background(), input.Key, workflow.InputTopic("request.probe"), json.RawMessage(`{}`), "pg-signal"); err != nil {
 		t.Fatal(err)
@@ -109,7 +109,7 @@ func TestDBOSPostgresMultiReplicaContentionStaysExactlyOnce(t *testing.T) {
 	if err := left.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer left.Stop(context.Background())
+	defer stopRuntime(t, left)
 	right, err := New(context.Background(), integrationConfig(t, suffix, "replica-right"), ops)
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestDBOSPostgresMultiReplicaContentionStaysExactlyOnce(t *testing.T) {
 	if err := right.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer right.Stop(context.Background())
+	defer stopRuntime(t, right)
 
 	input := workflow.RunInput{
 		Key:         workflow.RunKey{RunID: "run.replica-" + suffix, Generation: 1},
@@ -139,5 +139,15 @@ func TestDBOSPostgresMultiReplicaContentionStaysExactlyOnce(t *testing.T) {
 	}
 	if got := ops.CallCount("turn-0000"); got != 1 {
 		t.Fatalf("contending replicas executed turn %d times, want 1", got)
+	}
+}
+
+// stopRuntime shuts a durable runtime down and fails the test if the
+// shutdown itself reports an error. A drain that cannot complete is a
+// reliability defect, so it is never discarded.
+func stopRuntime(t *testing.T, runtime *Runtime) {
+	t.Helper()
+	if err := runtime.Stop(context.Background()); err != nil {
+		t.Errorf("stop runtime: %v", err)
 	}
 }

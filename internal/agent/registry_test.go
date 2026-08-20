@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
+	"github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 )
 
@@ -21,7 +22,16 @@ func registryConfig(t *testing.T, source Source) RegistryConfig {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return RegistryConfig{Source: source, Validator: adapter, DefinitionSchemaURI: DefinitionSchemaURI(schemaBytes)}
+	identity, err := contracts.PinnedIdentity("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return RegistryConfig{
+		Source:              source,
+		Validator:           adapter,
+		DefinitionSchemaURI: DefinitionSchemaURI(schemaBytes),
+		Approval:            Approval{ProfileDigest: identity.ProfileDigest, LockDigest: identity.LockDigest, SchemaDigests: identity.SchemaDigests},
+	}
 }
 
 func newTestRegistry(t *testing.T) *Registry {
@@ -33,25 +43,69 @@ func newTestRegistry(t *testing.T) *Registry {
 	return registry
 }
 
+// alteredSource serves the approved store with selected documents rewritten.
+// rebind optionally repairs the catalog so a mutated document still matches
+// its catalog digest, which is how a self-consistent forgery is modelled.
 type alteredSource struct {
-	inner  Source
-	mutate func([]byte) []byte
+	inner    Source
+	mutate   func(name string, raw []byte) []byte
+	rebind   bool
+	instruct func([]byte) []byte
 }
 
-func (s alteredSource) Definitions(ctx context.Context) ([][]byte, error) {
-	documents, err := s.inner.Definitions(ctx)
+func (s alteredSource) Catalog(ctx context.Context) ([]byte, error) {
+	raw, err := s.inner.Catalog(ctx)
+	if err != nil || !s.rebind {
+		return raw, err
+	}
+	catalog, err := ParseCatalog(raw)
 	if err != nil {
 		return nil, err
 	}
-	out := make([][]byte, 0, len(documents))
-	for _, document := range documents {
-		out = append(out, s.mutate(document))
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		return nil, err
 	}
-	return out, nil
+	entries := document["definitions"].([]any)
+	for index, entry := range entries {
+		value := entry.(map[string]any)
+		name := value["document"].(string)
+		original, err := s.inner.Document(ctx, name)
+		if err != nil {
+			return nil, err
+		}
+		value["documentDigest"] = DocumentDigest(s.mutate(name, original))
+		entries[index] = value
+	}
+	if s.instruct != nil {
+		for index, entry := range entries {
+			value := entry.(map[string]any)
+			name := value["instruction"].(string)
+			original, err := s.inner.Document(ctx, name)
+			if err != nil {
+				return nil, err
+			}
+			value["instructionDigest"] = DocumentDigest(s.instruct(original))
+			entries[index] = value
+		}
+	}
+	document["definitions"] = entries
+	_ = catalog
+	return json.Marshal(document)
 }
 
-func (s alteredSource) Instruction(ctx context.Context, id string) ([]byte, error) {
-	return s.inner.Instruction(ctx, id)
+func (s alteredSource) Document(ctx context.Context, name string) ([]byte, error) {
+	raw, err := s.inner.Document(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if s.instruct != nil && strings.HasSuffix(name, ".instruction.txt") {
+		return s.instruct(raw), nil
+	}
+	if s.mutate != nil {
+		return s.mutate(name, raw), nil
+	}
+	return raw, nil
 }
 
 func TestRegistryResolvesManagerAndSpecialistByExactIdentity(t *testing.T) {
@@ -111,36 +165,80 @@ func TestRegistryFailsClosedOnUnknownIdentityAndDigestMismatch(t *testing.T) {
 }
 
 func TestRegistryRejectsTamperedDefinitionContent(t *testing.T) {
-	tampered := alteredSource{inner: EmbeddedCatalog{}, mutate: func(raw []byte) []byte {
+	mutate := func(name string, raw []byte) []byte {
+		if !strings.HasSuffix(name, ".json") {
+			return raw
+		}
 		return []byte(strings.Replace(string(raw), `"turnLimit": 16`, `"turnLimit": 17`, 1))
-	}}
-	if _, err := NewRegistry(context.Background(), registryConfig(t, tampered)); err == nil {
-		t.Fatal("tampered identity content must fail registry construction")
+	}
+	// Tampering alone is caught by the approved catalog binding.
+	if _, err := NewRegistry(context.Background(), registryConfig(t, alteredSource{inner: EmbeddedCatalog{}, mutate: mutate})); err == nil {
+		t.Fatal("tampered definition content must fail registry construction")
+	}
+	// Tampering that also rewrites the catalog digest is still caught,
+	// because the frozen identity digest no longer matches the content.
+	if _, err := NewRegistry(context.Background(), registryConfig(t, alteredSource{inner: EmbeddedCatalog{}, mutate: mutate, rebind: true})); err == nil {
+		t.Fatal("self-consistent forged definition content must fail registry construction")
 	}
 }
 
 func TestRegistryRejectsInstructionDigestMismatch(t *testing.T) {
-	tampered := instructionTamperSource{EmbeddedCatalog{}}
-	if _, err := NewRegistry(context.Background(), registryConfig(t, tampered)); err == nil {
+	instruct := func(raw []byte) []byte { return append(append([]byte(nil), raw...), byte(' ')) }
+	if _, err := NewRegistry(context.Background(), registryConfig(t, alteredSource{inner: EmbeddedCatalog{}, instruct: instruct})); err == nil {
 		t.Fatal("tampered instruction bytes must fail registry construction")
 	}
-}
-
-type instructionTamperSource struct{ inner Source }
-
-func (s instructionTamperSource) Definitions(ctx context.Context) ([][]byte, error) {
-	return s.inner.Definitions(ctx)
-}
-func (s instructionTamperSource) Instruction(ctx context.Context, id string) ([]byte, error) {
-	raw, err := s.inner.Instruction(ctx, id)
-	if err != nil {
-		return nil, err
+	// Rebinding the catalog to the tampered instruction still fails: the
+	// definition's own pinned prompt digest no longer matches.
+	identity := func(name string, raw []byte) []byte { return raw }
+	if _, err := NewRegistry(context.Background(), registryConfig(t, alteredSource{inner: EmbeddedCatalog{}, mutate: identity, instruct: instruct, rebind: true})); err == nil {
+		t.Fatal("self-consistent forged instruction bytes must fail registry construction")
 	}
-	return append(raw, byte(' ')), nil
+}
+
+func TestRegistryRejectsACatalogBoundToADifferentApprovedBoundary(t *testing.T) {
+	cfg := registryConfig(t, EmbeddedCatalog{})
+	cfg.Approval.LockDigest = "sha256:" + strings.Repeat("0", 64)
+	if _, err := NewRegistry(context.Background(), cfg); err == nil {
+		t.Fatal("a catalog bound to a different canonical lock must fail registry construction")
+	}
+	cfg = registryConfig(t, EmbeddedCatalog{})
+	cfg.Approval.ProfileDigest = "sha256:" + strings.Repeat("0", 64)
+	if _, err := NewRegistry(context.Background(), cfg); err == nil {
+		t.Fatal("a catalog bound to a different canonical profile must fail registry construction")
+	}
+	cfg = registryConfig(t, EmbeddedCatalog{})
+	cfg.Approval.SchemaDigests = nil
+	if _, err := NewRegistry(context.Background(), cfg); err == nil {
+		t.Fatal("an unavailable approved contract identity must fail registry construction")
+	}
+}
+
+func TestRegistryRejectsReferencedMaterialThatIsNotApproved(t *testing.T) {
+	forged := "sha256:" + strings.Repeat("1", 64)
+	for _, replaced := range []string{
+		"sha256:c7a007e60d62331f77dbaa17cbc1c1945ce4fe061130c082adc658770eadd879",
+		"sha256:819819ef4b7a473288ce0e0116410b5fb0491a754b38ea4cc424bf3266a6f57c",
+		"sha256:80ca0c4751b2df4cbe5b68642ea75b183c212b8fa002823df174c5ddb7e32a80",
+		"sha256:e653a85c2922d75464275bc15840a97dafd6f1de3d6faefec9c9ba65e933e710",
+		"sha256:ae244db518fe7b181990406994ff42623cfebe97756e4b073fc9ea3df83b8fb0",
+	} {
+		mutate := func(name string, raw []byte) []byte {
+			if !strings.HasPrefix(name, "definition.") || !strings.HasSuffix(name, ".json") {
+				return raw
+			}
+			return []byte(strings.Replace(string(raw), replaced, forged, 1))
+		}
+		if _, err := NewRegistry(context.Background(), registryConfig(t, alteredSource{inner: EmbeddedCatalog{}, mutate: mutate, rebind: true})); err == nil {
+			t.Fatalf("a definition pinning unapproved material (%s) must fail registry construction", replaced)
+		}
+	}
 }
 
 func TestRegistryRequiresSchemaValidDefinitions(t *testing.T) {
-	tampered := alteredSource{inner: EmbeddedCatalog{}, mutate: func(raw []byte) []byte {
+	tampered := alteredSource{inner: EmbeddedCatalog{}, rebind: true, mutate: func(name string, raw []byte) []byte {
+		if !strings.HasPrefix(name, "definition.") || !strings.HasSuffix(name, ".json") {
+			return raw
+		}
 		var document map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &document); err != nil {
 			return raw
@@ -202,11 +300,9 @@ func TestTurnDecisionValidateEnforcesExactlyOnePayload(t *testing.T) {
 }
 
 func TestDefinitionIdentityDigestIsDeterministic(t *testing.T) {
-	documents, err := EmbeddedCatalog{}.Definitions(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, raw := range documents {
+	registry := newTestRegistry(t)
+	for _, approved := range registry.Definitions() {
+		raw := approved.Raw
 		definition, err := ParseDefinition(raw)
 		if err != nil {
 			t.Fatal(err)

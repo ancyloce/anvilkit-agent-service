@@ -96,9 +96,7 @@ func (r onePageReader) Replay(context.Context, ReplayRequest) (ReplayPage, error
 	if r.event.ID == "" {
 		return ReplayPage{}, nil
 	}
-	event := r.event
-	r.event = Event{}
-	return ReplayPage{Events: []Event{event}, CurrentCursor: event.ID, CurrentSequence: event.Sequence}, nil
+	return ReplayPage{Events: []Event{r.event}, CurrentCursor: r.event.ID, CurrentSequence: r.event.Sequence}, nil
 }
 func (onePageReader) Snapshot(context.Context, Scope, string) (SnapshotProjection, error) {
 	return SnapshotProjection{}, nil

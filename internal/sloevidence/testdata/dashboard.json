@@ -1,0 +1,17 @@
+{
+  "title": "Agent Service binding SLOs (observability review draft)",
+  "approval": "pending-gate-h",
+  "panels": [
+    {"id":"availability","objective":">=99.9% rolling 28d","query":"sum(rate(agent_requests_total{eligible=\"true\",outcome=\"success\"}[28d])) / sum(rate(agent_requests_total{eligible=\"true\"}[28d]))","denominator":"eligible Create/Get/Cancel requests","exclusions":"invalid/auth-rejected before eligibility","paging":"page below 99.9%"},
+    {"id":"create-latency","objective":"P95 <300ms","query":"histogram_quantile(0.95,sum by(le)(rate(agent_create_duration_seconds_bucket{outcome=\"accepted\"}[15m])))","denominator":"accepted durable create outcomes","exclusions":"model execution","paging":"page at >=0.300s"},
+    {"id":"event-visibility","objective":"P95 <2s","query":"histogram_quantile(0.95,sum by(le)(rate(agent_event_visibility_seconds_bucket{authorized=\"true\"}[15m])))","denominator":"durable events visible to authorized clients","exclusions":"unauthorized subscribers","paging":"page at >=2s"},
+    {"id":"durable-recovery","objective":">=99.9% within 30m","query":"sum(increase(agent_recovery_total{eligible=\"true\",within_rto=\"true\"}[28d])) / sum(increase(agent_recovery_total{eligible=\"true\"}[28d]))","denominator":"eligible interrupted workflows","exclusions":"terminal workflows","paging":"page below 99.9% or any restore >30m"},
+    {"id":"raw-plan-validity","objective":">=99.5%","query":"sum(increase(agent_plan_total{stage=\"raw\",valid=\"true\"}[7d])) / sum(increase(agent_plan_total{stage=\"raw\"}[7d]))","denominator":"pinned baseline raw outputs","exclusions":"policy refusals and invalid client input","paging":"block release below 99.5%"},
+    {"id":"trace-continuity","objective":">=99%","query":"sum(increase(agent_boundary_total{trace_linked=\"true\"}[24h])) / sum(increase(agent_boundary_total[24h]))","denominator":"all governed cross-service boundaries","exclusions":"none","paging":"page below 99%"},
+    {"id":"diagnosable-errors-dlq","objective":"100%","query":"sum(increase(agent_failures_total{diagnosable=\"true\"}[24h])) / sum(increase(agent_failures_total[24h]))","denominator":"all errors and DLQ records","exclusions":"none","paging":"absolute alert below 100%"},
+    {"id":"stuck-run-detection","objective":"100% within 5m","query":"sum(increase(agent_stuck_total{alert_within_5m=\"true\"}[24h])) / sum(increase(agent_stuck_total[24h]))","denominator":"all runs past dwell deadline","exclusions":"none","paging":"absolute alert below 100%"},
+    {"id":"accepted-output-validity","objective":"100%","query":"sum(increase(agent_boundary_output_total{accepted=\"true\",valid=\"true\"}[24h])) / sum(increase(agent_boundary_output_total{accepted=\"true\"}[24h]))","denominator":"all accepted trust-boundary outputs","exclusions":"none","paging":"absolute alert below 100%"},
+    {"id":"fake-tool-selection","objective":">=95% pinned corpus","query":"sum(agent_evaluation_total{dataset=\"baseline\",tool_correct=\"true\"}) / sum(agent_evaluation_total{dataset=\"baseline\"})","denominator":"versioned pinned baseline cases","exclusions":"none","paging":"block release below 95%"},
+    {"id":"workspace-fairness","objective":"no eligible workspace starvation","query":"max by(workspace_id)(agent_workspace_share_ratio) unless min by(workspace_id)(agent_workspace_eligible_waiting)==0","denominator":"eligible queued workspaces during overload","exclusions":"ineligible or policy-denied work","paging":"page on any starvation"}
+  ]
+}

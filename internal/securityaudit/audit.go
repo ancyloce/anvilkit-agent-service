@@ -239,11 +239,18 @@ func digest(value string) bool {
 		return false
 	}
 	for _, character := range value[7:] {
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+		if !lowerHexDigit(character) {
 			return false
 		}
 	}
 	return true
+}
+
+// lowerHexDigit reports whether the character is a lower-case hexadecimal
+// digit. Digest and trace formats are lower-case only, so an upper-case
+// digit is rejected rather than normalized.
+func lowerHexDigit(character rune) bool {
+	return character >= '0' && character <= '9' || character >= 'a' && character <= 'f'
 }
 func trace(value string) bool {
 	if len(value) != 55 || value[:3] != "00-" || value[35] != '-' || value[52] != '-' || value[3:35] == "00000000000000000000000000000000" || value[36:52] == "0000000000000000" {
@@ -253,7 +260,7 @@ func trace(value string) bool {
 		if index == 2 || index == 35 || index == 52 {
 			continue
 		}
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+		if !lowerHexDigit(character) {
 			return false
 		}
 	}

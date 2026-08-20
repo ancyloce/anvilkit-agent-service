@@ -36,7 +36,7 @@ func (s *HTTPTimeSource) Now(ctx context.Context) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, fmt.Errorf("query authoritative time: %w", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return time.Time{}, fmt.Errorf("query authoritative time: unexpected status %d", response.StatusCode)
 	}

@@ -248,7 +248,7 @@ func validDigest(value string) bool {
 		return false
 	}
 	for _, character := range value[7:] {
-		if !(character >= '0' && character <= '9' || character >= 'a' && character <= 'f') {
+		if !lowerHexDigit(character) {
 			return false
 		}
 	}
@@ -266,4 +266,11 @@ func strictDecode(raw []byte, target any) error {
 		return fmt.Errorf("document must contain exactly one JSON value")
 	}
 	return nil
+}
+
+// lowerHexDigit reports whether the character is a lower-case hexadecimal
+// digit. Digest and trace identities are lower-case only, so an upper-case
+// digit is rejected rather than normalized.
+func lowerHexDigit(character rune) bool {
+	return character >= '0' && character <= '9' || character >= 'a' && character <= 'f'
 }

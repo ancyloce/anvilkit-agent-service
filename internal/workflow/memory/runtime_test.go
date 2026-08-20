@@ -23,7 +23,7 @@ func TestMemoryEngineReplaysRecordedOutcome(t *testing.T) {
 	ops := workflowtest.NewProbeOps()
 	store := NewStore()
 	engine := New(store, ops)
-	defer engine.Stop(context.Background())
+	defer stopEngine(t, engine)
 	input := memoryInput("run.memory-replay", 1)
 
 	first, err := engine.ExecuteRun(context.Background(), input)
@@ -61,7 +61,7 @@ func TestMemoryEngineRestartHonorsRecordedAwaitDeadline(t *testing.T) {
 	// Restart mid-wait: the recorded deadline continues counting; the total
 	// wait must stay near the original timeout instead of restarting it.
 	engine = New(store, ops)
-	defer engine.Stop(context.Background())
+	defer stopEngine(t, engine)
 	outcome, err := engine.ExecuteRun(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestMemoryEngineDeduplicatesSignalsByIdempotencyKey(t *testing.T) {
 	ops.NeedInput = true
 	store := NewStore()
 	engine := New(store, ops)
-	defer engine.Stop(context.Background())
+	defer stopEngine(t, engine)
 	input := memoryInput("run.memory-dedup", 1)
 	if err := engine.StartRun(context.Background(), input); err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestMemoryEngineCancellationDuringWait(t *testing.T) {
 	ops.NeedInput = true
 	store := NewStore()
 	engine := New(store, ops)
-	defer engine.Stop(context.Background())
+	defer stopEngine(t, engine)
 	input := memoryInput("run.memory-cancel", 1)
 	if err := engine.StartRun(context.Background(), input); err != nil {
 		t.Fatal(err)
@@ -123,5 +123,15 @@ func TestMemoryEngineCancellationDuringWait(t *testing.T) {
 	outcome, err := engine.ExecuteRun(context.Background(), input)
 	if err != nil || outcome.Terminal != workflow.TerminalCancelled {
 		t.Fatalf("outcome = %+v err = %v", outcome, err)
+	}
+}
+
+// stopEngine shuts the durable engine down and fails the test if the
+// shutdown itself reports an error. A drain that cannot complete is a
+// reliability defect, so it is never discarded.
+func stopEngine(t *testing.T, engine *Runtime) {
+	t.Helper()
+	if err := engine.Stop(context.Background()); err != nil {
+		t.Errorf("stop engine: %v", err)
 	}
 }

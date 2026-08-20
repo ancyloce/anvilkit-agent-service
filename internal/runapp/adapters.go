@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
@@ -54,12 +53,3 @@ func randomHex(prefix string) (string, error) {
 type SystemClock struct{}
 
 func (SystemClock) Now() time.Time { return time.Now() }
-
-type StaticAuthority struct{ Value runs.Authority }
-
-func (a StaticAuthority) Current(context.Context, runs.Scope) (runs.Authority, error) {
-	if len(a.Value.ContractBOM) == 0 || len(a.Value.Policy) == 0 || len(a.Value.Budget) == 0 {
-		return runs.Authority{}, fmt.Errorf("authority material is unavailable")
-	}
-	return a.Value, nil
-}

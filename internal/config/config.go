@@ -64,6 +64,8 @@ type Config struct {
 	MigrationMode           string
 	MigrationDatabase       string
 	ContractRoot            string
+	DefinitionTrustRoot     string
+	DefinitionAttestation   string
 	AuthTrustSnapshot       string
 	AuthIssuers             []string
 	AuthAudience            string
@@ -121,44 +123,46 @@ type Config struct {
 // read process environment directly; cmd/boundarycheck enforces that rule.
 func Load() (Config, error) {
 	cfg := Config{
-		ServiceName:          env("ANVILKIT_SERVICE_NAME", "agent-service"),
-		ServiceVersion:       env("ANVILKIT_SERVICE_VERSION", "dev"),
-		Environment:          Environment(env("ANVILKIT_ENVIRONMENT", "development")),
-		HTTPAddress:          env("ANVILKIT_HTTP_ADDRESS", ":8080"),
-		MigrationMode:        env("ANVILKIT_MIGRATION_MODE", "validate"),
-		MigrationDatabase:    os.Getenv("ANVILKIT_MIGRATION_DATABASE_URL"),
-		ContractRoot:         env("ANVILKIT_CONTRACT_ROOT", "."),
-		AuthTrustSnapshot:    os.Getenv("ANVILKIT_AUTH_TRUST_SNAPSHOT"),
-		AuthIssuers:          csv(os.Getenv("ANVILKIT_AUTH_ISSUERS")),
-		AuthAudience:         env("ANVILKIT_AUTH_AUDIENCE", "urn:anvilkit:audience:agent-service"),
-		RunAuthorityFile:     os.Getenv("ANVILKIT_RUN_AUTHORITY_FILE"),
-		ControlDatabase:      os.Getenv("ANVILKIT_CONTROL_DATABASE_URL"),
-		WorkflowDatabase:     os.Getenv("ANVILKIT_WORKFLOW_DATABASE_URL"),
-		EventsDatabase:       os.Getenv("ANVILKIT_EVENTS_DATABASE_URL"),
-		ArtifactsDatabase:    os.Getenv("ANVILKIT_ARTIFACTS_DATABASE_URL"),
-		EvaluationDatabase:   os.Getenv("ANVILKIT_EVALUATION_DATABASE_URL"),
-		ExecutorID:           env("ANVILKIT_EXECUTOR_ID", "local-1"),
-		Pagix:                endpoint("ANVILKIT_PAGIX"),
-		ContractRuntime:      endpoint("ANVILKIT_CONTRACT_RUNTIME"),
-		ObjectStore:          endpoint("ANVILKIT_OBJECT_STORE"),
-		QueueName:            env("ANVILKIT_QUEUE_NAME", "agent-tasks"),
-		DLQName:              env("ANVILKIT_DLQ_NAME", "agent-tasks-dlq"),
-		WorkerImplementation: env("ANVILKIT_WORKER_IMPLEMENTATION", "external"),
-		ModelImplementation:  os.Getenv("ANVILKIT_MODEL_IMPLEMENTATION"),
-		ToolImplementation:   os.Getenv("ANVILKIT_TOOL_IMPLEMENTATION"),
-		DomainImplementation: os.Getenv("ANVILKIT_DOMAIN_IMPLEMENTATION"),
-		ProviderPriority:     csv(os.Getenv("ANVILKIT_PROVIDER_PRIORITY")),
-		PolicySnapshot:       os.Getenv("ANVILKIT_POLICY_SNAPSHOT"),
-		CapabilitySnapshot:   os.Getenv("ANVILKIT_CAPABILITY_SNAPSHOT"),
-		ArtifactPolicy:       env("ANVILKIT_ARTIFACT_POLICY", "baseline"),
-		EgressAllowlist:      csv(os.Getenv("ANVILKIT_EGRESS_ALLOWLIST")),
-		SigningKey:           secret("ANVILKIT_SIGNING_KEY_REF", "ANVILKIT_SIGNING_KEY"),
-		EncryptionKey:        secret("ANVILKIT_ENCRYPTION_KEY_REF", "ANVILKIT_ENCRYPTION_KEY"),
-		RecoveryRegister:     endpoint("ANVILKIT_RECOVERY_REGISTER"),
-		ReceiptJournal:       endpoint("ANVILKIT_RECEIPT_JOURNAL"),
-		AuthoritativeTime:    endpoint("ANVILKIT_AUTHORITATIVE_TIME"),
-		ProtectedAudit:       endpoint("ANVILKIT_PROTECTED_AUDIT"),
-		OTelEndpoint:         os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		ServiceName:           env("ANVILKIT_SERVICE_NAME", "agent-service"),
+		ServiceVersion:        env("ANVILKIT_SERVICE_VERSION", "dev"),
+		Environment:           Environment(env("ANVILKIT_ENVIRONMENT", "development")),
+		HTTPAddress:           env("ANVILKIT_HTTP_ADDRESS", ":8080"),
+		MigrationMode:         env("ANVILKIT_MIGRATION_MODE", "validate"),
+		MigrationDatabase:     os.Getenv("ANVILKIT_MIGRATION_DATABASE_URL"),
+		ContractRoot:          env("ANVILKIT_CONTRACT_ROOT", "."),
+		DefinitionTrustRoot:   env("ANVILKIT_DEFINITION_TRUST_ROOT", ""),
+		DefinitionAttestation: env("ANVILKIT_DEFINITION_ATTESTATION", ""),
+		AuthTrustSnapshot:     os.Getenv("ANVILKIT_AUTH_TRUST_SNAPSHOT"),
+		AuthIssuers:           csv(os.Getenv("ANVILKIT_AUTH_ISSUERS")),
+		AuthAudience:          env("ANVILKIT_AUTH_AUDIENCE", "urn:anvilkit:audience:agent-service"),
+		RunAuthorityFile:      os.Getenv("ANVILKIT_RUN_AUTHORITY_FILE"),
+		ControlDatabase:       os.Getenv("ANVILKIT_CONTROL_DATABASE_URL"),
+		WorkflowDatabase:      os.Getenv("ANVILKIT_WORKFLOW_DATABASE_URL"),
+		EventsDatabase:        os.Getenv("ANVILKIT_EVENTS_DATABASE_URL"),
+		ArtifactsDatabase:     os.Getenv("ANVILKIT_ARTIFACTS_DATABASE_URL"),
+		EvaluationDatabase:    os.Getenv("ANVILKIT_EVALUATION_DATABASE_URL"),
+		ExecutorID:            env("ANVILKIT_EXECUTOR_ID", "local-1"),
+		Pagix:                 endpoint("ANVILKIT_PAGIX"),
+		ContractRuntime:       endpoint("ANVILKIT_CONTRACT_RUNTIME"),
+		ObjectStore:           endpoint("ANVILKIT_OBJECT_STORE"),
+		QueueName:             env("ANVILKIT_QUEUE_NAME", "agent-tasks"),
+		DLQName:               env("ANVILKIT_DLQ_NAME", "agent-tasks-dlq"),
+		WorkerImplementation:  env("ANVILKIT_WORKER_IMPLEMENTATION", "external"),
+		ModelImplementation:   os.Getenv("ANVILKIT_MODEL_IMPLEMENTATION"),
+		ToolImplementation:    os.Getenv("ANVILKIT_TOOL_IMPLEMENTATION"),
+		DomainImplementation:  os.Getenv("ANVILKIT_DOMAIN_IMPLEMENTATION"),
+		ProviderPriority:      csv(os.Getenv("ANVILKIT_PROVIDER_PRIORITY")),
+		PolicySnapshot:        os.Getenv("ANVILKIT_POLICY_SNAPSHOT"),
+		CapabilitySnapshot:    os.Getenv("ANVILKIT_CAPABILITY_SNAPSHOT"),
+		ArtifactPolicy:        env("ANVILKIT_ARTIFACT_POLICY", "baseline"),
+		EgressAllowlist:       csv(os.Getenv("ANVILKIT_EGRESS_ALLOWLIST")),
+		SigningKey:            secret("ANVILKIT_SIGNING_KEY_REF", "ANVILKIT_SIGNING_KEY"),
+		EncryptionKey:         secret("ANVILKIT_ENCRYPTION_KEY_REF", "ANVILKIT_ENCRYPTION_KEY"),
+		RecoveryRegister:      endpoint("ANVILKIT_RECOVERY_REGISTER"),
+		ReceiptJournal:        endpoint("ANVILKIT_RECEIPT_JOURNAL"),
+		AuthoritativeTime:     endpoint("ANVILKIT_AUTHORITATIVE_TIME"),
+		ProtectedAudit:        endpoint("ANVILKIT_PROTECTED_AUDIT"),
+		OTelEndpoint:          os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 	}
 
 	var err error
@@ -277,7 +281,12 @@ func (c Config) Validate() error {
 				return problem.InvalidConfiguration("ANVILKIT_PROVIDER_PRIORITY", "fake and mock providers are forbidden in production")
 			}
 		}
-		for name, target := range map[string]string{"ANVILKIT_AUTH_TRUST_SNAPSHOT": c.AuthTrustSnapshot, "ANVILKIT_AUTH_ISSUERS": strings.Join(c.AuthIssuers, ","), "ANVILKIT_MIGRATION_DATABASE_URL": c.MigrationDatabase, "ANVILKIT_CONTROL_DATABASE_URL": c.ControlDatabase, "ANVILKIT_WORKFLOW_DATABASE_URL": c.WorkflowDatabase, "ANVILKIT_EVENTS_DATABASE_URL": c.EventsDatabase, "ANVILKIT_ARTIFACTS_DATABASE_URL": c.ArtifactsDatabase, "ANVILKIT_EVALUATION_DATABASE_URL": c.EvaluationDatabase, "ANVILKIT_RECEIPT_JOURNAL_URL": c.ReceiptJournal.URL, "ANVILKIT_RECOVERY_REGISTER_URL": c.RecoveryRegister.URL, "ANVILKIT_AUTHORITATIVE_TIME_URL": c.AuthoritativeTime.URL, "ANVILKIT_PROTECTED_AUDIT_URL": c.ProtectedAudit.URL, "ANVILKIT_POLICY_SNAPSHOT": c.PolicySnapshot, "ANVILKIT_CAPABILITY_SNAPSHOT": c.CapabilitySnapshot} {
+		for name, target := range map[string]string{"ANVILKIT_AUTH_TRUST_SNAPSHOT": c.AuthTrustSnapshot, "ANVILKIT_AUTH_ISSUERS": strings.Join(c.AuthIssuers, ","), "ANVILKIT_MIGRATION_DATABASE_URL": c.MigrationDatabase, "ANVILKIT_CONTROL_DATABASE_URL": c.ControlDatabase, "ANVILKIT_WORKFLOW_DATABASE_URL": c.WorkflowDatabase, "ANVILKIT_EVENTS_DATABASE_URL": c.EventsDatabase, "ANVILKIT_ARTIFACTS_DATABASE_URL": c.ArtifactsDatabase, "ANVILKIT_EVALUATION_DATABASE_URL": c.EvaluationDatabase, "ANVILKIT_RECEIPT_JOURNAL_URL": c.ReceiptJournal.URL, "ANVILKIT_RECOVERY_REGISTER_URL": c.RecoveryRegister.URL, "ANVILKIT_AUTHORITATIVE_TIME_URL": c.AuthoritativeTime.URL, "ANVILKIT_PROTECTED_AUDIT_URL": c.ProtectedAudit.URL, "ANVILKIT_POLICY_SNAPSHOT": c.PolicySnapshot, "ANVILKIT_CAPABILITY_SNAPSHOT": c.CapabilitySnapshot,
+			// The approved Agent definition catalog must be authenticated
+			// against an operator-distributed trust root in production. The
+			// repository ships no signing key, so production cannot fall back
+			// to trusting its own copy of the catalog.
+			"ANVILKIT_DEFINITION_TRUST_ROOT": c.DefinitionTrustRoot, "ANVILKIT_DEFINITION_ATTESTATION": c.DefinitionAttestation} {
 			if target == "" {
 				return problem.InvalidConfiguration(name, "is required in production")
 			}

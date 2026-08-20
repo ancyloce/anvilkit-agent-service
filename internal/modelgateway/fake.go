@@ -47,6 +47,11 @@ func (FakeAdapter) Invoke(ctx context.Context, request AdapterRequest) (AdapterR
 		return AdapterResponse{}, problemLimit()
 	}
 	inputTokens, outputTokens, costMicros := fakeMetering(request.Scenario)
+	// The attempt limits the gateway authorized are enforced before the call
+	// is considered performed, not merely checked against the response.
+	if inputTokens > request.MaximumInputTokens || outputTokens > request.MaximumOutputTokens || costMicros > request.MaximumCostMicros {
+		return AdapterResponse{}, problemLimit()
+	}
 	return AdapterResponse{Output: append([]byte(nil), output...), InputTokens: inputTokens, OutputTokens: outputTokens, CostMicros: costMicros}, nil
 }
 func problemLimit() error { return fmt.Errorf("fake provider output exceeds limit") }

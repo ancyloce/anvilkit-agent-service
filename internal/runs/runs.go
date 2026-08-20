@@ -71,6 +71,31 @@ type CommitProof struct {
 	ApprovalRechecked, ArtifactEligible, ActionBindingExact, AuthorizationDurable bool
 	AuthorizationID, DomainOperationID, ActionDigest, ArtifactDigest              string
 }
+
+// DomainReconciliation is the durable proof that the authoritative domain
+// owner was asked what became of an already-submitted governed effect, and
+// answered that it has no record of it. It is what makes a failure edge legal
+// out of awaiting_domain_confirmation: a run may stop there only once the
+// effect is known not to have landed, never on the workflow's own belief.
+type DomainReconciliation struct {
+	Reconciled        bool
+	EffectApplied     bool
+	DomainOperationID string
+}
+
+func (p DomainReconciliation) Validate() error {
+	if !p.Reconciled {
+		return fmt.Errorf("the authoritative domain owner was not consulted")
+	}
+	if p.EffectApplied {
+		return fmt.Errorf("a governed effect that was applied cannot be failed")
+	}
+	if p.DomainOperationID == "" || len(p.DomainOperationID) > 128 {
+		return fmt.Errorf("the reconciled domain operation identity is missing or unbounded")
+	}
+	return nil
+}
+
 type ValidationProof struct {
 	Valid                                                    bool
 	BOMDigest, SchemaDigest, ValidatorVersion, CatalogDigest string
@@ -91,12 +116,13 @@ func (p CommitProof) Validate() error {
 }
 
 type Command struct {
-	Kind          CommandKind
-	Commit        CommitProof
-	Validation    ValidationProof
-	RetryEligible bool
-	Failure       *problem.Details
-	Traceparent   string
+	Kind           CommandKind
+	Commit         CommitProof
+	Validation     ValidationProof
+	Reconciliation DomainReconciliation
+	RetryEligible  bool
+	Failure        *problem.Details
+	Traceparent    string
 }
 type Run struct {
 	ID                  ID
@@ -134,6 +160,17 @@ func (r Run) Apply(command Command) (Run, Transition, error) {
 	if command.Kind == SubmitForReview {
 		if err := command.Validation.Validate(); err != nil {
 			return r, Transition{}, problem.New(problem.CodeContractInvalid, "")
+		}
+	}
+	// Failing out of the commit boundary is only legal with proof. Before the
+	// submit boundary — in committing — no effect can have been caused, so the
+	// edge is unconditional. After it, the authoritative domain owner must
+	// have been asked and must have answered that no effect exists.
+	if command.Kind == RecordFailure && r.State == AwaitingDomainConfirmation {
+		if err := command.Reconciliation.Validate(); err != nil {
+			details := problem.New(problem.CodeCommitProofMissing, "")
+			details.Detail = err.Error()
+			return r, Transition{}, details
 		}
 	}
 	if command.Kind == Retry && !command.RetryEligible {
@@ -216,8 +253,19 @@ func allowedTarget(state State, command CommandKind) (State, bool) {
 		return Cancelled, state == Cancelling
 	case RecordFailure:
 		// awaiting_input and awaiting_approval fail on durable expiry
-		// (design 0005 §5: "expired" edges).
-		return Failed, state == Preparing || state == Planning || state == Executing || state == Validating || state == AwaitingInput || state == AwaitingApproval
+		// (design 0005 §5: "expired" edges). awaiting_review and conflict
+		// fail when the review or retry boundary itself stops the run —
+		// current authority revoked before a revision, for instance. Without
+		// those edges such a run could not record why it stopped and would be
+		// left in a waiting state with no workflow driving it.
+		// committing and awaiting_domain_confirmation fail here too. Without
+		// those edges a run whose authority was revoked between issuance and
+		// submission, or whose submitted effect the domain owner has no record
+		// of, had no legal transition at all and stayed in the commit boundary
+		// forever with no workflow able to move it. The
+		// awaiting_domain_confirmation edge is guarded above by the
+		// reconciliation proof.
+		return Failed, state == Preparing || state == Planning || state == Executing || state == Validating || state == AwaitingInput || state == AwaitingReview || state == AwaitingApproval || state == Conflict || state == Committing || state == AwaitingDomainConfirmation
 	case RecordRefusal:
 		return Refused, state == Preparing || state == Planning || state == Validating
 	case Retry:

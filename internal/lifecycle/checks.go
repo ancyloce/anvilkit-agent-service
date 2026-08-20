@@ -29,7 +29,7 @@ func (c HTTPCheck) Check(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode >= 500 {
 		return fmt.Errorf("endpoint returned %d", response.StatusCode)
 	}

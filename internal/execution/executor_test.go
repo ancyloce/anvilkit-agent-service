@@ -15,10 +15,13 @@ import (
 	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent/runner"
+	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler"
+	"github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/execution"
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
+	"github.com/ancyloce/anvilkit-agent-service/internal/modelgateway"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
 	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
@@ -45,16 +48,58 @@ type countingOps struct {
 	inner workflow.Operations
 	lock  sync.Mutex
 	calls map[string]int
+	// holds blocks a named step until the test releases it, so a crash can
+	// be injected at an exact durable boundary.
+	holds   map[string]chan struct{}
+	entered map[string]chan struct{}
+	// hooks run once on entry to a named step, so a test can change external
+	// state — revoking authority, for instance — at an exact durable
+	// boundary instead of racing it.
+	hooks map[string]func()
 }
 
 func newCountingOps(inner workflow.Operations) *countingOps {
-	return &countingOps{inner: inner, calls: make(map[string]int)}
+	return &countingOps{inner: inner, calls: make(map[string]int), holds: make(map[string]chan struct{}), entered: make(map[string]chan struct{}), hooks: make(map[string]func())}
+}
+
+// hold makes the named step block on entry. It returns the release channel
+// and a channel closed once the step has been entered.
+func (c *countingOps) hold(step string) (release chan struct{}, entered chan struct{}) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	release, entered = make(chan struct{}), make(chan struct{})
+	c.holds[step], c.entered[step] = release, entered
+	return release, entered
+}
+
+// before registers a one-shot hook that runs when the named step is entered.
+func (c *countingOps) before(step string, hook func()) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	c.hooks[step] = hook
 }
 
 func (c *countingOps) count(op workflow.OpID) {
 	c.lock.Lock()
-	defer c.lock.Unlock()
 	c.calls[op.Key()]++
+	release, held := c.holds[op.Step]
+	entered := c.entered[op.Step]
+	if held {
+		delete(c.holds, op.Step)
+		delete(c.entered, op.Step)
+	}
+	hook, hooked := c.hooks[op.Step]
+	if hooked {
+		delete(c.hooks, op.Step)
+	}
+	c.lock.Unlock()
+	if hooked {
+		hook()
+	}
+	if held {
+		close(entered)
+		<-release
+	}
 }
 
 func (c *countingOps) callsFor(suffix string) int {
@@ -84,6 +129,14 @@ func (c *countingOps) RecordDecision(ctx context.Context, op workflow.OpID, reco
 func (c *countingOps) ExecuteAction(ctx context.Context, op workflow.OpID, input workflow.ActionInput) (workflow.ActionResult, error) {
 	c.count(op)
 	return c.inner.ExecuteAction(ctx, op, input)
+}
+func (c *countingOps) OpenDelegation(ctx context.Context, op workflow.OpID, input workflow.DelegationInput) (workflow.DelegationOpened, error) {
+	c.count(op)
+	return c.inner.OpenDelegation(ctx, op, input)
+}
+func (c *countingOps) ExecuteDelegateTurn(ctx context.Context, op workflow.OpID, input workflow.DelegateTurnInput) (workflow.DelegateTurnResult, error) {
+	c.count(op)
+	return c.inner.ExecuteDelegateTurn(ctx, op, input)
 }
 func (c *countingOps) OpenInput(ctx context.Context, op workflow.OpID, input workflow.InterruptOpen) (workflow.InterruptOpened, error) {
 	c.count(op)
@@ -154,6 +207,9 @@ func (allowAllAuthority) AuthorizeReviewer(context.Context, runs.Scope, interrup
 func (allowAllAuthority) RetryEligibility(_ context.Context, _ runs.Scope, snapshot runs.Snapshot) (bool, string, error) {
 	return snapshot.Status == runs.Failed, "retry", nil
 }
+func (allowAllAuthority) AuthorizeResume(context.Context, runs.Scope, runs.Snapshot) error {
+	return nil
+}
 
 type allowReservation struct{}
 
@@ -193,12 +249,6 @@ type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now() }
 
-type staticRunAuthority struct{ value runs.Authority }
-
-func (a staticRunAuthority) Current(context.Context, runs.Scope) (runs.Authority, error) {
-	return a.value, nil
-}
-
 type harness struct {
 	t        *testing.T
 	repo     *interrupts.MemoryRepository
@@ -213,18 +263,46 @@ type harness struct {
 	journal  journal.Store
 	registry *agent.Registry
 	manager  agent.Definition
+	// authoritySource is the one current-authority source every boundary
+	// re-reads; tests revoke or replace it mid-run to prove guarded
+	// boundaries fail closed.
+	authoritySource *authority.Static
+	artifacts       *execution.ControlledArtifactPort
+	commitAuthority *execution.ControlledCommitAuthority
+	grants          authority.Grants
+	// material is the running tool material the executor checks each run's
+	// frozen tool profile against.
+	material execution.ToolMaterial
 }
 
+// toolMaterial returns the running tool material this harness built from the
+// approved catalog.
+func (h *harness) toolMaterial() execution.ToolMaterial { return h.material }
+
 type harnessOptions struct {
-	inputTTL      time.Duration
-	approvalTTL   time.Duration
-	maximumCalls  int64
-	allowedTools  []string
-	domainOutcome string
+	inputTTL            time.Duration
+	approvalTTL         time.Duration
+	maximumCalls        int64
+	allowedTools        []string
+	allowedCapabilities []string
+	domainOutcome       string
+	// toolMaterial overrides the running tool material so a definition can be
+	// executed against material it does not reference.
+	toolMaterial execution.ToolMaterial
+	// providerAttempts and retryableFailures shape the physical provider
+	// attempts one invocation makes, so retry accounting is observable.
+	providerAttempts  int
+	retryableFailures int
+	// ledger overrides the durable provider ledger so one store can be shared
+	// across adapter instances, which is what a process restart looks like
+	// from the store's side.
+	ledger execution.ScriptLedger
+	// modelRecorder overrides the durable invocation recorder.
+	modelRecorder modelgateway.Recorder
 }
 
 func defaultHarnessOptions() harnessOptions {
-	return harnessOptions{inputTTL: time.Minute, approvalTTL: time.Minute, maximumCalls: 100, allowedTools: []string{"anvilkit.tool.context-echo", "anvilkit.tool.contract-validate", "anvilkit.tool.artifact-scan"}, domainOutcome: execution.DomainConfirmed}
+	return harnessOptions{inputTTL: time.Minute, approvalTTL: time.Minute, maximumCalls: 100, allowedTools: []string{"anvilkit.tool.context-echo", "anvilkit.tool.contract-validate", "anvilkit.tool.artifact-scan"}, allowedCapabilities: []string{"fake.execute", "contract.validate", "artifact.scan"}, domainOutcome: execution.DomainConfirmed, providerAttempts: 1}
 }
 
 func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) *harness {
@@ -233,12 +311,16 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 	for _, apply := range mutate {
 		apply(&options)
 	}
-	adapter := execution.NewScriptedAdapter(script...)
-	clock := systemClock{}
-	stack, err := execution.NewControlledModelStack(adapter, clock)
+	ledger := options.ledger
+	if ledger == nil {
+		ledger = execution.NewMemoryScriptLedger()
+	}
+	adapter, err := execution.NewScriptedAdapter(ledger, script...)
 	if err != nil {
 		t.Fatal(err)
 	}
+	adapter.RetryableFailures = options.retryableFailures
+	clock := systemClock{}
 	validatorAdapter, err := contractvalidator.New("../..")
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +329,24 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry, err := agent.NewRegistry(context.Background(), agent.RegistryConfig{Source: agent.EmbeddedCatalog{}, Validator: validatorAdapter, DefinitionSchemaURI: agent.DefinitionSchemaURI(definitionSchema)})
+	pinnedIdentity, err := contracts.PinnedIdentity("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := agent.NewRegistry(context.Background(), agent.RegistryConfig{
+		Source:              agent.EmbeddedCatalog{},
+		Validator:           validatorAdapter,
+		DefinitionSchemaURI: agent.DefinitionSchemaURI(definitionSchema),
+		Approval:            agent.Approval{ProfileDigest: pinnedIdentity.ProfileDigest, LockDigest: pinnedIdentity.LockDigest, SchemaDigests: pinnedIdentity.SchemaDigests},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var modelRecorder modelgateway.Recorder = &execution.MemoryModelRecorder{}
+	if options.modelRecorder != nil {
+		modelRecorder = options.modelRecorder
+	}
+	stack, err := execution.NewControlledModelStack(adapter, clock, modelRecorder, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,12 +355,16 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		t.Fatal(err)
 	}
 	toolDigest := sha256.Sum256(toolSchema)
-	profile, err := execution.NewControlledToolProfile("sha256:" + hex.EncodeToString(toolDigest[:]))
+	toolArguments, err := execution.NewPinnedToolArgumentValidator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := execution.NewApprovedToolProfile(registry.ToolBindings(), "sha256:"+hex.EncodeToString(toolDigest[:]), registry.CatalogDigest(), toolArguments)
 	if err != nil {
 		t.Fatal(err)
 	}
 	recorder := &execution.MemoryToolRecorder{}
-	guard, err := tools.NewGuard(profile, recorder, clock, tools.JSONArgumentValidator{})
+	guard, err := tools.NewGuard(profile, recorder, clock, toolArguments)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -275,10 +378,9 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		Selector:  stack,
 		Invoker:   stack,
 		Guard:     guard,
-		Authority: execution.ControlledAuthorityView{AllowedTools: options.allowedTools},
 		Validator: pinnedValidator,
 		Clock:     clock,
-		Limits:    runner.Limits{MaximumOutputBytes: 65536, MaximumInputTokens: 100000, MaximumOutputTokens: 100000, Timeout: 5 * time.Second, MaximumAttempts: 1, RetryBudget: 0, ContextTokens: 4000},
+		Limits:    runner.Limits{MaximumOutputBytes: 65536, MaximumInputTokens: 100000, MaximumOutputTokens: 100000, Timeout: 5 * time.Second, MaximumAttempts: options.providerAttempts, RetryBudget: time.Minute, ContextTokens: 4000},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -289,7 +391,17 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 	}
 	lockDigest := sha256.Sum256(lockBytes)
 
-	h := &harness{t: t, adapter: adapter, recorder: recorder, registry: registry}
+	h := &harness{t: t, adapter: adapter, recorder: recorder, registry: registry,
+		artifacts:       execution.NewControlledArtifactPort(),
+		commitAuthority: &execution.ControlledCommitAuthority{},
+		grants: authority.Grants{
+			AllowedTools:        append([]string(nil), options.allowedTools...),
+			AllowedCapabilities: append([]string(nil), options.allowedCapabilities...),
+			AllowedEffects:      []string{"read"},
+			MaximumRisk:         "low",
+			DataClasses:         []string{"public", "internal"},
+		},
+	}
 	h.repo = interrupts.NewMemoryRepository()
 	h.journal = journal.NewMemoryStore()
 	h.tool = execution.NewControlledToolExecutor()
@@ -304,16 +416,29 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 			h.manager = definition
 		}
 	}
+	approvedMaterial, err := execution.NewToolMaterial(profile, toolArguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var toolMaterial execution.ToolMaterial = approvedMaterial
+	if options.toolMaterial != nil {
+		toolMaterial = options.toolMaterial
+	}
+	h.material = toolMaterial
+	h.authoritySource = authority.NewStatic(h.currentAuthority(h.authority(options)))
 	executor, err := execution.New(execution.Config{
 		Registry:          registry,
 		Runner:            agentRunner,
 		Runs:              h.repo,
 		InterruptWriter:   service,
 		InterruptReader:   h.repo,
-		Authority:         staticRunAuthority{h.authority(options)},
+		InterruptExpirer:  h.repo,
+		Authority:         h.authoritySource,
 		Tools:             h.tool,
+		ToolMaterial:      toolMaterial,
+		Artifacts:         h.artifacts,
 		Domain:            h.domain,
-		CommitAuthority:   &execution.ControlledCommitAuthority{},
+		CommitAuthority:   h.commitAuthority,
 		Decisions:         h.journal,
 		Clock:             clock,
 		InputTTL:          options.inputTTL,
@@ -330,13 +455,47 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 	return h
 }
 
+// harnessBudget parameterizes the pinned AgentBudget the harness seeds, so
+// model-call, token, and cost exhaustion can each be exercised.
+type harnessBudget struct {
+	modelCalls   int64
+	inputTokens  int64
+	outputTokens int64
+	costAmount   string
+}
+
+func defaultHarnessBudget() harnessBudget {
+	return harnessBudget{modelCalls: 100, inputTokens: 1000000, outputTokens: 1000000, costAmount: "100"}
+}
+
 func (h *harness) authority(options harnessOptions) runs.Authority {
+	budget := defaultHarnessBudget()
+	budget.modelCalls = options.maximumCalls
+	return h.authorityWithBudget(budget)
+}
+
+func (h *harness) authorityWithBudget(budget harnessBudget) runs.Authority {
 	return runs.Authority{
 		Definition:  h.definitionReference(),
 		ContractBOM: json.RawMessage(`{"repository":"anvilkit/contracts","bomDigest":"` + validDigest + `","ociManifestDigest":"` + validDigest + `","evidenceManifestDigest":"` + validDigest + `"}`),
 		Policy:      json.RawMessage(`{"policyId":"policy.run.default","version":"v1","digest":"` + validDigest + `"}`),
-		Budget:      json.RawMessage(fmt.Sprintf(`{"kind":"AgentBudget","modelLimits":{"maximumCalls":%d,"maximumConcurrentCalls":4},"tokenLimits":{"inputTokens":1000000,"outputTokens":1000000,"totalTokens":2000000},"workerLimits":{"maximumAttempts":4,"maximumDurationMilliseconds":60000},"gpuLimits":{"maximumGpuMilliseconds":0},"currencyLimits":{"maximumCost":{"amount":"100","currency":"USD"},"reservedCost":{"amount":"0","currency":"USD"}},"reservationId":"reservation.test","exceedBehavior":"refuse","policy":{"policyId":"policy.run.default","version":"v1","digest":"`+validDigest+`"}}`, options.maximumCalls)),
+		Budget:      budgetDocument(budget),
 	}
+}
+
+// budgetDocument renders one pinned AgentBudget document.
+func budgetDocument(budget harnessBudget) json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{"kind":"AgentBudget","modelLimits":{"maximumCalls":%d,"maximumConcurrentCalls":4},"tokenLimits":{"inputTokens":%d,"outputTokens":%d,"totalTokens":2000000},"workerLimits":{"maximumAttempts":4,"maximumDurationMilliseconds":60000},"gpuLimits":{"maximumGpuMilliseconds":0},"currencyLimits":{"maximumCost":{"amount":"%s","currency":"USD"},"reservedCost":{"amount":"0","currency":"USD"}},"reservationId":"reservation.test","exceedBehavior":"refuse","policy":{"policyId":"policy.run.default","version":"v1","digest":"`+validDigest+`"}}`, budget.modelCalls, budget.inputTokens, budget.outputTokens, budget.costAmount))
+}
+
+// seedRunWithBudget seeds a run whose pinned budget the caller shapes.
+func (h *harness) seedRunWithBudget(operation string, mutate ...func(*harnessBudget)) workflow.RunInput {
+	h.t.Helper()
+	budget := defaultHarnessBudget()
+	for _, apply := range mutate {
+		apply(&budget)
+	}
+	return h.seedSnapshot(operation, h.authorityWithBudget(budget))
 }
 
 func (h *harness) definitionReference() json.RawMessage {
@@ -345,15 +504,33 @@ func (h *harness) definitionReference() json.RawMessage {
 
 func (h *harness) seedRun(operation string) workflow.RunInput {
 	h.t.Helper()
-	options := defaultHarnessOptions()
-	authority := h.authority(options)
+	return h.seedSnapshot(operation, h.authority(defaultHarnessOptions()))
+}
+
+// seedSnapshot writes the authoritative run aggregate the workflow drives.
+// currentAuthority projects the seeded run material onto the single
+// current-authority observation the source serves.
+func (h *harness) currentAuthority(material runs.Authority) authority.Current {
+	value := material
+	value.WorkspaceActive, value.ActorActive, value.PermissionActive, value.PolicyActive = true, true, true, true
+	value.Grants = h.grants
+	return value
+}
+
+func (h *harness) seedSnapshot(operation string, material runs.Authority) workflow.RunInput {
+	h.t.Helper()
+	// Current authority always starts out agreeing with the run's pinned
+	// material; tests move one or the other to model divergence.
+	if h.authoritySource != nil {
+		h.authoritySource.Replace(h.currentAuthority(material))
+	}
 	now := time.Now().UTC()
 	snapshot := runs.Snapshot{
 		Kind: "AgentRun", RunID: testRunID, RootRunID: testRunID,
 		WorkspaceID: testWorkspace, ActorID: testActor,
 		Domain: "platform-agent", Operation: operation,
 		Target:     runs.Target{Type: "page", ID: "page.home", WorkspaceID: testWorkspace, ProjectID: testProject},
-		Definition: authority.Definition, ContractBOM: authority.ContractBOM, Policy: authority.Policy, Budget: authority.Budget,
+		Definition: material.Definition, ContractBOM: material.ContractBOM, Policy: material.Policy, Budget: material.Budget,
 		Idempotency: runs.IdempotencyProjection{Scope: testWorkspace + ":create-run", Key: "create-1", CanonicalRequestDigest: validDigest},
 		Status:      runs.Created, Version: 1, ExecutionGeneration: 1,
 		CreatedAt: now, UpdatedAt: now,
@@ -364,28 +541,11 @@ func (h *harness) seedRun(operation string) workflow.RunInput {
 	return workflow.RunInput{Key: workflow.RunKey{RunID: testRunID, Generation: 1}, Scope: workflow.Scope{WorkspaceID: testWorkspace, ProjectID: testProject, ActorID: testActor}, Traceparent: traceparent}
 }
 
-// seedRunWithBudget seeds using the harness's mutated options so budget
-// bounds match the active configuration.
+// seedRunWithCalls seeds a run whose pinned budget funds exactly the given
+// number of model calls.
 func (h *harness) seedRunWithCalls(operation string, maximumCalls int64) workflow.RunInput {
 	h.t.Helper()
-	options := defaultHarnessOptions()
-	options.maximumCalls = maximumCalls
-	authority := h.authority(options)
-	now := time.Now().UTC()
-	snapshot := runs.Snapshot{
-		Kind: "AgentRun", RunID: testRunID, RootRunID: testRunID,
-		WorkspaceID: testWorkspace, ActorID: testActor,
-		Domain: "platform-agent", Operation: operation,
-		Target:     runs.Target{Type: "page", ID: "page.home", WorkspaceID: testWorkspace, ProjectID: testProject},
-		Definition: authority.Definition, ContractBOM: authority.ContractBOM, Policy: authority.Policy, Budget: authority.Budget,
-		Idempotency: runs.IdempotencyProjection{Scope: testWorkspace + ":create-run", Key: "create-1", CanonicalRequestDigest: validDigest},
-		Status:      runs.Created, Version: 1, ExecutionGeneration: 1,
-		CreatedAt: now, UpdatedAt: now,
-	}
-	if err := h.repo.Seed(testScope(), snapshot); err != nil {
-		h.t.Fatal(err)
-	}
-	return workflow.RunInput{Key: workflow.RunKey{RunID: testRunID, Generation: 1}, Scope: workflow.Scope{WorkspaceID: testWorkspace, ProjectID: testProject, ActorID: testActor}, Traceparent: traceparent}
+	return h.seedRunWithBudget(operation, func(budget *harnessBudget) { budget.modelCalls = maximumCalls })
 }
 
 func (h *harness) snapshot() runs.Snapshot {
@@ -527,11 +687,16 @@ func TestRunExecutesGuardedToolAndDelegationBeforeCompleting(t *testing.T) {
 	if outcome.Terminal != workflow.TerminalCompleted {
 		t.Fatalf("outcome = %+v", outcome)
 	}
-	if h.tool.Executions != 1 {
-		t.Fatalf("tool executions = %d, want exactly one", h.tool.Executions)
+	if h.tool.Executions() != 1 {
+		t.Fatalf("tool executions = %d, want exactly one", h.tool.Executions())
 	}
-	if h.ops.callsFor(":action-0000") != 1 || h.ops.callsFor(":action-0001") != 1 {
-		t.Fatal("tool and delegation actions must each run once")
+	if h.ops.callsFor(":action-0000") != 1 {
+		t.Fatal("the guarded tool action must run exactly once")
+	}
+	// Delegation is a durable boundary per Specialist turn, not one opaque
+	// action step.
+	if h.ops.callsFor(":delegate-open-0001") != 1 || h.ops.callsFor(":delegate-turn-0001-0000") != 1 {
+		t.Fatalf("delegation must open once and run one specialist turn as its own durable step")
 	}
 	allowed := 0
 	for _, decision := range h.recorder.Decisions {
@@ -556,7 +721,7 @@ func TestGuardDenialIsDurableAndNonFatal(t *testing.T) {
 	if outcome.Terminal != workflow.TerminalCompleted {
 		t.Fatalf("outcome = %+v", outcome)
 	}
-	if h.tool.Executions != 0 {
+	if h.tool.Executions() != 0 {
 		t.Fatal("denied tool must never execute")
 	}
 	if len(h.recorder.Decisions) != 1 || h.recorder.Decisions[0].Decision.Allowed {
@@ -628,8 +793,8 @@ func TestApprovalApprovePathCommitsGovernedEffect(t *testing.T) {
 	if snapshot := h.snapshot(); snapshot.Status != runs.Completed {
 		t.Fatalf("run state = %s", snapshot.Status)
 	}
-	if h.domain.Commits != 1 {
-		t.Fatalf("domain commits = %d, want exactly one", h.domain.Commits)
+	if h.domain.Commits() != 1 {
+		t.Fatalf("domain commits = %d, want exactly one", h.domain.Commits())
 	}
 }
 

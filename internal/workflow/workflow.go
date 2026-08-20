@@ -178,6 +178,10 @@ type Ack struct {
 	// against expiry; the caller re-reads instead of failing the run.
 	Raced   bool   `json:"raced,omitempty"`
 	Version uint64 `json:"version"`
+	// Halt carries a typed stop resolved inside the operation, such as
+	// authority revoked before a retry. The workflow stops on it and never
+	// continues normal execution.
+	Halt *Halt `json:"halt,omitempty"`
 }
 
 type ActionInput struct {
@@ -194,6 +198,50 @@ type ActionResult struct {
 	Halt       *Halt `json:"halt,omitempty"`
 }
 
+// DelegationInput opens one Specialist delegation. Authorization, depth,
+// fan-out, authority, and input-schema checks all run inside this boundary.
+type DelegationInput struct {
+	Run      RunInput           `json:"run"`
+	Turn     int                `json:"turn"`
+	Phase    Phase              `json:"phase"`
+	Decision agent.TurnDecision `json:"decision"`
+	Carry    Carry              `json:"carry"`
+}
+
+// DelegationOpened is the authorized delegation boundary. Refused reports a
+// durable, typed refusal already folded into the carry notes.
+type DelegationOpened struct {
+	Superseded       bool   `json:"superseded,omitempty"`
+	Refused          bool   `json:"refused,omitempty"`
+	TurnLimit        int    `json:"turnLimit"`
+	SpecialistID     string `json:"specialistId,omitempty"`
+	SpecialistDigest string `json:"specialistDigest,omitempty"`
+	Carry            Carry  `json:"carry"`
+	Halt             *Halt  `json:"halt,omitempty"`
+}
+
+// DelegateTurnInput is one durable Specialist turn inside an opened
+// delegation. Each turn is its own recoverable boundary.
+type DelegateTurnInput struct {
+	Run              RunInput        `json:"run"`
+	Turn             int             `json:"turn"`
+	DelegateTurn     int             `json:"delegateTurn"`
+	Last             bool            `json:"last"`
+	Phase            Phase           `json:"phase"`
+	SpecialistID     string          `json:"specialistId"`
+	SpecialistDigest string          `json:"specialistDigest"`
+	Input            json.RawMessage `json:"input"`
+	Carry            Carry           `json:"carry"`
+}
+
+// DelegateTurnResult reports whether the delegation concluded on this turn.
+type DelegateTurnResult struct {
+	Superseded bool  `json:"superseded,omitempty"`
+	Done       bool  `json:"done"`
+	Carry      Carry `json:"carry"`
+	Halt       *Halt `json:"halt,omitempty"`
+}
+
 type InterruptOpen struct {
 	Run      RunInput `json:"run"`
 	Turn     int      `json:"turn"`
@@ -206,6 +254,7 @@ type InterruptOpened struct {
 	RequestID     string `json:"requestId"`
 	TimeoutMillis int64  `json:"timeoutMillis"`
 	Version       uint64 `json:"version"`
+	Halt          *Halt  `json:"halt,omitempty"`
 }
 
 type InterruptRef struct {
@@ -269,6 +318,7 @@ type ReviewResult struct {
 	RequestID     string `json:"requestId,omitempty"`
 	TimeoutMillis int64  `json:"timeoutMillis,omitempty"`
 	Version       uint64 `json:"version"`
+	Halt          *Halt  `json:"halt,omitempty"`
 }
 
 type CommitInput struct {
@@ -290,6 +340,7 @@ type CommitResult struct {
 	Outcome    string           `json:"outcome"`
 	Problem    *problem.Details `json:"problem,omitempty"`
 	Version    uint64           `json:"version"`
+	Halt       *Halt            `json:"halt,omitempty"`
 }
 
 type ReviseInput struct {
@@ -316,6 +367,8 @@ type Operations interface {
 	ExecuteTurn(context.Context, OpID, TurnInput) (TurnResult, error)
 	RecordDecision(context.Context, OpID, DecisionRecord) (Ack, error)
 	ExecuteAction(context.Context, OpID, ActionInput) (ActionResult, error)
+	OpenDelegation(context.Context, OpID, DelegationInput) (DelegationOpened, error)
+	ExecuteDelegateTurn(context.Context, OpID, DelegateTurnInput) (DelegateTurnResult, error)
 	OpenInput(context.Context, OpID, InterruptOpen) (InterruptOpened, error)
 	ReadInput(context.Context, OpID, InterruptRef) (InputRead, error)
 	ExpireInterrupt(context.Context, OpID, ExpireRequest) (Ack, error)
@@ -356,6 +409,10 @@ func ApprovalTopic(requestID string) string { return "approval:" + requestID }
 // maximumWakes bounds spurious wake handling per interrupt so a broken signal
 // source cannot spin the workflow.
 const maximumWakes = 64
+
+// maximumDelegateTurns bounds the durable Specialist turn boundaries one
+// delegation may open, independently of the definition's own turn limit.
+const maximumDelegateTurns = 1024
 
 // AgentRunWorkflow is the single canonical durable business workflow. The
 // function is deterministic: every branch depends only on recorded operation
@@ -419,7 +476,7 @@ func AgentRunWorkflow(host Host, ops Operations, input RunInput) (RunOutcome, er
 			refusal.Detail = turnResult.Decision.Refuse.Reason
 			return run.terminal(turn, TerminalRefused, &refusal)
 
-		case agent.DecisionToolCall, agent.DecisionDelegate:
+		case agent.DecisionToolCall:
 			action, err := step(host, name("action", turn), func(ctx context.Context) (ActionResult, error) {
 				return ops.ExecuteAction(ctx, run.op(name("action", turn)), ActionInput{Run: input, Turn: turn, Phase: phase, Decision: turnResult.Decision, Carry: carry})
 			})
@@ -432,6 +489,71 @@ func AgentRunWorkflow(host Host, ops Operations, input RunInput) (RunOutcome, er
 			carry = action.Carry
 			if action.Halt != nil {
 				return run.halt(turn, *action.Halt)
+			}
+			continue
+
+		case agent.DecisionDelegate:
+			// Every Specialist turn gets its own durable boundary, so a crash
+			// inside a delegation resumes at the last completed Specialist
+			// turn instead of replaying the whole delegation loop.
+			opened, err := step(host, name("delegate-open", turn), func(ctx context.Context) (DelegationOpened, error) {
+				return ops.OpenDelegation(ctx, run.op(name("delegate-open", turn)), DelegationInput{Run: input, Turn: turn, Phase: phase, Decision: turnResult.Decision, Carry: carry})
+			})
+			if err != nil {
+				return run.fail(turn, problemOf(err))
+			}
+			if opened.Superseded {
+				return run.superseded()
+			}
+			carry = opened.Carry
+			if opened.Halt != nil {
+				return run.halt(turn, *opened.Halt)
+			}
+			if opened.Refused {
+				continue
+			}
+			if opened.TurnLimit < 1 || opened.TurnLimit > maximumDelegateTurns {
+				invalid := problem.Internal("")
+				invalid.Detail = "delegation opened outside the bounded specialist turn limit"
+				return run.fail(turn, invalid)
+			}
+			concluded := false
+			for delegateTurn := 0; delegateTurn < opened.TurnLimit; delegateTurn++ {
+				stepName := delegateName(turn, delegateTurn)
+				result, err := step(host, stepName, func(ctx context.Context) (DelegateTurnResult, error) {
+					return ops.ExecuteDelegateTurn(ctx, run.op(stepName), DelegateTurnInput{
+						Run:              input,
+						Turn:             turn,
+						DelegateTurn:     delegateTurn,
+						Last:             delegateTurn == opened.TurnLimit-1,
+						Phase:            phase,
+						SpecialistID:     opened.SpecialistID,
+						SpecialistDigest: opened.SpecialistDigest,
+						Input:            turnResult.Decision.Delegate.Input,
+						Carry:            carry,
+					})
+				})
+				if err != nil {
+					return run.fail(turn, problemOf(err))
+				}
+				if result.Superseded {
+					return run.superseded()
+				}
+				carry = result.Carry
+				if result.Halt != nil {
+					return run.halt(turn, *result.Halt)
+				}
+				if result.Done {
+					concluded = true
+					break
+				}
+			}
+			if !concluded {
+				// The executor concludes on the last delegate turn, so an
+				// unconcluded loop means the boundary contract was violated.
+				invalid := problem.Internal("")
+				invalid.Detail = "delegation exhausted its bounded turns without a durable conclusion"
+				return run.fail(turn, invalid)
 			}
 			continue
 
@@ -449,6 +571,9 @@ func AgentRunWorkflow(host Host, ops Operations, input RunInput) (RunOutcome, er
 			}
 			if opened.Superseded {
 				return run.superseded()
+			}
+			if opened.Halt != nil {
+				return run.halt(turn, *opened.Halt)
 			}
 			read, outcome, err := run.awaitInput(turn, opened)
 			if err != nil {
@@ -484,6 +609,9 @@ func AgentRunWorkflow(host Host, ops Operations, input RunInput) (RunOutcome, er
 			if review.Superseded {
 				return run.superseded()
 			}
+			if review.Halt != nil {
+				return run.halt(turn, *review.Halt)
+			}
 			carry.Version = review.Version
 			if review.Accepted {
 				return RunOutcome{Key: input.Key, Terminal: TerminalCompleted}, nil
@@ -506,6 +634,9 @@ func AgentRunWorkflow(host Host, ops Operations, input RunInput) (RunOutcome, er
 				if committed.Superseded {
 					return run.superseded()
 				}
+				if committed.Halt != nil {
+					return run.halt(turn, *committed.Halt)
+				}
 				carry.Version = committed.Version
 				switch committed.Outcome {
 				case CommitCompleted:
@@ -519,6 +650,9 @@ func AgentRunWorkflow(host Host, ops Operations, input RunInput) (RunOutcome, er
 					}
 					if revised.Superseded {
 						return run.superseded()
+					}
+					if revised.Halt != nil {
+						return run.halt(turn, *revised.Halt)
 					}
 					carry.Version = revised.Version
 					carry.ReviewReason = "domain-conflict"
@@ -536,6 +670,9 @@ func AgentRunWorkflow(host Host, ops Operations, input RunInput) (RunOutcome, er
 			}
 			if revised.Superseded {
 				return run.superseded()
+			}
+			if revised.Halt != nil {
+				return run.halt(turn, *revised.Halt)
 			}
 			carry.Version = revised.Version
 			carry.ReviewReason = approval.Reason
@@ -706,24 +843,49 @@ func (r runContext) expire(turn, wake int, requestID, kind string, version uint6
 
 func name(prefix string, turn int) string { return fmt.Sprintf("%s-%04d", prefix, turn) }
 
+// delegateName is the durable step identity of one Specialist turn.
+func delegateName(turn, delegateTurn int) string {
+	return fmt.Sprintf("delegate-turn-%04d-%04d", turn, delegateTurn)
+}
+
+// stepRecord is the recorded output of one durable operation. A typed
+// ProblemDetails outcome is recorded structurally so recovery reconstructs
+// the same typed error instead of an opaque engine error string.
+type stepRecord[T any] struct {
+	Value   *T               `json:"value,omitempty"`
+	Problem *problem.Details `json:"problem,omitempty"`
+}
+
 // step runs one typed durable operation behind the host boundary.
 func step[T any](host Host, stepName string, fn func(context.Context) (T, error)) (T, error) {
 	var zero T
 	raw, err := host.Step(stepName, func(ctx context.Context) ([]byte, error) {
 		value, err := fn(ctx)
 		if err != nil {
-			return nil, err
+			var details problem.Details
+			if !errors.As(err, &details) {
+				// Untyped failures stay engine failures: the engine owns
+				// recovery and the workflow never reinterprets them.
+				return nil, err
+			}
+			return json.Marshal(stepRecord[T]{Problem: &details})
 		}
-		return json.Marshal(value)
+		return json.Marshal(stepRecord[T]{Value: &value})
 	})
 	if err != nil {
 		return zero, err
 	}
-	var out T
+	var out stepRecord[T]
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return zero, fmt.Errorf("decode durable step %s: %w", stepName, err)
 	}
-	return out, nil
+	if out.Problem != nil {
+		return zero, *out.Problem
+	}
+	if out.Value == nil {
+		return zero, fmt.Errorf("durable step %s recorded neither a value nor a problem", stepName)
+	}
+	return *out.Value, nil
 }
 
 // problemOf converts an operation error into serializable ProblemDetails,
@@ -762,9 +924,16 @@ func validTraceparent(value string) bool {
 		if index == 2 || index == 35 || index == 52 {
 			continue
 		}
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+		if !lowerHexDigit(character) {
 			return false
 		}
 	}
 	return value[:2] != "ff" && value[3:35] != strings.Repeat("0", 32) && value[36:52] != strings.Repeat("0", 16)
+}
+
+// lowerHexDigit reports whether the character is a lower-case hexadecimal
+// digit. Digest and trace identities are lower-case only, so an upper-case
+// digit is rejected rather than normalized.
+func lowerHexDigit(character rune) bool {
+	return character >= '0' && character <= '9' || character >= 'a' && character <= 'f'
 }

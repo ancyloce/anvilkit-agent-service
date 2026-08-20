@@ -244,6 +244,11 @@ type Authority interface {
 	AuthorizeInput(context.Context, runs.Scope, InputRequest) error
 	AuthorizeReviewer(context.Context, runs.Scope, ApprovalRequest, DecisionKind) error
 	RetryEligibility(context.Context, runs.Scope, runs.Snapshot) (bool, string, error)
+	// AuthorizeResume revalidates the complete current authority and material
+	// set before a recorded retry restarts a workflow. Recording the retry and
+	// resuming it are separate durable acts, and authority revoked between
+	// them must stop the resume rather than be inherited from the recording.
+	AuthorizeResume(context.Context, runs.Scope, runs.Snapshot) error
 }
 
 // Runtime drives the canonical AgentRunWorkflow. Input and approval waits

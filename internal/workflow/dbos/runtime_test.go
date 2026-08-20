@@ -252,7 +252,45 @@ func TestDBOSApprovalWaitAndExplicitRetryGeneration(t *testing.T) {
 	if secondOutcome.Key.WorkflowID() == outcome.Key.WorkflowID() {
 		t.Fatal("generations must not share workflow identity")
 	}
-	if fmt.Sprintf("%s", second.Key.WorkflowID()) != "run.dbos-approval:g2" {
+	if second.Key.WorkflowID() != "run.dbos-approval:g2" {
 		t.Fatalf("workflow identity = %s", second.Key.WorkflowID())
+	}
+}
+
+// Each Specialist turn is a separate DBOS step, so recovery resumes at the
+// last completed Specialist turn instead of replaying the whole delegation.
+func TestDbosDelegationCheckpointsEverySpecialistTurn(t *testing.T) {
+	ops := workflowtest.NewProbeOps()
+	ops.Delegate = true
+	ops.DelegateTurns = 3
+	h := newSqliteHarness(t, ops)
+	input := probeInput("run.probe-delegation", 1)
+
+	outcome, err := h.runtime.ExecuteRun(context.Background(), input)
+	if err != nil || outcome.Terminal != workflow.TerminalCompleted {
+		t.Fatalf("outcome = %+v err = %v", outcome, err)
+	}
+	if got := ops.CallCount("delegate-open-0000"); got != 1 {
+		t.Fatalf("delegation opened %d times, want 1", got)
+	}
+	for delegateTurn := range 3 {
+		step := fmt.Sprintf("delegate-turn-0000-%04d", delegateTurn)
+		if got := ops.CallCount(step); got != 1 {
+			t.Fatalf("%s executed %d times, want exactly one durable boundary", step, got)
+		}
+	}
+
+	// A restarted engine replays the recorded delegation steps instead of
+	// re-executing any Specialist turn.
+	h.restart()
+	replayed, err := h.runtime.ExecuteRun(context.Background(), input)
+	if err != nil || replayed.Terminal != outcome.Terminal {
+		t.Fatalf("replayed outcome = %+v err = %v", replayed, err)
+	}
+	for delegateTurn := range 3 {
+		step := fmt.Sprintf("delegate-turn-0000-%04d", delegateTurn)
+		if got := ops.CallCount(step); got != 1 {
+			t.Fatalf("%s re-executed after restart: %d", step, got)
+		}
 	}
 }

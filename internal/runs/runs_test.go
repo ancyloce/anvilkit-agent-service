@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 
@@ -27,20 +28,21 @@ func TestEveryStateByEveryCommandMatchesExactMatrix(t *testing.T) {
 		AwaitingInput:              {AcceptInput: Planning, RecordFailure: Failed, RequestCancellation: Cancelling},
 		Executing:                  {BeginValidation: Validating, RecordFailure: Failed, RequestCancellation: Cancelling},
 		Validating:                 {SubmitForReview: AwaitingReview, RecordFailure: Failed, RecordRefusal: Refused, RequestCancellation: Cancelling},
-		AwaitingReview:             {Revise: Executing, RequestApproval: AwaitingApproval, AcceptArtifact: Completed, Discard: Discarded, RequestCancellation: Cancelling},
+		AwaitingReview:             {Revise: Executing, RequestApproval: AwaitingApproval, AcceptArtifact: Completed, RecordFailure: Failed, Discard: Discarded, RequestCancellation: Cancelling},
 		AwaitingApproval:           {Approve: Committing, RejectApproval: AwaitingReview, RecordFailure: Failed, RequestCancellation: Cancelling},
-		Committing:                 {BeginDomainConfirmation: AwaitingDomainConfirmation},
-		AwaitingDomainConfirmation: {ConfirmDomain: Completed, RecordDomainConflict: Conflict, RecordDomainRejection: Failed},
-		Conflict:                   {Rebase: Executing, RequestCancellation: Cancelling},
+		Committing:                 {BeginDomainConfirmation: AwaitingDomainConfirmation, RecordFailure: Failed},
+		AwaitingDomainConfirmation: {ConfirmDomain: Completed, RecordDomainConflict: Conflict, RecordDomainRejection: Failed, RecordFailure: Failed},
+		Conflict:                   {Rebase: Executing, RecordFailure: Failed, RequestCancellation: Cancelling},
 		Cancelling:                 {ReconcileCancellation: Cancelled},
 		Failed:                     {Retry: Preparing}, Completed: {}, Cancelled: {}, Refused: {}, Discarded: {},
 	}
 	proof := CommitProof{ApprovalRechecked: true, ArtifactEligible: true, ActionBindingExact: true, AuthorizationDurable: true, AuthorizationID: "authorization", DomainOperationID: "operation", ActionDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ArtifactDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
 	validation := ValidationProof{Valid: true, BOMDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SchemaDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ValidatorVersion: "runtime-v1", CatalogDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+	reconciliation := DomainReconciliation{Reconciled: true, DomainOperationID: "domain.operation"}
 	for _, state := range States() {
 		for _, kind := range Commands() {
 			run := Run{ID: "run", State: state, Version: 7, ExecutionGeneration: 2}
-			command := Command{Kind: kind, Commit: proof, Validation: validation, RetryEligible: true}
+			command := Command{Kind: kind, Commit: proof, Validation: validation, Reconciliation: reconciliation, RetryEligible: true}
 			if kind == RecordDomainRejection {
 				domainFailure := problem.New(problem.CodeDomainRejected, "")
 				command.Failure = &domainFailure
@@ -123,3 +125,52 @@ func TestTerminalAndRetryProtections(t *testing.T) {
 }
 
 func ptr(value problem.Details) *problem.Details { return &value }
+
+// The failure edge out of the submit boundary exists so a run whose governed
+// effect may already have happened is never stranded — but it must never be
+// usable on belief alone. Only the authoritative owner's answer that no effect
+// exists makes it legal.
+func TestFailingOutOfTheSubmitBoundaryRequiresReconciliationProof(t *testing.T) {
+	run := Run{ID: "run", State: AwaitingDomainConfirmation, Version: 9, ExecutionGeneration: 1}
+	for _, test := range []struct {
+		name  string
+		proof DomainReconciliation
+	}{
+		{name: "no proof at all", proof: DomainReconciliation{}},
+		{name: "owner never consulted", proof: DomainReconciliation{EffectApplied: false, DomainOperationID: "domain.operation"}},
+		{name: "the effect was applied", proof: DomainReconciliation{Reconciled: true, EffectApplied: true, DomainOperationID: "domain.operation"}},
+		{name: "no operation identity", proof: DomainReconciliation{Reconciled: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			failure := problem.New(problem.CodeDomainOutcomeUncertain, "")
+			updated, _, err := run.Apply(Command{Kind: RecordFailure, Failure: &failure, Reconciliation: test.proof})
+			var details problem.Details
+			if err == nil || !reflect.DeepEqual(updated, run) {
+				t.Fatalf("an unproven failure left the submit boundary: %#v err=%v", updated, err)
+			}
+			if !errorsAs(err, &details) || details.Code != string(problem.CodeCommitProofMissing) {
+				t.Fatalf("error = %v, want %s", err, problem.CodeCommitProofMissing)
+			}
+		})
+	}
+	failure := problem.New(problem.CodeDomainOutcomeUncertain, "")
+	updated, transition, err := run.Apply(Command{Kind: RecordFailure, Failure: &failure, Reconciliation: DomainReconciliation{Reconciled: true, DomainOperationID: "domain.operation"}})
+	if err != nil || updated.State != Failed || transition.Current != Failed {
+		t.Fatalf("a reconciled failure was refused: %#v err=%v", updated, err)
+	}
+}
+
+// Committing is short of the submit boundary: nothing can have been caused
+// yet, so the run may fail there without consulting anyone.
+func TestFailingBeforeTheSubmitBoundaryNeedsNoReconciliation(t *testing.T) {
+	run := Run{ID: "run", State: Committing, Version: 9, ExecutionGeneration: 1}
+	failure := problem.New(problem.CodeAuthorityStale, "")
+	updated, _, err := run.Apply(Command{Kind: RecordFailure, Failure: &failure})
+	if err != nil || updated.State != Failed {
+		t.Fatalf("a run stopped before submission could not record its failure: %#v err=%v", updated, err)
+	}
+}
+
+func errorsAs(err error, target *problem.Details) bool {
+	return errors.As(err, target)
+}

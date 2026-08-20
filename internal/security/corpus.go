@@ -33,7 +33,7 @@ func LoadCorpus(path string) (Corpus, error) {
 	if err != nil {
 		return Corpus{}, err
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	body, err := io.ReadAll(io.LimitReader(file, 1<<20+1))
 	if err != nil {
 		return Corpus{}, err

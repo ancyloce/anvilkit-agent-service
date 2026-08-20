@@ -47,7 +47,11 @@ func TestPinnedM8BoundarySetMaintainsCompleteTraceContinuity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer telemetry.Shutdown(context.Background())
+	defer func() {
+		if err := telemetry.Shutdown(context.Background()); err != nil {
+			t.Errorf("shutdown telemetry: %v", err)
+		}
+	}()
 	boundaries := []string{"studio-stand-in", "platform-agent-service", "fake-pagix", "contract-runtime", "fake-worker", "simulated-domain-confirmation"}
 	const traces = 100
 	for index := 0; index < traces; index++ {

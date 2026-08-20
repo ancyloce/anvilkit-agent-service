@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
+	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
@@ -18,9 +19,10 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
 )
 
-type AuthorityProvider interface {
-	Current(context.Context, runs.Scope) (runs.Authority, error)
-}
+// AuthorityProvider is the single current-authority port, shared with the
+// execution pipeline and the interrupt authority. Creating a run is itself a
+// guarded boundary: authority must be active and its material complete.
+type AuthorityProvider = authority.Source
 type App struct {
 	validator    *auth.Validator
 	runs         *runs.Service
@@ -48,11 +50,16 @@ func (a *App) Create(ctx context.Context, claims auth.Claims, workspaceID, key, 
 	if err != nil {
 		return Representation{}, err
 	}
-	authority, err := a.authority.Current(ctx, scope)
+	current, err := a.authority.Current(ctx, scope.AuthorityScope())
 	if err != nil {
 		return Representation{}, fmt.Errorf("resolve create authority: %w", err)
 	}
-	outcome, err := a.runs.Create(ctx, runs.CreateInput{Scope: scope, Key: key, ClaimedDigest: digest, Traceparent: traceparent, Raw: raw, Authority: authority})
+	if !current.Active() || !current.MaterialComplete() {
+		denied := problem.New(problem.CodeAuthorityStale, "")
+		denied.Detail = "current authority does not permit creating a run"
+		return Representation{}, denied
+	}
+	outcome, err := a.runs.Create(ctx, runs.CreateInput{Scope: scope, Key: key, ClaimedDigest: digest, Traceparent: traceparent, Raw: raw, Authority: current})
 	if err != nil {
 		return Representation{}, err
 	}
@@ -273,9 +280,16 @@ func validTraceparent(value string) bool {
 		if index == 2 || index == 35 || index == 52 {
 			continue
 		}
-		if !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')) {
+		if !lowerHexDigit(character) {
 			return false
 		}
 	}
 	return value[:2] != "ff" && value[3:35] != strings.Repeat("0", 32) && value[36:52] != strings.Repeat("0", 16)
+}
+
+// lowerHexDigit reports whether the character is a lower-case hexadecimal
+// digit. Digest and trace identities are lower-case only, so an upper-case
+// digit is rejected rather than normalized.
+func lowerHexDigit(character rune) bool {
+	return character >= '0' && character <= '9' || character >= 'a' && character <= 'f'
 }

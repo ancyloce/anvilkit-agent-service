@@ -6,9 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/ancyloce/anvilkit-agent-service/internal/modelgateway"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	toolpolicy "github.com/ancyloce/anvilkit-agent-service/internal/tools"
+
+	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 	"os"
 	"testing"
 	"time"
@@ -20,13 +23,6 @@ func (recorder) BeforeDisclosure(context.Context, modelgateway.InvocationRecord)
 func (recorder) BeforeAttempt(context.Context, modelgateway.InvocationRecord) error    { return nil }
 func (recorder) Complete(context.Context, modelgateway.InvocationRecord) error         { return nil }
 
-type ids struct{ next int }
-
-func (i *ids) InvocationID() string { i.next++; return "invocation" + string(rune('0'+i.next)) }
-func (i *ids) AttemptID(n int) modelgateway.AttemptID {
-	return modelgateway.AttemptID(string(rune('0' + n)))
-}
-
 type clock struct{}
 
 func (clock) Now() time.Time { return time.Unix(1, 0) }
@@ -34,6 +30,13 @@ func (clock) Now() time.Time { return time.Unix(1, 0) }
 type sleeper struct{}
 
 func (sleeper) Sleep(context.Context, time.Duration) error { return nil }
+
+type admittingValidator struct{}
+
+func (admittingValidator) Validate(_ context.Context, _ toolpolicy.SchemaReference, value json.RawMessage) error {
+	_, err := contractvalidator.Admit(value)
+	return err
+}
 
 type toolRecording struct{}
 
@@ -57,7 +60,7 @@ type dataset struct {
 
 func engine(t *testing.T) *Engine {
 	t.Helper()
-	gateway, err := modelgateway.NewGateway(map[modelgateway.ProviderID]modelgateway.Adapter{modelgateway.FakeProviderID: modelgateway.FakeAdapter{}}, recorder{}, &ids{}, clock{}, sleeper{})
+	gateway, err := modelgateway.NewGateway(map[modelgateway.ProviderID]modelgateway.Adapter{modelgateway.FakeProviderID: modelgateway.FakeAdapter{}}, recorder{}, clock{}, sleeper{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,10 +70,19 @@ func engine(t *testing.T) *Engine {
 	}
 	return value
 }
+
+// requestBudget authorizes every attempt at the request's own pinned limits.
+// The budget port is mandatory, so no attempt — raw or repair — is exempt.
+type requestBudget struct{ request modelgateway.InvokeRequest }
+
+func (b requestBudget) Authorize(int, Usage) (AttemptLimits, error) {
+	return AttemptLimits{MaximumInputTokens: b.request.MaximumInputTokens, MaximumOutputTokens: b.request.MaximumOutputTokens, MaximumTotalTokens: b.request.MaximumTotalTokens, MaximumCostMicros: b.request.MaximumCostMicros}, nil
+}
+
 func request(scenario string) modelgateway.InvokeRequest {
 	registry, _ := modelgateway.NewRegistry(modelgateway.Snapshot{Version: "fake-v1", Providers: []modelgateway.Provider{{ID: modelgateway.FakeProviderID, ModelVersion: "fake-v1", Regions: []string{"test"}, DataClasses: []modelgateway.DataClass{modelgateway.Internal}, Capabilities: []string{"plan"}, SafetyLevel: 3, MaximumCostMicros: 600, Priority: 1, Enabled: true}}})
 	selection, _ := registry.Select("workspace", modelgateway.Policy{Version: "p1", AllowedProviders: []modelgateway.ProviderID{modelgateway.FakeProviderID}, AllowedRegions: []string{"test"}, DataClasses: []modelgateway.DataClass{modelgateway.Internal}, Capability: "plan", MinimumSafety: 2, MaximumCostMicros: 1000})
-	return modelgateway.InvokeRequest{RunID: "run-" + scenario, WorkspaceID: "workspace", ProjectID: "project", Selection: selection, Context: []byte("minimal synthetic context"), DataClasses: []modelgateway.DataClass{modelgateway.Internal}, MaximumOutputBytes: 4096, MaximumInputTokens: 256, MaximumOutputTokens: 2000, MaximumCostMicros: 1000, Timeout: time.Second, MaximumAttempts: 1, RetryBudget: 0, Scenario: scenario}
+	return modelgateway.InvokeRequest{RunID: "run-" + scenario, WorkspaceID: "workspace", ProjectID: "project", IdempotencyKey: "run-" + scenario + ":g1:turn-0000", Selection: selection, Context: []byte("minimal synthetic context"), DataClasses: []modelgateway.DataClass{modelgateway.Internal}, MaximumOutputBytes: 4096, MaximumInputTokens: 256, MaximumOutputTokens: 2000, MaximumTotalTokens: 2256, MaximumCostMicros: 1000, Timeout: time.Second, MaximumAttempts: 1, RetryBudget: 0, Scenario: scenario}
 }
 func corpusGuard(t *testing.T) (*toolpolicy.Guard, toolpolicy.Intent, toolpolicy.CurrentAuthority) {
 	t.Helper()
@@ -83,12 +95,12 @@ func corpusGuard(t *testing.T) (*toolpolicy.Guard, toolpolicy.Intent, toolpolicy
 	if err != nil {
 		t.Fatal(err)
 	}
-	guard, err := toolpolicy.NewGuard(profile, toolRecording{}, clock{}, toolpolicy.JSONArgumentValidator{})
+	guard, err := toolpolicy.NewGuard(profile, toolRecording{}, clock{}, admittingValidator{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	intent := toolpolicy.Intent{RunID: "run", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor", AllowedTools: []string{"fake.execute", "contract.validate", "artifact.scan"}, AllowedEffects: []string{"none"}, MaximumRisk: "low", DataClasses: []string{"internal"}}
-	current := toolpolicy.CurrentAuthority{WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, AllowedTools: intent.AllowedTools, AllowedEffects: intent.AllowedEffects, MaximumRisk: "low", DataClasses: []string{"internal"}}
+	current := toolpolicy.CurrentAuthority{WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, AllowedTools: intent.AllowedTools, AllowedCapabilities: []string{"fake.execute", "contract.validate", "artifact.scan"}, AllowedEffects: intent.AllowedEffects, MaximumRisk: "low", DataClasses: []string{"internal"}}
 	return guard, intent, current
 }
 func TestPinnedFakeProviderCorpusThresholdsAndAbsoluteGates(t *testing.T) {
@@ -108,7 +120,8 @@ func TestPinnedFakeProviderCorpusThresholdsAndAbsoluteGates(t *testing.T) {
 	guard, intent, current := corpusGuard(t)
 	population, eligible, eligiblePass, toolCorrect, invalid, rejectedInvalid, forbidden, forbiddenDispatch := 0, 0, 0, 0, 0, 0, 0, 0
 	for _, item := range data.Cases {
-		result, err := planner.Plan(context.Background(), request(item.Scenario))
+		planRequest := request(item.Scenario)
+		result, err := planner.Plan(context.Background(), planRequest, requestBudget{planRequest})
 		outcome := result.Outcome
 		proposal := toolpolicy.Proposal{ToolID: result.ProposedTool, Arguments: json.RawMessage(`{}`)}
 		decision, dispatchErr := guard.Evaluate(context.Background(), intent, current, proposal)
@@ -154,7 +167,8 @@ func TestPinnedFakeProviderCorpusThresholdsAndAbsoluteGates(t *testing.T) {
 func TestAcceptedOutputAlwaysStrictSchemaValidAndAttemptsRetained(t *testing.T) {
 	planner := engine(t)
 	for _, scenario := range modelgateway.FakeScenarioNames() {
-		result, err := planner.Plan(context.Background(), request(scenario))
+		planRequest := request(scenario)
+		result, err := planner.Plan(context.Background(), planRequest, requestBudget{planRequest})
 		if err == nil {
 			if _, findings := Decode(result.Attempts[len(result.Attempts)-1].Raw, 32); len(findings) != 0 {
 				t.Fatalf("accepted %s invalid: %v", scenario, findings)
@@ -175,4 +189,97 @@ func TestTypedPlanStrictAdmissionRejectsDuplicateKeysAndUnsafeNumbers(t *testing
 			t.Fatalf("strict admission accepted %s", raw)
 		}
 	}
+}
+
+// exhaustingBudget funds a fixed number of attempts and denies the rest, so
+// bounded repair can be proven to consult the budget before every attempt.
+type exhaustingBudget struct {
+	fundedAttempts int
+	request        modelgateway.InvokeRequest
+	authorized     []Usage
+}
+
+func (b *exhaustingBudget) Authorize(attempt int, used Usage) (AttemptLimits, error) {
+	b.authorized = append(b.authorized, used)
+	if attempt >= b.fundedAttempts {
+		details := problem.New(problem.CodeBudgetDenied, "")
+		details.Detail = "the pinned agent budget is exhausted"
+		return AttemptLimits{}, details
+	}
+	return AttemptLimits{MaximumInputTokens: b.request.MaximumInputTokens, MaximumOutputTokens: b.request.MaximumOutputTokens, MaximumTotalTokens: b.request.MaximumTotalTokens, MaximumCostMicros: b.request.MaximumCostMicros}, nil
+}
+
+func TestPlanAuthorizesEveryAttemptIncludingRepairs(t *testing.T) {
+	planner, err := New(&recordingInvoker{}, 32, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planRequest := request("invalid")
+	budget := &exhaustingBudget{fundedAttempts: 2, request: planRequest}
+	result, err := planner.Plan(context.Background(), planRequest, budget)
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeBudgetDenied) {
+		t.Fatalf("exhausted repair err = %v", err)
+	}
+	if len(budget.authorized) != 3 {
+		t.Fatalf("budget consulted %d times, want once per attempt plus the denied one", len(budget.authorized))
+	}
+	if len(result.Attempts) != 2 {
+		t.Fatalf("attempts made = %d, want exactly the funded two", len(result.Attempts))
+	}
+	// Usage handed to the budget must accumulate across attempts.
+	if budget.authorized[0].ModelCalls != 0 || budget.authorized[1].ModelCalls != 1 || budget.authorized[2].ModelCalls != 2 {
+		t.Fatalf("accumulated usage = %+v", budget.authorized)
+	}
+}
+
+func TestPlanRequiresAnAttemptBudget(t *testing.T) {
+	planner := engine(t)
+	if _, err := planner.Plan(context.Background(), request("valid"), nil); err == nil {
+		t.Fatal("planning without a budget was accepted")
+	}
+}
+
+// Each attempt carries its own deterministic idempotency identity derived
+// from the caller's durable operation key.
+func TestPlanDerivesPerAttemptIdempotencyIdentities(t *testing.T) {
+	recording := &recordingInvoker{}
+	planner, err := New(recording, 32, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	planRequest := request("invalid")
+	planRequest.IdempotencyKey = "run.plan:g1:turn-0003"
+	if _, err := planner.Plan(context.Background(), planRequest, requestBudget{planRequest}); err == nil {
+		t.Fatal("an always-invalid plan must be rejected")
+	}
+	want := []string{
+		"run.plan:g1:turn-0003:plan-attempt-00",
+		"run.plan:g1:turn-0003:plan-attempt-01",
+		"run.plan:g1:turn-0003:plan-attempt-02",
+	}
+	if len(recording.keys) != len(want) {
+		t.Fatalf("attempt keys = %v", recording.keys)
+	}
+	for index, key := range want {
+		if recording.keys[index] != key {
+			t.Fatalf("attempt %d key = %q, want %q", index, recording.keys[index], key)
+		}
+	}
+}
+
+type recordingInvoker struct{ keys []string }
+
+// Invoke mirrors the gateway: it authorizes the physical attempt through the
+// request budget before performing it, so an unaffordable attempt never
+// reaches a provider and never bills.
+func (r *recordingInvoker) Invoke(_ context.Context, request modelgateway.InvokeRequest) (modelgateway.AdapterResponse, modelgateway.InvocationRecord, error) {
+	if request.Budget == nil {
+		return modelgateway.AdapterResponse{}, modelgateway.InvocationRecord{}, fmt.Errorf("recording invoker requires an attempt budget")
+	}
+	if _, err := request.Budget.Authorize(1, Usage{}); err != nil {
+		return modelgateway.AdapterResponse{}, modelgateway.InvocationRecord{}, err
+	}
+	r.keys = append(r.keys, request.IdempotencyKey)
+	return modelgateway.AdapterResponse{Output: []byte(`{"kind":"NotAPlan"}`)}, modelgateway.InvocationRecord{PhysicalAttempts: []modelgateway.AttemptID{"attempt.recording"}, InputTokens: 1, OutputTokens: 1, CostMicros: 1}, nil
 }

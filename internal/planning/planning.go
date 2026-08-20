@@ -47,6 +47,33 @@ type Result struct {
 	ProposedTool string
 }
 type Stats struct{ RawAttempts, RawValid, RepairAttempts, RepairValid, Accepted, Rejected int }
+
+// Usage, AttemptLimits, and AttemptBudget are the gateway's budget contract.
+// Planning and the gateway share one budget port so a single implementation
+// governs planning attempts and the physical provider attempts inside them.
+type Usage = modelgateway.Usage
+type AttemptLimits = modelgateway.AttemptLimits
+type AttemptBudget = modelgateway.AttemptBudget
+
+// invocationBudget presents one planning attempt's budget to the gateway.
+// The gateway authorizes each physical attempt through it, reporting that
+// attempt's consumption, and the wrapper adds the consumption of the earlier
+// planning attempts before consulting the pinned budget.
+type invocationBudget struct {
+	base        AttemptBudget
+	planAttempt int
+	prior       Usage
+}
+
+func (b invocationBudget) Authorize(_ int, used Usage) (AttemptLimits, error) {
+	return b.base.Authorize(b.planAttempt, Usage{
+		ModelCalls:   b.prior.ModelCalls + used.ModelCalls,
+		InputTokens:  b.prior.InputTokens + used.InputTokens,
+		OutputTokens: b.prior.OutputTokens + used.OutputTokens,
+		CostMicros:   b.prior.CostMicros + used.CostMicros,
+	})
+}
+
 type Invoker interface {
 	Invoke(context.Context, modelgateway.InvokeRequest) (modelgateway.AdapterResponse, modelgateway.InvocationRecord, error)
 }
@@ -63,17 +90,41 @@ func New(invoker Invoker, maximumSteps, maximumRepairs int) (*Engine, error) {
 	}
 	return &Engine{invoker: invoker, maximumSteps: maximumSteps, maximumRepairs: maximumRepairs}, nil
 }
-func (e *Engine) Plan(ctx context.Context, request modelgateway.InvokeRequest) (Result, error) {
+
+// Plan resolves one typed plan through the raw attempt and bounded repair.
+// Every attempt is authorized by the budget first and carries its own
+// deterministic idempotency identity derived from the caller's durable
+// operation key.
+func (e *Engine) Plan(ctx context.Context, request modelgateway.InvokeRequest, budget AttemptBudget) (Result, error) {
 	result := Result{}
+	if budget == nil {
+		return result, fmt.Errorf("planning requires an attempt budget")
+	}
 	scenario := request.Scenario
+	operationKey := request.IdempotencyKey
 	originalContext := append([]byte(nil), request.Context...)
+	used := Usage{}
 	for attempt := 0; attempt <= e.maximumRepairs; attempt++ {
+		// The budget governs the attempt, and it governs every physical
+		// provider attempt inside it: the gateway re-authorizes through this
+		// wrapper before each retry and reports what each one consumed.
+		request.Budget = invocationBudget{base: budget, planAttempt: attempt, prior: used}
+		request.IdempotencyKey = fmt.Sprintf("%s:plan-attempt-%02d", operationKey, attempt)
 		if attempt > 0 {
 			request.Scenario = scenario + "-repair"
 			request.Context = append(append([]byte(nil), originalContext...), []byte("\n[system repair] Return exactly one strict TypedPlan JSON object; do not add authority fields or prose.")...)
 		}
 		response, record, err := e.invoker.Invoke(ctx, request)
+		// A failed invocation may still have consumed provider budget, so it
+		// is recorded and counted before the error propagates.
+		used = addUsage(used, record)
 		if err != nil {
+			// An invocation that never reached a provider — an attempt the
+			// budget refused to authorize, for instance — is not an attempt
+			// made, and is not recorded as one.
+			if len(record.PhysicalAttempts) != 0 {
+				result.Attempts = append(result.Attempts, Attempt{Number: attempt + 1, Valid: false, Findings: []Finding{{"PLAN_INVOCATION", "provider-invocation", "/", "/provider"}}, Invocation: record})
+			}
 			return result, err
 		}
 		plan, findings := Decode(response.Output, e.maximumSteps)
@@ -118,6 +169,18 @@ func (e *Engine) Plan(ctx context.Context, request modelgateway.InvokeRequest) (
 	return result, details
 }
 func (e *Engine) Stats() Stats { e.lock.Lock(); defer e.lock.Unlock(); return e.stats }
+
+// addUsage folds one recorded invocation into the running attempt usage.
+// Every physical provider attempt counts as one model call, so a planning
+// attempt that took three transport retries is accounted as three.
+func addUsage(u Usage, record modelgateway.InvocationRecord) Usage {
+	return Usage{
+		ModelCalls:   u.ModelCalls + int64(len(record.PhysicalAttempts)),
+		InputTokens:  u.InputTokens + record.InputTokens,
+		OutputTokens: u.OutputTokens + record.OutputTokens,
+		CostMicros:   u.CostMicros + record.CostMicros,
+	}
+}
 func Decode(raw []byte, maximumSteps int) (Plan, []Finding) {
 	if len(raw) == 0 || len(raw) > 4096 {
 		return Plan{}, []Finding{{"PLAN_SIZE", "typed-plan-validation", "/", "/maximumSerializedBytes"}}

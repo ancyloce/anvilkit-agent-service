@@ -85,9 +85,10 @@ func (s *RestoreEvidence) RecordRestoreStage(ctx context.Context, record recover
 	if err != nil {
 		return err
 	}
-	if record.Outcome == "completed" {
+	switch record.Outcome {
+	case "completed":
 		_, err = tx.Exec(ctx, `UPDATE agent_workflow.restore_drills SET state='reconciling' WHERE drill_id=$1 AND state='isolated'`, record.DrillID)
-	} else if record.Outcome == "failed" {
+	case "failed":
 		_, err = tx.Exec(ctx, `UPDATE agent_workflow.restore_drills SET state='failed',failure_stage=$2,failure_code='stage-failed',completed_at=$3 WHERE drill_id=$1`, record.DrillID, record.Stage, record.At)
 	}
 	if err != nil {

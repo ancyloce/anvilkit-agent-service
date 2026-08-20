@@ -1,8 +1,11 @@
 package sloevidence
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"reflect"
 	"strings"
@@ -24,8 +27,13 @@ func TestEveryBindingSLOHasPinnedUnapprovedDraftEvidence(t *testing.T) {
 	}
 }
 
+// The dashboard and alert artifacts the service is accountable for are kept
+// as tracked test data inside this repository, so the invariant is verifiable
+// from a clean checkout of the service alone. When the whole workspace is
+// present the platform copies are additionally compared byte for byte, so the
+// two can never drift apart unnoticed.
 func TestDashboardAndAlertArtifactsAreCompleteDraftsWithoutPayloads(t *testing.T) {
-	dashboard, err := os.ReadFile("../../../../infra/dashboards/agent-service-slo.json")
+	dashboard, err := os.ReadFile("testdata/dashboard.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +53,7 @@ func TestDashboardAndAlertArtifactsAreCompleteDraftsWithoutPayloads(t *testing.T
 			t.Fatalf("dashboard panel drift index=%d panel=%#v definition=%#v", index, panel, definition)
 		}
 	}
-	rules, err := os.ReadFile("../../../../infra/alerts/agent-service-rules.yaml")
+	rules, err := os.ReadFile("testdata/alert-rules.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +67,26 @@ func TestDashboardAndAlertArtifactsAreCompleteDraftsWithoutPayloads(t *testing.T
 		if strings.Contains(ruleText, prohibited) || strings.Contains(strings.ToLower(string(dashboard)), prohibited) {
 			t.Fatalf("prohibited field %s in dashboard/alerts", prohibited)
 		}
+	}
+	assertPlatformCopyMatches(t, "../../../../infra/dashboards/agent-service-slo.json", dashboard)
+	assertPlatformCopyMatches(t, "../../../../infra/alerts/agent-service-rules.yaml", rules)
+}
+
+// assertPlatformCopyMatches compares the tracked service artifact with the
+// deployed platform copy when the surrounding workspace is checked out. A
+// missing platform tree is not a failure — the service must verify from its
+// own checkout — but a present, different copy is.
+func assertPlatformCopyMatches(t *testing.T, path string, tracked []byte) {
+	t.Helper()
+	deployed, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(bytes.ReplaceAll(deployed, []byte("\r\n"), []byte("\n")), bytes.ReplaceAll(tracked, []byte("\r\n"), []byte("\n"))) {
+		t.Fatalf("the deployed copy of %s has drifted from the tracked service artifact", path)
 	}
 }
 
