@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/config"
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
@@ -56,40 +55,38 @@ func TestApplicationClockFailsClosedAfterAuthoritativeTimeOutage(t *testing.T) {
 	}
 }
 
-func TestRunAuthorityFileIsStrictAndContractValid(t *testing.T) {
+func TestRunAuthoritySeedIsStrictAndContractValid(t *testing.T) {
 	guard, err := contractguard.NewGuard("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "authority.json")
 	policy := `{"policyId":"policy.synthetic","version":"v1","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
-	raw := `{"definition":{"definitionId":"definition.synthetic.001","definitionDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"contractBomReference":{"repository":"anvilkit/contracts","bomDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ociManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidenceManifestDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"policy":` + policy + `,"budget":{"kind":"AgentBudget","modelLimits":{"maximumCalls":10,"maximumConcurrentCalls":2},"tokenLimits":{"inputTokens":4096,"outputTokens":2048,"totalTokens":6144},"workerLimits":{"maximumAttempts":4,"maximumDurationMilliseconds":60000},"gpuLimits":{"maximumGpuMilliseconds":0},"currencyLimits":{"maximumCost":{"amount":"1000","currency":"USD"},"reservedCost":{"amount":"500","currency":"USD"}},"reservationId":"reservation.synthetic.001","exceedBehavior":"refuse","policy":` + policy + `}}`
+	material := `"definition":{"definitionId":"definition.synthetic.001","definitionDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"contractBomReference":{"repository":"anvilkit/contracts","bomDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ociManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidenceManifestDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"policy":` + policy + `,"budget":{"kind":"AgentBudget","modelLimits":{"maximumCalls":10,"maximumConcurrentCalls":2},"tokenLimits":{"inputTokens":4096,"outputTokens":2048,"totalTokens":6144},"workerLimits":{"maximumAttempts":4,"maximumDurationMilliseconds":60000},"gpuLimits":{"maximumGpuMilliseconds":0},"currencyLimits":{"maximumCost":{"amount":"1000","currency":"USD"},"reservedCost":{"amount":"500","currency":"USD"}},"reservationId":"reservation.synthetic.001","exceedBehavior":"refuse","policy":` + policy + `}`
+	raw := `{"scope":{"workspaceId":"workspace","projectId":"project"},"subjects":[{"actorId":"actor","role":"agent-actor"}],` + material + `}`
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadRunAuthority(path, guard, testGrants()); err != nil {
-		t.Fatal(err)
-	}
-	provider, err := newFileRunAuthority(path, guard, testGrants())
+	seed, err := loadAuthoritySeed(path, guard)
 	if err != nil {
 		t.Fatal(err)
 	}
-	initial, err := provider.Current(context.Background(), authority.Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"})
-	if err != nil {
+	if seed.Scope.WorkspaceID != "workspace" || seed.Scope.ProjectID != "project" || len(seed.Subjects) != 1 || seed.Subjects[0].ActorID != "actor" {
+		t.Fatalf("seed scope and subjects were not carried: %#v", seed)
+	}
+	// A document without its scope binds no authority at all.
+	unscoped := `{` + material + `}`
+	if err := os.WriteFile(path, []byte(unscoped), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rotatedRaw := strings.ReplaceAll(raw, "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
-	if err := os.WriteFile(path, []byte(rotatedRaw), 0o600); err != nil {
-		t.Fatal(err)
+	if _, err := loadAuthoritySeed(path, guard); err == nil {
+		t.Fatal("an unscoped authority document was accepted")
 	}
-	rotated, err := provider.Current(context.Background(), authority.Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"})
-	if err != nil || string(rotated.Policy) == string(initial.Policy) {
-		t.Fatalf("authority provider did not reload rotated policy: %v", err)
-	}
+	// An unknown server-authority field is structurally rejected.
 	if err := os.WriteFile(path, []byte(raw[:len(raw)-1]+`,"actorId":"attacker"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadRunAuthority(path, guard, testGrants()); err == nil {
+	if _, err := loadAuthoritySeed(path, guard); err == nil {
 		t.Fatal("unknown server-authority field was accepted")
 	}
 }
@@ -136,16 +133,5 @@ func TestOpenPersistencePoolsRejectsSplitPlatformDatabases(t *testing.T) {
 	_, err := openPersistencePools(context.Background(), cfg)
 	if err == nil || !strings.Contains(err.Error(), "same Platform Postgres database") {
 		t.Fatalf("split database topology was accepted: %v", err)
-	}
-}
-
-// testGrants is the dispatch grant set the single authority source serves
-// alongside the pinned run material.
-func testGrants() authority.Grants {
-	return authority.Grants{
-		AllowedTools:   []string{"anvilkit.tool.context-echo"},
-		AllowedEffects: []string{"read"},
-		MaximumRisk:    "low",
-		DataClasses:    []string{"public", "internal"},
 	}
 }

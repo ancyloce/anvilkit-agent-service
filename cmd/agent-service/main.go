@@ -24,12 +24,23 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent/runner"
 	"github.com/ancyloce/anvilkit-agent-service/internal/api"
+	"github.com/ancyloce/anvilkit-agent-service/internal/applyauth"
+	applyauthpg "github.com/ancyloce/anvilkit-agent-service/internal/applyauth/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/artifacts"
+	artifactspg "github.com/ancyloce/anvilkit-agent-service/internal/artifacts/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
 	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
+	authoritypg "github.com/ancyloce/anvilkit-agent-service/internal/authority/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/budget"
+	budgetpg "github.com/ancyloce/anvilkit-agent-service/internal/budget/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/cancellation"
 	"github.com/ancyloce/anvilkit-agent-service/internal/config"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler"
+	contextpg "github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/contractclient"
+	contractpg "github.com/ancyloce/anvilkit-agent-service/internal/contractclient/postgres"
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
+	domaincommitpg "github.com/ancyloce/anvilkit-agent-service/internal/domaincommit/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	eventpg "github.com/ancyloce/anvilkit-agent-service/internal/events/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/execution"
@@ -46,13 +57,18 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/queue"
 	queuepg "github.com/ancyloce/anvilkit-agent-service/internal/queue/postgres"
+	recoverypg "github.com/ancyloce/anvilkit-agent-service/internal/recovery/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runapp"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
 	runpg "github.com/ancyloce/anvilkit-agent-service/internal/runs/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/scheduler"
+	schedulerpg "github.com/ancyloce/anvilkit-agent-service/internal/scheduler/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/securityaudit"
 	"github.com/ancyloce/anvilkit-agent-service/internal/telemetry"
 	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
 	toolspg "github.com/ancyloce/anvilkit-agent-service/internal/tools/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/usage"
+	usagepg "github.com/ancyloce/anvilkit-agent-service/internal/usage/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
 	workflowdbos "github.com/ancyloce/anvilkit-agent-service/internal/workflow/dbos"
 )
@@ -303,6 +319,12 @@ type runtimeCore struct {
 	guard            *contractguard.Guard
 	clock            applicationTime
 	eventBounds      events.Bounds
+	artifacts        *artifacts.Service
+	registry         *agent.Registry
+	deltas           *events.DeltaBroker
+	// executorHandle carries the terminal-budget settlement port into services
+	// that are composed before the executor exists.
+	executorHandle *executorHandle
 	// trust revalidates the catalog attestation. It is nil only where no
 	// attestation is configured at all, which production configuration
 	// rejects before this point.
@@ -313,72 +335,123 @@ type runtimeCore struct {
 // implementation is explicitly selected; nothing falls back to a controlled
 // fake implicitly, and production configuration rejects controlled values.
 func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.Pools, guard *contractguard.Guard, receipts journal.Store, clock applicationTime, handle *runtimeHandle) (*runtimeCore, error) {
+	core, executionConfig, err := buildRuntimeDependencies(ctx, cfg, pools, guard, receipts, clock, handle)
+	if err != nil {
+		return nil, err
+	}
+	executor, err := execution.New(executionConfig)
+	if err != nil {
+		return nil, err
+	}
+	core.setExecutor(executor)
+	return core, nil
+}
+
+// setExecutor publishes the composed executor to the core and to every port
+// that was handed the deferred handle before it existed.
+func (c *runtimeCore) setExecutor(executor *execution.Executor) {
+	c.executor = executor
+	c.executorHandle.set(executor)
+}
+
+// executorHandle defers terminal-budget settlement to the execution pipeline,
+// which is constructed after the lifecycle services that need it. Settling
+// through an unresolved handle fails closed rather than skipping the
+// settlement.
+type executorHandle struct{ inner *execution.Executor }
+
+func (h *executorHandle) set(executor *execution.Executor) { h.inner = executor }
+
+func (h *executorHandle) SettleRunBudget(ctx context.Context, snapshot runs.Snapshot, release bool) error {
+	if h.inner == nil {
+		return fmt.Errorf("terminal budget settlement is unavailable: the execution pipeline is not composed")
+	}
+	return h.inner.SettleRunBudget(ctx, snapshot, release)
+}
+
+var _ interrupts.TerminalBudget = (*executorHandle)(nil)
+
+// buildRuntimeDependencies assembles every durable dependency of the real
+// execution pipeline and returns the executor configuration unbuilt. It is
+// the one composition path: buildRuntimeCore constructs the executor from it
+// directly, and the restart-verification harness constructs it after wrapping
+// exact ports with crash injection — so what restart proofs exercise is the
+// production composition itself, never a parallel wiring.
+func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools persistence.Pools, guard *contractguard.Guard, receipts journal.Store, clock applicationTime, handle *runtimeHandle) (*runtimeCore, execution.Config, error) {
 	idempotencyStore, err := idempotency.New(pools.Authority, idempotency.Config{Retention: 30 * 24 * time.Hour, MinimumLifetime: 30 * 24 * time.Hour})
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
 	eventBounds := events.Bounds{MaximumBytes: cfg.Limits.EventBytes, MaximumFields: 32, MaximumFieldBytes: 512}
-	runStore := runpg.NewConfigured(pools.Authority, idempotencyStore, eventBounds, nil)
+	runStore := runpg.NewConfigured(pools.Authority, idempotencyStore, eventBounds, guard, nil)
 	toolExecutor, grants, err := selectToolImplementation(cfg)
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
 	// One current-authority source serves the whole runtime: run creation,
-	// Manager turns, the Tool Guard, delegation, retry, approval, and commit
-	// all re-read this value and no other.
+	// Manager turns, the Tool Guard, delegation, retry, approval, artifact
+	// access, and commit all re-read this value and no other. The configured
+	// authority document seeds the durable scoped source — material, grants,
+	// and subjects per workspace/project — and every later read observes the
+	// durable activation and revocation state. With no document configured,
+	// the static empty source fails closed on every read.
 	var authoritySource authority.Source = authority.NewStatic(authority.Current{Grants: grants})
+	var bomAuthority execution.BOMAuthority = execution.StaticBOMAuthority{}
 	if cfg.RunAuthorityFile != "" {
-		authoritySource, err = newFileRunAuthority(cfg.RunAuthorityFile, guard, grants)
+		durableAuthority, err := seedDurableAuthority(ctx, cfg.RunAuthorityFile, guard, grants, pools.Authority, clock)
 		if err != nil {
-			return nil, err
+			return nil, execution.Config{}, err
 		}
+		authoritySource = durableAuthority
+		bomAuthority = durableAuthority
 	}
-	interruptStore, err := interruptpg.New(pools.Authority, idempotencyStore)
+	interruptStore, err := interruptpg.New(pools.Authority, idempotencyStore, guard)
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
 	interruptAuthority, err := interrupts.NewCurrentAuthority(interruptStore, authoritySource)
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
 	childBudget, err := interruptpg.NewChildBudgetReservation(pools.Control, cfg.BudgetUnits, cfg.BudgetHeadroomMicros, cfg.RunTimeout)
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
 	// Cancellation is only safe once every external effect the run caused is
 	// known to be settled, so the reconciler reads the authoritative provider,
 	// worker, tool, artifact, and domain-effect records.
 	cancellationReconciler, err := cancellation.New(cancellation.Pools{Control: pools.Control, Workflow: pools.Workflow, Artifacts: pools.Artifacts, Events: pools.Events})
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
-	interruptService, err := interrupts.NewService(interruptStore, interrupts.BoundSchemaValidator{}, interruptAuthority, runtimeSignals{handle}, workflowLeaseRevoker{pools.Workflow}, cancellationReconciler, childBudget, receipts, clock, runapp.RandomIDs{}, interrupts.Limits{ChildDepth: cfg.Limits.ChildDepth, ChildFanout: cfg.Limits.ChildFanout})
+	settlementHandle := &executorHandle{}
+	interruptService, err := interrupts.NewService(interruptStore, interrupts.BoundSchemaValidator{}, interruptAuthority, runtimeSignals{handle}, workflowLeaseRevoker{pools.Workflow}, cancellationReconciler, childBudget, settlementHandle, receipts, clock, runapp.RandomIDs{}, interrupts.Limits{ChildDepth: cfg.Limits.ChildDepth, ChildFanout: cfg.Limits.ChildFanout})
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
 
 	definitionSchema, err := os.ReadFile(filepath.Join(cfg.ContractRoot, "contracts", "agent", "schemas", "agent-definition.schema.json"))
 	if err != nil {
-		return nil, fmt.Errorf("read pinned agent definition schema: %w", err)
+		return nil, execution.Config{}, fmt.Errorf("read pinned agent definition schema: %w", err)
 	}
 	toolSchema, err := os.ReadFile(filepath.Join(cfg.ContractRoot, "contracts", "agent", "schemas", "tool-definition.schema.json"))
 	if err != nil {
-		return nil, fmt.Errorf("read pinned tool definition schema: %w", err)
+		return nil, execution.Config{}, fmt.Errorf("read pinned tool definition schema: %w", err)
 	}
 	lockBytes, err := os.ReadFile(filepath.Join(cfg.ContractRoot, "contracts", "agent", "lock", "contracts.lock.json"))
 	if err != nil {
-		return nil, fmt.Errorf("read pinned canonical lock: %w", err)
+		return nil, execution.Config{}, fmt.Errorf("read pinned canonical lock: %w", err)
 	}
 	schemaValidator, err := contractvalidator.New(cfg.ContractRoot)
 	if err != nil {
-		return nil, fmt.Errorf("load pinned runtime validator: %w", err)
+		return nil, execution.Config{}, fmt.Errorf("load pinned runtime validator: %w", err)
 	}
 	// The approved definition catalog is authenticated against the contract
 	// identity this service verified at startup, so a definition set produced
 	// against a different canonical profile or lock cannot be executed.
 	pinnedIdentity, err := contractguard.PinnedIdentity(cfg.ContractRoot)
 	if err != nil {
-		return nil, fmt.Errorf("resolve pinned contract identity: %w", err)
+		return nil, execution.Config{}, fmt.Errorf("resolve pinned contract identity: %w", err)
 	}
 	registry, err := agent.NewRegistry(ctx, agent.RegistryConfig{
 		Source:              agent.EmbeddedCatalog{},
@@ -391,34 +464,68 @@ func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.
 		},
 	})
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
 	trust, err := definitionTrust(cfg, registry.CatalogDigest())
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
 	if trust != nil {
 		if err := trust.Verify(clock.Now()); err != nil {
-			return nil, err
+			return nil, execution.Config{}, err
 		}
 	}
 	pinnedValidator, err := execution.NewPinnedSchemaValidator(cfg.ContractRoot)
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
 
 	modelStack, err := selectModelImplementation(cfg, pools, clock, registry)
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
-	domainPort, artifactPort, commitAuthority, err := selectDomainImplementation(cfg)
+	contractsValidator, err := selectContractRuntime(cfg, pinnedValidator, registry, digestOfBytes(lockBytes), pools, clock, bomAuthority)
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
+	// The apply-authorization signing material also verifies tokens at the
+	// controlled domain boundary, so the keyring is built once and shared.
+	var signingKeys applyauth.SigningPort
+	if cfg.SigningKey.Present() {
+		ring, keyErr := applyauth.NewSeededKeyRing([]byte(cfg.SigningKey.RedactionValue()))
+		if keyErr != nil {
+			return nil, execution.Config{}, fmt.Errorf("derive apply-authorization signing key: %w", keyErr)
+		}
+		signingKeys = ring
+	}
+	domainPort, err := selectDomainImplementation(cfg, pools, signingKeys, clock)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	artifactPort, artifactService, err := buildArtifactPort(cfg, pools, authoritySource, clock)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	commitAuthority, err := buildCommitAuthority(cfg, pools, guard, receipts, clock, runStore, interruptStore, authoritySource, artifactPort, signingKeys)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	if pools.Control == nil {
+		return nil, execution.Config{}, fmt.Errorf("the domain submission journal requires the control database")
+	}
+	submissions, err := domaincommitpg.New(pools.Control)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	evidenceStore, err := eventpg.NewEvidenceStore(pools.Authority, clockOf{clock}.Now)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	deltaBroker := events.NewDeltaBroker()
 
 	toolArguments, err := execution.NewPinnedToolArgumentValidator()
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
 	// The running tool profile is derived from the catalog's signed
 	// ToolDefinitions, so the capability, side-effect class, risk, approval
@@ -426,27 +533,40 @@ func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.
 	// ones the approved catalog attests.
 	toolProfile, err := execution.NewApprovedToolProfile(registry.ToolBindings(), digestOfBytes(toolSchema), registry.CatalogDigest(), toolArguments)
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
 	toolMaterial, err := execution.NewToolMaterial(toolProfile, toolArguments)
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
-	var toolRecorder tools.Recorder = &execution.MemoryToolRecorder{}
-	if pools.Control != nil {
-		toolRecorder, err = toolspg.New(pools.Control)
-		if err != nil {
-			return nil, err
-		}
+	fencedTools, err := selectWorkerImplementation(ctx, cfg, pools, clock, authoritySource, toolMaterial, toolExecutor, digestOfBytes(lockBytes))
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	// The guard's decisions and the pinned running tool profile are durable
+	// state, never process memory; the authority role spans both stores.
+	if pools.Authority == nil {
+		return nil, execution.Config{}, fmt.Errorf("the tool guard requires the authority database for durable decisions")
+	}
+	toolRecorder, err := toolspg.New(pools.Authority)
+	if err != nil {
+		return nil, execution.Config{}, err
 	}
 	toolGuard, err := tools.NewGuard(toolProfile, toolRecorder, clockOf{clock}, toolArguments)
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
 
+	if pools.Evaluation == nil {
+		return nil, execution.Config{}, fmt.Errorf("the context compiler requires the evaluation database for durable compilation evidence")
+	}
+	contextRecorder, err := contextpg.New(pools.Evaluation)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
 	agentRunner, err := runner.New(runner.Config{
 		Registry:  registry,
-		Compiler:  contextcompiler.New([]string{cfg.SigningKey.RedactionValue(), cfg.EncryptionKey.RedactionValue()}),
+		Compiler:  recordingCompiler{compiler: contextcompiler.New([]string{cfg.SigningKey.RedactionValue(), cfg.EncryptionKey.RedactionValue()}), recorder: contextRecorder},
 		Selector:  modelStack,
 		Invoker:   modelStack,
 		Guard:     toolGuard,
@@ -463,9 +583,28 @@ func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.
 		},
 	})
 	if err != nil {
-		return nil, err
+		return nil, execution.Config{}, err
 	}
-	executor, err := execution.New(execution.Config{
+	// The Platform budget controller is durable end to end: its reservation
+	// ledger and observation record live in the control schema, and its
+	// generation authority is the run aggregate's execution generation — so a
+	// restarted process fences on exactly the state the previous one wrote.
+	budgetLedger, err := budgetpg.NewLedger(pools.Authority, clockOf{clock}.Now)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	budgetGenerations, err := budgetpg.NewRunGenerations(pools.Authority)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	budgetController, err := budget.New(budgetLedger, budgetGenerations, budgetExposure{}, clockOf{clock}, budget.HeadroomPolicy{
+		MaximumReservedMicros: cfg.BudgetMaxReservedMicros,
+		ReviewAtBasisPoints:   cfg.BudgetReviewBasisPoints,
+	})
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	executionConfig := execution.Config{
 		Registry:          registry,
 		Runner:            agentRunner,
 		Runs:              runStore,
@@ -473,22 +612,28 @@ func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.
 		InterruptReader:   interruptStore,
 		InterruptExpirer:  interruptStore,
 		Authority:         authoritySource,
-		Tools:             toolExecutor,
+		Tools:             fencedTools,
 		ToolMaterial:      toolMaterial,
 		Artifacts:         artifactPort,
 		Domain:            domainPort,
+		Submissions:       submissions,
 		CommitAuthority:   commitAuthority,
+		Contracts:         contractsValidator,
+		Evidence:          evidenceStore,
+		Deltas:            deltaBroker,
 		Decisions:         receipts,
+		Budget:            budgetController,
 		Clock:             clockOf{clock},
 		InputTTL:          cfg.InputRequestTTL,
 		ApprovalTTL:       cfg.ApprovalRequestTTL,
+		BudgetTTL:         cfg.RunTimeout,
 		TurnLimit:         cfg.TurnLimit,
 		ValidatorIdentity: digestOfBytes(lockBytes),
-	})
-	if err != nil {
-		return nil, err
+		ReconcileLimit:    cfg.DomainReconcileLimit,
+		DomainRetryBase:   cfg.DomainRetryBase,
+		DomainRetryCap:    cfg.DomainRetryCap,
 	}
-	return &runtimeCore{executor: executor, runStore: runStore, interruptStore: interruptStore, interruptService: interruptService, idempotency: idempotencyStore, authority: authoritySource, receipts: receipts, guard: guard, clock: clock, eventBounds: eventBounds, trust: trust}, nil
+	return &runtimeCore{runStore: runStore, interruptStore: interruptStore, interruptService: interruptService, idempotency: idempotencyStore, authority: authoritySource, receipts: receipts, guard: guard, clock: clock, eventBounds: eventBounds, artifacts: artifactService, registry: registry, deltas: deltaBroker, trust: trust, executorHandle: settlementHandle}, executionConfig, nil
 }
 
 // selectModelImplementation returns the explicitly configured model stack.
@@ -507,11 +652,18 @@ func selectModelImplementation(cfg config.Config, pools persistence.Pools, clock
 		if err != nil {
 			return nil, err
 		}
-		adapter, err := execution.NewScriptedAdapter(ledger, execution.PlanStep("agent.final", map[string]json.RawMessage{"candidate": execution.ControlledCandidate(), "summary": json.RawMessage(`"controlled candidate"`)}))
+		script, err := controlledModelScript(cfg.ControlledModelScript)
 		if err != nil {
 			return nil, err
 		}
-		recorder, err := modelpg.NewInvocationRecorder(pools.Workflow)
+		adapter, err := execution.NewScriptedAdapter(ledger, script...)
+		if err != nil {
+			return nil, err
+		}
+		if pools.Authority == nil {
+			return nil, fmt.Errorf("the model invocation recorder requires the authority database, whose role spans the invocation and policy-snapshot stores")
+		}
+		recorder, err := modelpg.NewInvocationRecorder(pools.Authority)
 		if err != nil {
 			return nil, err
 		}
@@ -521,6 +673,26 @@ func selectModelImplementation(cfg config.Config, pools persistence.Pools, clock
 	default:
 		return nil, fmt.Errorf("model implementation %q is not available", cfg.ModelImplementation)
 	}
+}
+
+// controlledModelScript renders the configured deterministic script the
+// controlled adapter plays. Every step is a typed plan; the vocabulary is
+// closed so a script cannot smuggle an unattested action.
+func controlledModelScript(steps []string) ([][]byte, error) {
+	script := make([][]byte, 0, len(steps))
+	for _, step := range steps {
+		switch step {
+		case "final":
+			script = append(script, execution.PlanStep("agent.final", map[string]json.RawMessage{"candidate": execution.ControlledCandidate(), "summary": json.RawMessage(`"controlled candidate"`)}))
+		case "need-input":
+			script = append(script, execution.PlanStep("agent.need-input", map[string]json.RawMessage{"question": json.RawMessage(`"controlled input request"`)}))
+		case "tool-echo":
+			script = append(script, execution.PlanStep("anvilkit.tool.context-echo", map[string]json.RawMessage{"query": json.RawMessage(`"controlled context"`)}))
+		default:
+			return nil, fmt.Errorf("controlled model script step %q is not available", step)
+		}
+	}
+	return script, nil
 }
 
 // selectToolImplementation returns the explicitly configured tool executor
@@ -545,15 +717,202 @@ func selectToolImplementation(cfg config.Config) (execution.ToolExecutor, author
 	}
 }
 
-func selectDomainImplementation(cfg config.Config) (execution.DomainPort, execution.ArtifactPort, execution.CommitAuthority, error) {
+// selectDomainImplementation returns the explicitly configured authoritative
+// domain owner. The controlled owner is strict: it verifies the complete
+// signed apply authorization — signature, key state, audience, expiry, and
+// every binding — and redeems it atomically in its durable redemption record,
+// so a replay in any process returns the recorded outcome instead of a second
+// effect. Production configuration rejects it; the real Pagix owner performs
+// the same verification on its side of the boundary.
+func selectDomainImplementation(cfg config.Config, pools persistence.Pools, keys applyauth.SigningPort, clock applicationTime) (execution.DomainPort, error) {
 	switch cfg.DomainImplementation {
 	case execution.ControlledImplementation:
-		return execution.NewControlledDomainPort(execution.DomainConfirmed), execution.NewControlledArtifactPort(), &execution.ControlledCommitAuthority{}, nil
+		if keys == nil {
+			return nil, fmt.Errorf("the controlled domain owner requires the signing key material to verify apply authorizations")
+		}
+		if pools.Control == nil {
+			return nil, fmt.Errorf("the controlled domain owner requires the control database for its durable redemption record")
+		}
+		redemptions, err := executionpg.NewRedemptionStore(pools.Control)
+		if err != nil {
+			return nil, err
+		}
+		return execution.NewVerifyingDomainPort(execution.DomainConfirmed, keys, redemptions, clockOf{clock})
 	case "":
-		return nil, nil, nil, fmt.Errorf("ANVILKIT_DOMAIN_IMPLEMENTATION must be explicitly selected; no domain integration is assumed")
+		return nil, fmt.Errorf("ANVILKIT_DOMAIN_IMPLEMENTATION must be explicitly selected; no domain integration is assumed")
 	default:
-		return nil, nil, nil, fmt.Errorf("domain implementation %q is not available", cfg.DomainImplementation)
+		return nil, fmt.Errorf("domain implementation %q is not available", cfg.DomainImplementation)
 	}
+}
+
+// buildArtifactPort composes the real artifact module. Artifacts are a
+// first-party Agent Service capability, not a selectable integration: every
+// topology stores immutable bytes durably, enforces the lifecycle CAS, audits
+// every grant, and answers governed-effect eligibility from the finalized
+// state. There is no memory-only mode.
+func buildArtifactPort(cfg config.Config, pools persistence.Pools, authoritySource authority.Source, clock applicationTime) (execution.ArtifactPort, *artifacts.Service, error) {
+	if pools.Artifacts == nil {
+		return nil, nil, fmt.Errorf("the artifact module requires the artifacts database for its durable metadata, objects, and grant audit")
+	}
+	if !cfg.EncryptionKey.Present() {
+		return nil, nil, fmt.Errorf("ANVILKIT_ENCRYPTION_KEY is required: artifact read grants have no unsigned mode")
+	}
+	store, err := artifactspg.NewStore(pools.Artifacts)
+	if err != nil {
+		return nil, nil, err
+	}
+	objects, err := artifactspg.NewObjects(pools.Artifacts)
+	if err != nil {
+		return nil, nil, err
+	}
+	reader, err := artifactspg.NewHMACReader(pools.Artifacts, []byte(cfg.EncryptionKey.RedactionValue()))
+	if err != nil {
+		return nil, nil, err
+	}
+	service, err := artifacts.New(store, objects, reader, authoritySource, cfg.ArtifactPendingTTL, cfg.ArtifactGrantTTL)
+	if err != nil {
+		return nil, nil, err
+	}
+	port, err := execution.NewServiceArtifactPort(service, clockOf{clock})
+	if err != nil {
+		return nil, nil, err
+	}
+	return port, service, nil
+}
+
+// selectWorkerImplementation wraps the explicitly configured worker fabric
+// around the selected tool executor. The controlled fabric dispatches every
+// tool execution as a fenced task — recovery-epoch and generation fenced,
+// lease-guarded, reservation-bound, with an all-attempt durable usage
+// observation. Production configuration rejects it, and no fabric is ever
+// selected implicitly.
+func selectWorkerImplementation(ctx context.Context, cfg config.Config, pools persistence.Pools, clock applicationTime, source authority.Source, material execution.ToolMaterial, worker execution.ToolExecutor, buildIdentity string) (execution.ToolExecutor, error) {
+	switch cfg.WorkerImplementation {
+	case execution.ControlledImplementation:
+		if pools.Control == nil || pools.Authority == nil {
+			return nil, fmt.Errorf("the controlled worker fabric requires the control and authority databases for durable usage, reservations, tasks, and recovery state")
+		}
+		usageStore, err := usagepg.New(pools.Control)
+		if err != nil {
+			return nil, err
+		}
+		pipeline, err := usage.New(usageStore, execution.NewControlledUsageSink())
+		if err != nil {
+			return nil, err
+		}
+		reservations, err := executionpg.NewToolReservations(pools.Control, cfg.RunTimeout)
+		if err != nil {
+			return nil, err
+		}
+		// The recovery epoch and the whole dispatch record — task, lease,
+		// fence, accepted result, replayable output — are durable, never
+		// process memory: a restarted service replays what already happened.
+		// The authoritative non-rollback register is external to Platform
+		// Postgres by decision (design 0005 §13); the controlled fabric reads
+		// the durable scheduler mirror, and production rejects this fabric
+		// entirely.
+		register, err := recoverypg.NewMirrorEpochSource(pools.Authority)
+		if err != nil {
+			return nil, err
+		}
+		if err := register.EnsureBaseline(ctx); err != nil {
+			return nil, err
+		}
+		dispatch, err := schedulerpg.NewDurableScheduler(pools.Authority, register, execution.DispatchIDs{}, clockOf{clock}, scheduler.PrerequisiteFunc(func(_ context.Context, value scheduler.Create) error {
+			if value.ReservationID == "" || !value.ReservationCurrent || !value.PolicyAllowed {
+				return fmt.Errorf("task prerequisites are unsatisfied")
+			}
+			return nil
+		}), cfg.DwellDeadline)
+		if err != nil {
+			return nil, err
+		}
+		return execution.NewScheduledToolExecutor(dispatch, register, source, material, worker, pipeline, reservations, clockOf{clock}, cfg.ExecutorID, buildIdentity)
+	case "":
+		return nil, fmt.Errorf("ANVILKIT_WORKER_IMPLEMENTATION must be explicitly selected; no worker fabric is assumed")
+	default:
+		return nil, fmt.Errorf("worker implementation %q is not available", cfg.WorkerImplementation)
+	}
+}
+
+// recordingCompiler durably records every compiled context before the runner
+// discloses it to a model, so context evidence exists for every turn.
+type recordingCompiler struct {
+	compiler *contextcompiler.Compiler
+	recorder contextcompiler.EvidenceRecorder
+}
+
+func (c recordingCompiler) Compile(ctx context.Context, request contextcompiler.Request) (contextcompiler.Result, error) {
+	return c.compiler.CompileAndRecord(ctx, request, c.recorder)
+}
+
+// selectContractRuntime returns the explicitly configured Contract Runtime
+// behind the transport-neutral boundary (ADR-022). The kernel's controlled
+// in-process implementation — real parsing, approved subjects only, bounded
+// payloads, durable validation evidence — is the only implementation until
+// the topology decision lands. Production configuration rejects it, and no
+// implementation is ever selected implicitly.
+func selectContractRuntime(cfg config.Config, validator execution.SchemaValidator, registry *agent.Registry, runtimeIdentity string, pools persistence.Pools, clock applicationTime, boms execution.BOMAuthority) (execution.ContractValidator, error) {
+	switch cfg.ContractRuntimeImplementation {
+	case execution.ControlledImplementation:
+		if pools.Evaluation == nil {
+			return nil, fmt.Errorf("the contract runtime requires the evaluation database for durable validation evidence")
+		}
+		var approved []agent.SchemaReference
+		var policyDigests []string
+		approvedPolicies := map[string]bool{}
+		for _, definition := range registry.Definitions() {
+			approved = append(approved, definition.InputSchema, definition.OutputSchema)
+			if !approvedPolicies[definition.GuardrailPolicy.Digest] {
+				approvedPolicies[definition.GuardrailPolicy.Digest] = true
+				policyDigests = append(policyDigests, definition.GuardrailPolicy.Digest)
+			}
+		}
+		runtime, err := execution.NewControlledContractRuntime(validator, approved, runtimeIdentity, registry.CatalogDigest(), policyDigests, boms)
+		if err != nil {
+			return nil, err
+		}
+		recorder, err := contractpg.New(pools.Evaluation)
+		if err != nil {
+			return nil, err
+		}
+		return contractclient.New(runtime, recorder, execution.BoundedSleeper{}, clockOf{clock}, cfg.ContractRuntimeAttempts, cfg.ContractRuntimeBackoff)
+	case "":
+		return nil, fmt.Errorf("ANVILKIT_CONTRACT_RUNTIME_IMPLEMENTATION must be explicitly selected; no contract runtime is assumed")
+	default:
+		return nil, fmt.Errorf("contract runtime implementation %q is not available", cfg.ContractRuntimeImplementation)
+	}
+}
+
+// buildCommitAuthority composes the real apply-authorization issuance path.
+// Issuance is a first-party Agent Service capability, not a selectable
+// integration: every topology signs real authorizations, audits every
+// issuance durably, and pins exactly one issued identity to each durable
+// commit operation. There is no unsigned or memory-only mode.
+func buildCommitAuthority(cfg config.Config, pools persistence.Pools, guard *contractguard.Guard, receipts journal.Store, clock applicationTime, runStore execution.RunStore, reader execution.InterruptReader, authoritySource authority.Source, artifactPort execution.ArtifactPort, keyring applyauth.SigningPort) (execution.CommitAuthority, error) {
+	if !cfg.SigningKey.Present() || keyring == nil {
+		return nil, fmt.Errorf("ANVILKIT_SIGNING_KEY is required: apply-authorization issuance has no unsigned mode")
+	}
+	if pools.Control == nil {
+		return nil, fmt.Errorf("apply-authorization issuance requires the control database for its durable audit and issuance records")
+	}
+	resolver, err := execution.NewApplyAuthorityResolver(runStore, reader, authoritySource, artifactPort)
+	if err != nil {
+		return nil, err
+	}
+	audit, err := applyauthpg.New(pools.Control)
+	if err != nil {
+		return nil, err
+	}
+	issuer, err := applyauth.New(resolver, execution.RandomAuthorizationIDs{}, keyring, audit, receipts, guard, clockOf{clock}, cfg.ApplyAuthorizationTTL)
+	if err != nil {
+		return nil, err
+	}
+	issuances, err := executionpg.NewIssuanceStore(pools.Control)
+	if err != nil {
+		return nil, err
+	}
+	return execution.NewIssuerCommitAuthority(issuer, issuances)
 }
 
 // definitionTrust builds the revalidating gate over the operator-distributed
@@ -771,9 +1130,20 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 		return nil, err
 	}
 	runService := runs.NewService(core.runStore, runapp.NewRuntimeStarter(runtime), runapp.RandomIDs{}, core.clock, core.receipts, trustAdmission{trust: core.trust, clock: core.clock})
-	reader := eventpg.NewReader(pools.Authority, core.guard, core.eventBounds)
-	application := runapp.New(validator, runService, reader, events.StreamConfig{Heartbeat: cfg.Limits.SSEHeartbeat, Revalidation: cfg.AuthRevalidation, ReplayLimit: 100, Bounds: core.eventBounds, Observer: observability}, core.authority)
+	reader, err := eventpg.NewRetainedReader(pools.Authority, core.guard, core.eventBounds, cfg.EventRetention, time.Now)
+	if err != nil {
+		return nil, err
+	}
+	cursors, err := eventpg.NewStreamCursors(pools.Authority)
+	if err != nil {
+		return nil, err
+	}
+	application := runapp.New(validator, runService, reader, events.StreamConfig{Heartbeat: cfg.Limits.SSEHeartbeat, Revalidation: cfg.AuthRevalidation, ReplayLimit: 100, Bounds: core.eventBounds, Observer: observability, WriteTimeout: cfg.SSEWriteTimeout, Cursors: cursors, MaximumConnections: cfg.Limits.SSEConnections, Deltas: core.deltas}, core.authority, core.guard, core.registry)
 	application.WithInterrupts(core.interruptService)
+	// The operator recovery path is part of the production API: it is
+	// authenticated, scoped, role-gated against current authority, audited,
+	// and idempotent on its own, so no feature gate stands in front of it.
+	application.WithEscalations(core.executor)
 	policies := make(map[runs.State]interrupts.DwellPolicy)
 	for _, state := range []runs.State{runs.Created, runs.Preparing, runs.Planning, runs.AwaitingInput, runs.Executing, runs.Validating, runs.AwaitingReview, runs.AwaitingApproval, runs.Committing, runs.AwaitingDomainConfirmation, runs.Conflict, runs.Cancelling, runs.Failed} {
 		policies[state] = interrupts.DwellPolicy{Deadline: cfg.DwellDeadline, Owner: "agent-service-oncall"}
@@ -783,11 +1153,11 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 		return nil, err
 	}
 	go monitor.Run(ctx, time.Minute)
-	options := []api.Option{api.WithAgentCore(application, verifier)}
-	if cfg.FeatureGates["candidate-mutations"] && cfg.Environment != config.EnvironmentProduction {
-		options = append(options, api.WithCandidateMutations())
-	}
-	return options, nil
+	// The governed AgentRun mutation surface is part of the production API:
+	// authentication, authorization, concurrency, idempotency, and canonical
+	// schema validation each fail closed on their own, so no feature gate
+	// stands in front of them.
+	return []api.Option{api.WithAgentCore(application, verifier)}, nil
 }
 
 type applicationTime interface{ Now() time.Time }
@@ -854,6 +1224,20 @@ func (r workflowLeaseRevoker) RevokeRun(ctx context.Context, scope runs.Scope, i
 	return err
 }
 
+// budgetExposure surfaces the budget controller's held-exposure observations
+// into structured telemetry; a review-threshold crossing logs at warning so
+// operators see approaching exposure before reservations start denying.
+type budgetExposure struct{}
+
+func (budgetExposure) ObserveExposure(_ context.Context, rootRunID string, heldMicros, observedMicros int64, review bool) error {
+	if review {
+		slog.Warn("budget exposure requires review", "root_run_id", rootRunID, "held_micros", heldMicros, "observed_micros", observedMicros)
+		return nil
+	}
+	slog.Debug("budget exposure", "root_run_id", rootRunID, "held_micros", heldMicros, "observed_micros", observedMicros)
+	return nil
+}
+
 type operatorAlert struct{}
 
 func (operatorAlert) Alert(_ context.Context, kind string, scope runs.Scope, id runs.ID, state runs.State) error {
@@ -861,63 +1245,99 @@ func (operatorAlert) Alert(_ context.Context, kind string, scope runs.Scope, id 
 	return nil
 }
 
-func loadRunAuthority(path string, guard *contractguard.Guard, grants authority.Grants) (runs.Authority, error) {
+// authoritySeed is the operator-supplied scoped authority document: the
+// governance material, the exact workspace/project scope it binds, and the
+// subjects the workspace admits. It seeds the durable scoped authority store;
+// it is never itself the runtime authority source.
+type authoritySeed struct {
+	Scope struct {
+		WorkspaceID string `json:"workspaceId"`
+		ProjectID   string `json:"projectId"`
+	} `json:"scope"`
+	Subjects []struct {
+		ActorID string `json:"actorId"`
+		Role    string `json:"role"`
+	} `json:"subjects"`
+	Definition  json.RawMessage `json:"definition"`
+	ContractBOM json.RawMessage `json:"contractBomReference"`
+	Policy      json.RawMessage `json:"policy"`
+	Budget      json.RawMessage `json:"budget"`
+}
+
+func loadAuthoritySeed(path string, guard *contractguard.Guard) (authoritySeed, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return runs.Authority{}, fmt.Errorf("read run authority: %w", err)
+		return authoritySeed{}, fmt.Errorf("read run authority: %w", err)
 	}
-	var payload struct {
-		Definition  json.RawMessage `json:"definition"`
-		ContractBOM json.RawMessage `json:"contractBomReference"`
-		Policy      json.RawMessage `json:"policy"`
-		Budget      json.RawMessage `json:"budget"`
-	}
+	var payload authoritySeed
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&payload); err != nil {
-		return runs.Authority{}, fmt.Errorf("decode run authority: %w", err)
+		return authoritySeed{}, fmt.Errorf("decode run authority: %w", err)
 	}
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
-		return runs.Authority{}, fmt.Errorf("decode run authority: trailing JSON")
+		return authoritySeed{}, fmt.Errorf("decode run authority: trailing JSON")
+	}
+	if payload.Scope.WorkspaceID == "" || payload.Scope.ProjectID == "" {
+		return authoritySeed{}, fmt.Errorf("run authority requires the workspace and project scope it binds")
+	}
+	if len(payload.Subjects) == 0 {
+		return authoritySeed{}, fmt.Errorf("run authority requires at least one admitted subject")
+	}
+	for _, subject := range payload.Subjects {
+		if subject.ActorID == "" || subject.Role == "" {
+			return authoritySeed{}, fmt.Errorf("run authority subjects require actor identity and role")
+		}
 	}
 	if len(payload.Definition) == 0 || len(payload.ContractBOM) == 0 || len(payload.Policy) == 0 || len(payload.Budget) == 0 {
-		return runs.Authority{}, fmt.Errorf("run authority is incomplete")
+		return authoritySeed{}, fmt.Errorf("run authority is incomplete")
 	}
-	current := runs.Authority{Definition: payload.Definition, ContractBOM: payload.ContractBOM, Policy: payload.Policy, Budget: payload.Budget, WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, Grants: grants}
-	probe := runs.Snapshot{Kind: "AgentRun", RunID: "run.authority-validation", RootRunID: "run.authority-validation", WorkspaceID: "workspace.authority-validation", ActorID: "actor.authority-validation", Domain: "platform-agent", Operation: "artifact-validation", Target: runs.Target{Type: "page", ID: "page.authority-validation", WorkspaceID: "workspace.authority-validation", ProjectID: "project.authority-validation"}, Definition: current.Definition, ContractBOM: current.ContractBOM, Policy: current.Policy, Budget: current.Budget, Idempotency: runs.IdempotencyProjection{Scope: "workspace.authority-validation:create-run", Key: "authority-validation", CanonicalRequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Status: runs.Created, Version: 1, ExecutionGeneration: 1, CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0)}
+	probe := runs.Snapshot{Kind: "AgentRun", RunID: "run.authority-validation", RootRunID: "run.authority-validation", WorkspaceID: "workspace.authority-validation", ActorID: "actor.authority-validation", Domain: "platform-agent", Operation: "artifact-validation", Target: runs.Target{Type: "page", ID: "page.authority-validation", WorkspaceID: "workspace.authority-validation", ProjectID: "project.authority-validation"}, Definition: payload.Definition, ContractBOM: payload.ContractBOM, Policy: payload.Policy, Budget: payload.Budget, Idempotency: runs.IdempotencyProjection{Scope: "workspace.authority-validation:create-run", Key: "authority-validation", CanonicalRequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Status: runs.Created, Version: 1, ExecutionGeneration: 1, CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0)}
 	probeBytes, err := json.Marshal(probe)
 	if err != nil {
-		return runs.Authority{}, fmt.Errorf("marshal run authority probe: %w", err)
+		return authoritySeed{}, fmt.Errorf("marshal run authority probe: %w", err)
 	}
 	findings := guard.Validate(context.Background(), contractguard.APIIn, "anvilkit://schema/agent-run?digest=sha256:e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564", probeBytes)
 	if len(findings) != 0 {
-		return runs.Authority{}, fmt.Errorf("run authority violates pinned AgentRun references: %v", findings)
+		return authoritySeed{}, fmt.Errorf("run authority violates pinned AgentRun references: %v", findings)
 	}
-	return current, nil
+	return payload, nil
 }
 
-type fileRunAuthority struct {
-	path   string
-	guard  *contractguard.Guard
-	grants authority.Grants
-}
-
-func newFileRunAuthority(path string, guard *contractguard.Guard, grants authority.Grants) (*fileRunAuthority, error) {
-	if path == "" || guard == nil {
-		return nil, fmt.Errorf("file run authority requires path and contract guard")
+// seedDurableAuthority validates the operator-supplied authority document and
+// seeds the durable scoped authority store with it. The store — not the file —
+// answers every later read, so revocations recorded against the scope are
+// observed by every boundary on its next re-read.
+func seedDurableAuthority(ctx context.Context, path string, guard *contractguard.Guard, grants authority.Grants, pool *pgxpool.Pool, clock applicationTime) (*authoritypg.Store, error) {
+	if guard == nil {
+		return nil, fmt.Errorf("the durable authority source requires the contract guard")
 	}
-	if _, err := loadRunAuthority(path, guard, grants); err != nil {
+	if pool == nil {
+		return nil, fmt.Errorf("the durable authority source requires the authority database")
+	}
+	seed, err := loadAuthoritySeed(path, guard)
+	if err != nil {
 		return nil, err
 	}
-	return &fileRunAuthority{path: path, guard: guard, grants: grants}, nil
-}
-
-func (a *fileRunAuthority) Current(_ context.Context, scope authority.Scope) (authority.Current, error) {
-	if scope.WorkspaceID == "" || scope.ProjectID == "" || scope.ActorID == "" {
-		return authority.Current{}, fmt.Errorf("current authority: workspace, project, and actor identity are required")
+	store, err := authoritypg.New(pool, clockOf{clock}.Now)
+	if err != nil {
+		return nil, err
 	}
-	return loadRunAuthority(a.path, a.guard, a.grants)
+	subjects := make([]authoritypg.Subject, 0, len(seed.Subjects))
+	for _, subject := range seed.Subjects {
+		subjects = append(subjects, authoritypg.Subject{WorkspaceID: seed.Scope.WorkspaceID, ActorID: subject.ActorID, Role: subject.Role})
+	}
+	if err := store.Seed(ctx, authoritypg.Binding{
+		WorkspaceID: seed.Scope.WorkspaceID,
+		ProjectID:   seed.Scope.ProjectID,
+		Definition:  seed.Definition,
+		ContractBOM: seed.ContractBOM,
+		Policy:      seed.Policy,
+		Budget:      seed.Budget,
+		Grants:      grants,
+	}, subjects); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
-
-var _ authority.Source = (*fileRunAuthority)(nil)
