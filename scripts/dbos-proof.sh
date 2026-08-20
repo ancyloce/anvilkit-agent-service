@@ -4,7 +4,7 @@ set -euo pipefail
 : "${DBOS_SYSTEM_DATABASE_URL:?DBOS_SYSTEM_DATABASE_URL is required}"
 : "${DBOS_JOURNAL_URL:?DBOS_JOURNAL_URL is required}"
 
-sdk_version="v0.20.0"
+sdk_version="v1.1.0"
 proof_root="${TMPDIR:-/tmp}/anvilkit-agent-dbos-proof"
 module_cache="${proof_root}/modcache"
 build_cache="${proof_root}/gocache"
