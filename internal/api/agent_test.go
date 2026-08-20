@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
+	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
@@ -72,14 +73,23 @@ func (appEvents) Wait(context.Context, events.Scope, string, uint64, time.Durati
 
 type appAuthority struct{}
 
-func (appAuthority) Current(context.Context, runs.Scope) (runs.Authority, error) {
-	return runs.Authority{}, nil
+func (appAuthority) Current(context.Context, authority.Scope) (authority.Current, error) {
+	return authority.Current{
+		Definition:       []byte(`{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`),
+		ContractBOM:      []byte(`{"bom":"test"}`),
+		Policy:           []byte(`{"policyId":"policy.test","version":"v1"}`),
+		Budget:           []byte(`{"budget":"test"}`),
+		WorkspaceActive:  true,
+		ActorActive:      true,
+		PermissionActive: true,
+		PolicyActive:     true,
+	}, nil
 }
 
 func TestCandidateReadRoutesRequireVerifiedBearerAndEmitStrongETag(t *testing.T) {
 	now := time.Now()
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent"}, appTrust{}, appClock{now})
-	service := runs.NewService(appStore{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 2}}, appStarter{}, appIDs{}, appClock{now}, journal.NewMemoryStore())
+	service := runs.NewService(appStore{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 2}}, appStarter{}, appIDs{}, appClock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
 	core := runapp.New(validator, service, appEvents{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.Bounds{MaximumBytes: 100}}, appAuthority{})
 	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Hour)}
 	handler := New(nil, WithAgentCore(core, verifier{claims: claims}))
@@ -115,7 +125,7 @@ func TestMutationTransportRemainsFailClosedWhileGateDOpen(t *testing.T) {
 func TestNonSuccessResponsesHaveStableClosedProblemShapeAndDoNotDiscloseScope(t *testing.T) {
 	now := time.Now()
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent"}, appTrust{}, appClock{now})
-	service := runs.NewService(appStore{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 2}}, appStarter{}, appIDs{}, appClock{now}, journal.NewMemoryStore())
+	service := runs.NewService(appStore{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 2}}, appStarter{}, appIDs{}, appClock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
 	core := runapp.New(validator, service, appEvents{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.DefaultBounds()}, appAuthority{})
 	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Hour)}
 	handler := New(nil, WithAgentCore(core, verifier{claims: claims}))

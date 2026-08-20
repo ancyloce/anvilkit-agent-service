@@ -27,7 +27,9 @@ func TestServerGoroutineStopsWithOrderedDrain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("health status %d", response.StatusCode)
 	}
@@ -36,7 +38,9 @@ func TestServerGoroutineStopsWithOrderedDrain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if response.StatusCode != http.StatusServiceUnavailable || response.Header.Get("Retry-After") == "" {
 		t.Fatalf("drain response status=%d retry=%q", response.StatusCode, response.Header.Get("Retry-After"))
 	}
