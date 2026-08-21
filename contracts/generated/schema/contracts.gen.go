@@ -1765,6 +1765,148 @@ func (j *AgentRunOperation) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Bounded AgentRunSnapshot recovery contract: the authoritative run resource, its
+// governed artifact projections, and the durable public AgentEvent cursor a client
+// resumes the event stream from after EVENT_CURSOR_EXPIRED.
+type AgentRunSnapshot struct {
+	// Artifacts corresponds to the JSON schema field "artifacts".
+	Artifacts []AgentRunSnapshotArtifactsElem `json:"artifacts" yaml:"artifacts" mapstructure:"artifacts"`
+
+	// Cursor corresponds to the JSON schema field "cursor".
+	Cursor *SharedPrimitivesOpaqueId `json:"cursor,omitempty,omitzero" yaml:"cursor,omitempty" mapstructure:"cursor,omitempty"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Run corresponds to the JSON schema field "run".
+	Run AgentRun `json:"run" yaml:"run" mapstructure:"run"`
+}
+
+type AgentRunSnapshotArtifactsElem struct {
+	// ArtifactId corresponds to the JSON schema field "artifactId".
+	ArtifactId SharedPrimitivesOpaqueId `json:"artifactId" yaml:"artifactId" mapstructure:"artifactId"`
+
+	// Digest corresponds to the JSON schema field "digest".
+	Digest SharedPrimitivesDigest `json:"digest" yaml:"digest" mapstructure:"digest"`
+
+	// SecurityGeneration corresponds to the JSON schema field "securityGeneration".
+	SecurityGeneration int `json:"securityGeneration" yaml:"securityGeneration" mapstructure:"securityGeneration"`
+
+	// State corresponds to the JSON schema field "state".
+	State AgentRunSnapshotArtifactsElemState `json:"state" yaml:"state" mapstructure:"state"`
+}
+
+type AgentRunSnapshotArtifactsElemState string
+
+const AgentRunSnapshotArtifactsElemStateCommitted AgentRunSnapshotArtifactsElemState = "committed"
+const AgentRunSnapshotArtifactsElemStateDeleted AgentRunSnapshotArtifactsElemState = "deleted"
+const AgentRunSnapshotArtifactsElemStateExpired AgentRunSnapshotArtifactsElemState = "expired"
+const AgentRunSnapshotArtifactsElemStateFinalized AgentRunSnapshotArtifactsElemState = "finalized"
+const AgentRunSnapshotArtifactsElemStatePending AgentRunSnapshotArtifactsElemState = "pending"
+const AgentRunSnapshotArtifactsElemStateQuarantined AgentRunSnapshotArtifactsElemState = "quarantined"
+const AgentRunSnapshotArtifactsElemStateScanning AgentRunSnapshotArtifactsElemState = "scanning"
+const AgentRunSnapshotArtifactsElemStateValid AgentRunSnapshotArtifactsElemState = "valid"
+
+var enumValues_AgentRunSnapshotArtifactsElemState = []interface{}{
+	"pending",
+	"scanning",
+	"valid",
+	"finalized",
+	"committed",
+	"quarantined",
+	"expired",
+	"deleted",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRunSnapshotArtifactsElemState) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AgentRunSnapshotArtifactsElemState {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRunSnapshotArtifactsElemState, v)
+	}
+	*j = AgentRunSnapshotArtifactsElemState(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRunSnapshotArtifactsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["artifactId"]; raw != nil && !ok {
+		return fmt.Errorf("field artifactId in AgentRunSnapshotArtifactsElem: required")
+	}
+	if _, ok := raw["digest"]; raw != nil && !ok {
+		return fmt.Errorf("field digest in AgentRunSnapshotArtifactsElem: required")
+	}
+	if _, ok := raw["securityGeneration"]; raw != nil && !ok {
+		return fmt.Errorf("field securityGeneration in AgentRunSnapshotArtifactsElem: required")
+	}
+	if _, ok := raw["state"]; raw != nil && !ok {
+		return fmt.Errorf("field state in AgentRunSnapshotArtifactsElem: required")
+	}
+	type Plain AgentRunSnapshotArtifactsElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 9007199254740991 < plain.SecurityGeneration {
+		return fmt.Errorf("field %s: must be <= %v", "securityGeneration", 9007199254740991)
+	}
+	if 1 > plain.SecurityGeneration {
+		return fmt.Errorf("field %s: must be >= %v", "securityGeneration", 1)
+	}
+	*j = AgentRunSnapshotArtifactsElem(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRunSnapshot) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["artifacts"]; raw != nil && !ok {
+		return fmt.Errorf("field artifacts in AgentRunSnapshot: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in AgentRunSnapshot: required")
+	}
+	if _, ok := raw["run"]; raw != nil && !ok {
+		return fmt.Errorf("field run in AgentRunSnapshot: required")
+	}
+	type Plain AgentRunSnapshot
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.Artifacts) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "artifacts", 256)
+	}
+	*j = AgentRunSnapshot(plain)
+	return nil
+}
+
 type AgentRunStatus string
 
 const AgentRunStatusAwaitingApproval AgentRunStatus = "awaiting_approval"
@@ -4442,6 +4584,9 @@ type ContractsBundleJson struct {
 
 	// AgentRun corresponds to the JSON schema field "AgentRun".
 	AgentRun *AgentRun `json:"AgentRun,omitempty,omitzero" yaml:"AgentRun,omitempty" mapstructure:"AgentRun,omitempty"`
+
+	// AgentRunSnapshot corresponds to the JSON schema field "AgentRunSnapshot".
+	AgentRunSnapshot *AgentRunSnapshot `json:"AgentRunSnapshot,omitempty,omitzero" yaml:"AgentRunSnapshot,omitempty" mapstructure:"AgentRunSnapshot,omitempty"`
 
 	// AgentStreamDelta corresponds to the JSON schema field "AgentStreamDelta".
 	AgentStreamDelta *AgentStreamDelta `json:"AgentStreamDelta,omitempty,omitzero" yaml:"AgentStreamDelta,omitempty" mapstructure:"AgentStreamDelta,omitempty"`

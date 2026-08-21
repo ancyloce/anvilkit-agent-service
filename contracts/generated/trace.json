@@ -2,7 +2,7 @@
   "traceVersion": 1,
   "language": "go",
   "packageVersion": "0.1.0",
-  "sourceSetSha256": "272e656803e5f04c91627de6beeea172d309442c7ae584a353d276d2446cf7cf",
+  "sourceSetSha256": "dcd18890ba7ab0724f87a8b335c9472ec1e022ddcee4b69429a692136f52a744",
   "sources": [
     {
       "path": "contracts/agent/schemas/agent-artifact.schema.json",
@@ -23,6 +23,10 @@
     {
       "path": "contracts/agent/schemas/agent-evidence.schema.json",
       "sha256": "e4251dd073a86fa271d85551c9dfd4f8d046c38704e4f32a70e03f764fd7e378"
+    },
+    {
+      "path": "contracts/agent/schemas/agent-run-snapshot.schema.json",
+      "sha256": "a75079baf5ecfa347ef501e113ac96abaedb8bdbcf0c06a1cfe568e065ac55db"
     },
     {
       "path": "contracts/agent/schemas/agent-run.schema.json",
@@ -142,7 +146,7 @@
     },
     {
       "path": "contracts/agent/openapi/agent-service.openapi.json",
-      "sha256": "0eda9569f7e7bc5f2bef9d1a1958b78a8fa8dca0f478ba35bea5ea885937236d"
+      "sha256": "d304c8e36204b3b50dc66edf58c4f4be97a8a2aad43319f0ad9a5ac68c48eb16"
     },
     {
       "path": "contracts/agent/openapi/pagix-agent-integration.openapi.json",
@@ -150,10 +154,10 @@
     }
   ],
   "projections": {
-    "schemaBundleSha256": "d3e9cbb793d72aeef9c0c7a8c97ea1937cdd5f61c41ff9a567ac3c685297301a",
+    "schemaBundleSha256": "ff5221e28e8113f09f52884732b5d868d5c10cdbf7996ce8a6ca87a53168249b",
     "openapi": {
-      "agent-service": "d85057c21abda151d7bf6b4b9c4f9e615d16f6222329b38fa4db4abe5c847462",
-      "pagix-agent-integration": "ac06ff71e3001bcb0732a87a8f522a5ac26e505a5255eb2330e9f47a49e7b267"
+      "agent-service": "64a43e8b08d6f1d072924b2927595dcf956ebe611fb9ba35f878c6f5ed59f330",
+      "pagix-agent-integration": "f8038779294662233cf2efa43d3ad09512397a9b2d8e86cc309b6e182cb87ec8"
     }
   },
   "generators": {
@@ -167,15 +171,15 @@
     }
   },
   "output": {
-    "bytes": 645436,
+    "bytes": 661018,
     "files": 3,
-    "sha256": "247629b9967823806077a4772acbf61b3eb1ba6acfb903892bbc29aec1b6fddf",
+    "sha256": "4ebad64f39c6afb739f5c0591b3b9f322a8d9706b4d72cb3e88d72ae39687955",
     "directories": [
       {
         "directory": "generated",
-        "bytes": 645436,
+        "bytes": 661018,
         "files": 3,
-        "sha256": "d6526ddcd5416564aec47ef8ae0c497a266d9972525d430bb9e3611a8b5c6dc1"
+        "sha256": "adfee79ae9961a84e225cc495562afef74787520012856cc90c28ddd20b385b5"
       }
     ]
   }

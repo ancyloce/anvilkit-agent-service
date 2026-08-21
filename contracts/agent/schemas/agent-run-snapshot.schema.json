@@ -1,0 +1,85 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/agent-run-snapshot.schema.json",
+  "title": "AgentRunSnapshot contract",
+  "description": "Bounded AgentRunSnapshot recovery contract: the authoritative run resource, its governed artifact projections, and the durable public AgentEvent cursor a client resumes the event stream from after EVENT_CURSOR_EXPIRED.",
+  "type": "object",
+  "minProperties": 3,
+  "maxProperties": 4,
+  "required": [
+    "kind",
+    "run",
+    "artifacts"
+  ],
+  "properties": {
+    "kind": {
+      "const": "AgentRunSnapshot"
+    },
+    "run": {
+      "$ref": "anvilkit://schema/agent-run?digest=sha256:e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "minProperties": 4,
+        "maxProperties": 4,
+        "required": [
+          "artifactId",
+          "state",
+          "digest",
+          "securityGeneration"
+        ],
+        "properties": {
+          "artifactId": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactId"
+          },
+          "state": {
+            "enum": [
+              "pending",
+              "scanning",
+              "valid",
+              "finalized",
+              "committed",
+              "quarantined",
+              "expired",
+              "deleted"
+            ]
+          },
+          "digest": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+          },
+          "securityGeneration": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "cursor": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    }
+  },
+  "x-anvilkit-omittedSemantics": {
+    "cursor": "the run has recorded no durable public AgentEvent yet; resume the event stream without Last-Event-ID"
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "AgentRunSnapshot",
+    "componentName": "anvilkit.contract.schema.agent-run-snapshot",
+    "owner": "Platform Composition and API owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/run/runId",
+      "/cursor"
+    ],
+    "maximumSerializedBytes": 262144,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json"
+    ]
+  }
+}

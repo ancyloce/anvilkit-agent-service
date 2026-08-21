@@ -106,6 +106,21 @@ type AgentRun struct {
 	WorkspaceId      SharedPrimitivesWorkspaceId     `json:"workspaceId"`
 }
 
+// AgentRunSnapshot Bounded AgentRunSnapshot recovery contract: the authoritative run resource, its governed artifact projections, and the durable public AgentEvent cursor a client resumes the event stream from after EVENT_CURSOR_EXPIRED.
+type AgentRunSnapshot struct {
+	Artifacts []struct {
+		ArtifactId         SharedPrimitivesArtifactId `json:"artifactId"`
+		Digest             SharedPrimitivesDigest     `json:"digest"`
+		SecurityGeneration int                        `json:"securityGeneration"`
+		State              interface{}                `json:"state"`
+	} `json:"artifacts"`
+	Cursor *SharedPrimitivesOpaqueId `json:"cursor,omitempty"`
+	Kind   interface{}               `json:"kind"`
+
+	// Run Bounded AgentRun wire contract governed by PRD 0012.
+	Run AgentRun `json:"run"`
+}
+
 // ApplyAuthorization Bounded ApplyAuthorization wire contract governed by PRD 0012.
 type ApplyAuthorization struct {
 	ActionDigest      SharedPrimitivesDigest          `json:"actionDigest"`
@@ -444,6 +459,11 @@ type RetryAgentRunParams struct {
 	IfMatch IfMatch `json:"If-Match"`
 }
 
+// GetAgentRunSnapshotParams defines parameters for GetAgentRunSnapshot.
+type GetAgentRunSnapshotParams struct {
+	Traceparent Traceparent `json:"traceparent"`
+}
+
 // GetAgentArtifactParams defines parameters for GetAgentArtifact.
 type GetAgentArtifactParams struct {
 	Traceparent Traceparent `json:"traceparent"`
@@ -641,6 +661,11 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/retry (the `RetryAgentRun` operationId).
 	RetryAgentRun(ctx context.Context, workspaceId WorkspaceId, runId RunId, params *RetryAgentRunParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetAgentRunSnapshot Read the current run snapshot and the durable cursor an expired event stream resumes from.
+	//
+	// Corresponds with GET /workspaces/{workspaceId}/agent-runs/{runId}/snapshot (the `GetAgentRunSnapshot` operationId).
+	GetAgentRunSnapshot(ctx context.Context, workspaceId WorkspaceId, runId RunId, params *GetAgentRunSnapshotParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetAgentArtifact Read immutable artifact metadata under its governed lifecycle.
 	//
@@ -902,6 +927,21 @@ func (c *Client) RespondToAgentInput(ctx context.Context, workspaceId WorkspaceI
 // Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/retry (the `RetryAgentRun` operationId).
 func (c *Client) RetryAgentRun(ctx context.Context, workspaceId WorkspaceId, runId RunId, params *RetryAgentRunParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewRetryAgentRunRequest(c.Server, workspaceId, runId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetAgentRunSnapshot Read the current run snapshot and the durable cursor an expired event stream resumes from.
+//
+// Corresponds with GET /workspaces/{workspaceId}/agent-runs/{runId}/snapshot (the `GetAgentRunSnapshot` operationId).
+func (c *Client) GetAgentRunSnapshot(ctx context.Context, workspaceId WorkspaceId, runId RunId, params *GetAgentRunSnapshotParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetAgentRunSnapshotRequest(c.Server, workspaceId, runId, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1850,6 +1890,60 @@ func NewRetryAgentRunRequest(server string, workspaceId WorkspaceId, runId RunId
 	return req, nil
 }
 
+// NewGetAgentRunSnapshotRequest constructs an http.Request for the GetAgentRunSnapshot method
+func NewGetAgentRunSnapshotRequest(server string, workspaceId WorkspaceId, runId RunId, params *GetAgentRunSnapshotParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "workspaceId", workspaceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "runId", runId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/workspaces/%s/agent-runs/%s/snapshot", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "traceparent", params.Traceparent, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("traceparent", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewGetAgentArtifactRequest constructs an http.Request for the GetAgentArtifact method
 func NewGetAgentArtifactRequest(server string, workspaceId WorkspaceId, artifactId ArtifactId, params *GetAgentArtifactParams) (*http.Request, error) {
 	var err error
@@ -2063,6 +2157,13 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/retry (the `RetryAgentRun` operationId).
 	RetryAgentRunWithResponse(ctx context.Context, workspaceId WorkspaceId, runId RunId, params *RetryAgentRunParams, reqEditors ...RequestEditorFn) (*RetryAgentRunResponse, error)
+
+	// GetAgentRunSnapshotWithResponse Read the current run snapshot and the durable cursor an expired event stream resumes from.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /workspaces/{workspaceId}/agent-runs/{runId}/snapshot (the `GetAgentRunSnapshot` operationId).
+	GetAgentRunSnapshotWithResponse(ctx context.Context, workspaceId WorkspaceId, runId RunId, params *GetAgentRunSnapshotParams, reqEditors ...RequestEditorFn) (*GetAgentRunSnapshotResponse, error)
 
 	// GetAgentArtifactWithResponse Read immutable artifact metadata under its governed lifecycle.
 	//
@@ -2874,6 +2975,11 @@ func (r ResolveAgentDomainOperationResponse) ContentType() string {
 	return ""
 }
 
+// StreamAgentRunEventsResponse410Headers the declared response headers of an HTTP 410 response for StreamAgentRunEvents
+type StreamAgentRunEventsResponse410Headers struct {
+	Link string
+}
+
 type StreamAgentRunEventsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2887,6 +2993,8 @@ type StreamAgentRunEventsResponse struct {
 	ApplicationproblemJSON410 *ProblemDetails
 	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
 	ApplicationproblemJSON500 *ProblemDetails
+	// Headers410 the parsed response headers for an HTTP 410 response
+	Headers410 *StreamAgentRunEventsResponse410Headers
 }
 
 // GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
@@ -3156,6 +3264,75 @@ func (r RetryAgentRunResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r RetryAgentRunResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetAgentRunSnapshotResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AgentRunSnapshot
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *ProblemDetails
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *ProblemDetails
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *ProblemDetails
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *ProblemDetails
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetAgentRunSnapshotResponse) GetJSON200() *AgentRunSnapshot {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r GetAgentRunSnapshotResponse) GetApplicationproblemJSON401() *ProblemDetails {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r GetAgentRunSnapshotResponse) GetApplicationproblemJSON403() *ProblemDetails {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r GetAgentRunSnapshotResponse) GetApplicationproblemJSON404() *ProblemDetails {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r GetAgentRunSnapshotResponse) GetApplicationproblemJSON500() *ProblemDetails {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r GetAgentRunSnapshotResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetAgentRunSnapshotResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetAgentRunSnapshotResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetAgentRunSnapshotResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -3441,6 +3618,19 @@ func (c *ClientWithResponses) RetryAgentRunWithResponse(ctx context.Context, wor
 		return nil, err
 	}
 	return ParseRetryAgentRunResponse(rsp)
+}
+
+// GetAgentRunSnapshotWithResponse Read the current run snapshot and the durable cursor an expired event stream resumes from.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /workspaces/{workspaceId}/agent-runs/{runId}/snapshot (the `GetAgentRunSnapshot` operationId).
+func (c *ClientWithResponses) GetAgentRunSnapshotWithResponse(ctx context.Context, workspaceId WorkspaceId, runId RunId, params *GetAgentRunSnapshotParams, reqEditors ...RequestEditorFn) (*GetAgentRunSnapshotResponse, error) {
+	rsp, err := c.GetAgentRunSnapshot(ctx, workspaceId, runId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetAgentRunSnapshotResponse(rsp)
 }
 
 // GetAgentArtifactWithResponse Read immutable artifact metadata under its governed lifecycle.
@@ -4306,6 +4496,19 @@ func ParseStreamAgentRunEventsResponse(rsp *http.Response) (*StreamAgentRunEvent
 
 	}
 
+	switch {
+	case rsp.StatusCode == 410:
+		var headers StreamAgentRunEventsResponse410Headers
+		if values := rsp.Header.Values("Link"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Link", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.Link = value
+		}
+		response.Headers410 = &headers
+	}
+
 	return response, nil
 }
 
@@ -4529,6 +4732,60 @@ func ParseRetryAgentRunResponse(rsp *http.Response) (*RetryAgentRunResponse, err
 			headers.XAnvilKitRequestDigest = &value
 		}
 		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseGetAgentRunSnapshotResponse parses an HTTP response from a GetAgentRunSnapshotWithResponse call
+func ParseGetAgentRunSnapshotResponse(rsp *http.Response) (*GetAgentRunSnapshotResponse, error) {
+	bodyBytes, err := readBoundedResponseBody(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetAgentRunSnapshotResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AgentRunSnapshot
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
 	}
 
 	return response, nil
