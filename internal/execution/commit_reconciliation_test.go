@@ -492,7 +492,7 @@ func TestOperatorRecoveryEnforcesRoleScopeAndBindingBeforeSettling(t *testing.T)
 		t.Fatalf("resolved=%+v err=%v, want the audited operator resolution", resolved, err)
 	}
 	// And so does the evidence store.
-	records, err := h.evidence.ReadEvidence(context.Background(), events.EvidenceAuthority{Scope: events.Scope{WorkspaceID: testWorkspace, ProjectID: testProject}, Accessor: "reconciliation-verifier", Purpose: "assert recorded reconciliation evidence", Clearance: "restricted"}, testRunID, 0)
+	records, err := h.evidence.ReadEvidence(context.Background(), verifierAuthority(t), testRunID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,6 +662,12 @@ func (r *refusingEvidence) AppendEvidence(ctx context.Context, value events.Evid
 	return r.inner.AppendEvidence(ctx, value)
 }
 
+// RecordedEvidence delegates: the wrapper refuses writes, never lookups, so a
+// producer converging on a recorded fact sees exactly what the store holds.
+func (r *refusingEvidence) RecordedEvidence(ctx context.Context, scope events.Scope, evidenceID string) (events.RecordedEvidence, bool, error) {
+	return r.inner.RecordedEvidence(ctx, scope, evidenceID)
+}
+
 func (r *refusingEvidence) count(evidenceType string) int {
 	r.lock.Lock()
 	defer r.lock.Unlock()
@@ -716,7 +722,7 @@ func TestOperatorResolutionConvergesWhenEvidenceFailsAfterTheJournalIsDecided(t 
 	if recorder.count("domain.submission-operator-resolved") != 1 {
 		t.Fatalf("operator-recovery evidence appended %d times, want exactly one durable record", recorder.count("domain.submission-operator-resolved"))
 	}
-	records, err := h.evidence.ReadEvidence(context.Background(), events.EvidenceAuthority{Scope: events.Scope{WorkspaceID: testWorkspace, ProjectID: testProject}, Accessor: "reconciliation-verifier", Purpose: "assert recorded reconciliation evidence", Clearance: "restricted"}, testRunID, 0)
+	records, err := h.evidence.ReadEvidence(context.Background(), verifierAuthority(t), testRunID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -743,7 +749,7 @@ func TestOperatorResolutionConvergesWhenEvidenceFailsAfterTheJournalIsDecided(t 
 	}
 	// Retries re-present the same evidence, and the store's own identity
 	// dedup keeps exactly one immutable record of the decision.
-	after, err := h.evidence.ReadEvidence(context.Background(), events.EvidenceAuthority{Scope: events.Scope{WorkspaceID: testWorkspace, ProjectID: testProject}, Accessor: "reconciliation-verifier", Purpose: "assert recorded reconciliation evidence", Clearance: "restricted"}, testRunID, 0)
+	after, err := h.evidence.ReadEvidence(context.Background(), verifierAuthority(t), testRunID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

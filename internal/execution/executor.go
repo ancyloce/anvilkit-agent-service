@@ -232,6 +232,10 @@ type DeltaPublisher interface {
 // durable-operation replay converges on one record.
 type EvidenceRecorder interface {
 	AppendEvidence(context.Context, events.Evidence) (uint64, error)
+	// RecordedEvidence answers what is already recorded under one identity,
+	// so a repeated attempt at a durable operation converges on the fact that
+	// was recorded instead of producing a second account of it.
+	RecordedEvidence(context.Context, events.Scope, string) (events.RecordedEvidence, bool, error)
 }
 
 type Clock interface{ Now() time.Time }
@@ -443,11 +447,8 @@ func (e evidenceContractError) Unwrap() error { return e.err }
 // it. It is the single construction path: what a caller proves valid before
 // writing anything durable is exactly what is recorded afterwards, so a
 // pre-write proof can never diverge from the write it authorizes.
-func (e *Executor) buildEvidence(op workflow.OpID, input workflow.RunInput, snapshot runs.Snapshot, evidenceType, retention string, payload map[string]string) (events.Evidence, error) {
-	identity := "evidence." + strings.TrimPrefix(mustDeterministicDigest(struct {
-		Key  string `json:"key"`
-		Type string `json:"type"`
-	}{op.Key(), evidenceType}), "sha256:")[:32]
+func (e *Executor) buildEvidence(op workflow.OpID, input workflow.RunInput, snapshot runs.Snapshot, evidenceType, retention string, occurredAt time.Time, payload map[string]string) (events.Evidence, error) {
+	identity := evidenceIdentityOf(op, evidenceType)
 	definitionDigest, bomDigest, policyDigest, err := materialDigests(snapshot.Definition, snapshot.ContractBOM, snapshot.Policy)
 	if err != nil {
 		return events.Evidence{}, fmt.Errorf("digest evidence producer material: %w", err)
@@ -458,7 +459,7 @@ func (e *Executor) buildEvidence(op workflow.OpID, input workflow.RunInput, snap
 		RunID:       string(snapshot.RunID),
 		EvidenceID:  identity,
 		Type:        evidenceType,
-		OccurredAt:  e.cfg.Clock.Now(),
+		OccurredAt:  occurredAt,
 		Producer: events.EvidenceProducer{
 			Component:         "agent-executor",
 			DefinitionDigest:  definitionDigest,
@@ -478,8 +479,36 @@ func (e *Executor) buildEvidence(op workflow.OpID, input workflow.RunInput, snap
 	return value, nil
 }
 
+// evidenceIdentityOf is the durable-operation identity one internal fact is
+// recorded under. It is derived from the operation key and the fact's type, so
+// every attempt at the same operation names the same record.
+func evidenceIdentityOf(op workflow.OpID, evidenceType string) string {
+	return "evidence." + strings.TrimPrefix(mustDeterministicDigest(struct {
+		Key  string `json:"key"`
+		Type string `json:"type"`
+	}{op.Key(), evidenceType}), "sha256:")[:32]
+}
+
+// recordEvidence records one internal fact about a durable operation.
+//
+// A repeated attempt at the same operation is the same fact, so it converges
+// on the record that already exists rather than stamping a second account of
+// it: the occurrence time of something that happened once was decided once,
+// and the store is where that decision lives. Everything else about the fact
+// still has to match — a genuinely different fact under the same identity is
+// refused as a conflict, which is what makes the convergence safe rather than
+// merely convenient.
 func (e *Executor) recordEvidence(ctx context.Context, op workflow.OpID, input workflow.RunInput, snapshot runs.Snapshot, evidenceType, retention string, payload map[string]string) error {
-	value, err := e.buildEvidence(op, input, snapshot, evidenceType, retention, payload)
+	scope := events.Scope{WorkspaceID: snapshot.WorkspaceID, ProjectID: snapshot.Target.ProjectID}
+	occurredAt := e.cfg.Clock.Now()
+	recorded, present, err := e.cfg.Evidence.RecordedEvidence(ctx, scope, evidenceIdentityOf(op, evidenceType))
+	if err != nil {
+		return fmt.Errorf("read recorded %s evidence: %w", evidenceType, err)
+	}
+	if present {
+		occurredAt = recorded.OccurredAt
+	}
+	value, err := e.buildEvidence(op, input, snapshot, evidenceType, retention, occurredAt, payload)
 	if err != nil {
 		return err
 	}
@@ -1896,7 +1925,7 @@ func operatorResolutionEvidence(scope runs.Scope, snapshot runs.Snapshot, id run
 // reported as such and nothing durable is written.
 func (e *Executor) proveOperatorResolutionEvidence(scope runs.Scope, snapshot runs.Snapshot, id runs.ID, operationID, outcome, operatorID, basis string) error {
 	op, input, payload := operatorResolutionEvidence(scope, snapshot, id, operationID, outcome, operatorID, basis)
-	_, err := e.buildEvidence(op, input, snapshot, operatorResolutionEvidenceType, "audit", payload)
+	_, err := e.buildEvidence(op, input, snapshot, operatorResolutionEvidenceType, "audit", e.cfg.Clock.Now(), payload)
 	if err == nil {
 		return nil
 	}
