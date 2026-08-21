@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,10 @@ import (
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/applyauth"
 	applyauthpg "github.com/ancyloce/anvilkit-agent-service/internal/applyauth/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/artifacts"
+	artifactspg "github.com/ancyloce/anvilkit-agent-service/internal/artifacts/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
+	authoritypg "github.com/ancyloce/anvilkit-agent-service/internal/authority/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/cancellation"
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler"
@@ -134,11 +139,21 @@ func TestPostgresFoundations(t *testing.T) {
 	assertDurableInterruptExpiry(t, ctx, authorityPool, pool)
 	assertModelEvidence(t, ctx, pool)
 	assertCommitBoundaries(t, ctx, pool)
+	assertEvidenceStore(t, ctx, pool)
+	assertArtifactLifecycle(t, ctx, pool)
 	assertSchedulerBoundaries(t, ctx, pool)
 	assertWorkflowLeaseCleanup(t, ctx, pool)
 	assertRecoveryBoundaries(t, ctx, pool)
 	assertDurableProviderLedger(t, ctx, pool)
 	assertCancellationReconciliation(t, ctx, pool)
+	assertScopedAuthorityStore(t, ctx, authorityPool)
+	assertDomainRedemptionAcrossProcesses(t, ctx, pool)
+	assertDurableToolDispatch(t, ctx, authorityPool)
+	assertDomainEscalationJournal(t, ctx, pool)
+	assertBudgetControllerLedger(t, ctx, authorityPool)
+	assertBudgetHeadroomIsAtomicAndScoped(t, ctx, authorityPool)
+	assertWorkerLeaseRenewal(t, ctx, authorityPool)
+	assertCommandReceipts(t, ctx, authorityPool)
 	if os.Getenv("DURABLE_CREATE_LOAD_TEST") == "1" {
 		assertDurableCreateLatency(t, ctx, authorityPool)
 	}
@@ -158,6 +173,20 @@ func TestPostgresFoundations(t *testing.T) {
 	if err != nil || len(upMigrations) == 0 {
 		t.Fatalf("migration set = %v err = %v", upMigrations, err)
 	}
+	// The foundation rollback drops the cluster-global service roles, which
+	// no concurrent test database may reference while it happens. Packages
+	// run in parallel by design, so the full rollback serializes on the
+	// shared cluster advisory lock the isolated-database helpers hold in
+	// shared mode for as long as their databases exist.
+	guard, err := pgx.Connect(ctx, baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = guard.Close(context.Background()) }()
+	if _, err := guard.Exec(ctx, `SELECT pg_advisory_lock($1)`, clusterRoleLockKey); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _, _ = guard.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, clusterRoleLockKey) }()
 	for range upMigrations {
 		if err := migrator.RollbackLast(ctx); err != nil {
 			t.Fatal(err)
@@ -346,9 +375,42 @@ func assertCommitBoundaries(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	if err != nil {
 		t.Fatal(err)
 	}
-	authRecord := applyauth.AuditRecord{AuthorizationID: "authorization-commit", WorkspaceID: "workspace-commit", ProjectID: "project-commit", RunID: "run-commit", KeyID: "urn:anvilkit:key:commit-synthetic", PayloadDigest: digest('a'), TokenDigest: digest('b'), IssuedAt: now, ExpiresAt: now.Add(2 * time.Minute)}
+	authRecord := applyauth.AuditRecord{AuthorizationID: "authorization-commit", WorkspaceID: "workspace-commit", ProjectID: "project-commit", RunID: "run-commit", KeyID: "urn:anvilkit:key:commit-synthetic", PayloadDigest: digest('a'), TokenDigest: digest('b'), IssuedAt: now, ExpiresAt: now.Add(2 * time.Minute), OperationKey: "workflow-commit:commit", Token: "synthetic.compact.token"}
 	if err := audit.Record(ctx, authRecord); err != nil {
 		t.Fatal(err)
+	}
+	// A replay of the identical audit write converges without a second row.
+	if err := audit.Record(ctx, authRecord); err != nil {
+		t.Fatalf("identical audit replay must converge: %v", err)
+	}
+	// A racing issuance for the same durable operation loses atomically: its
+	// token is never durably audited and the operation mapping is untouched.
+	racingRecord := authRecord
+	racingRecord.AuthorizationID = "authorization-racing"
+	racingRecord.PayloadDigest = digest('e')
+	racingRecord.TokenDigest = digest('f')
+	racingRecord.Token = "racing.compact.token"
+	racingErr := audit.Record(ctx, racingRecord)
+	var racingDetails problem.Details
+	if !errors.As(racingErr, &racingDetails) || racingDetails.Code != string(problem.CodeIdempotencyConflict) {
+		t.Fatalf("racing issuance must lose with an idempotency conflict, got %v", racingErr)
+	}
+	var loserRows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_control.apply_authorizations WHERE workspace_id='workspace-commit' AND project_id='project-commit' AND authorization_id='authorization-racing'`).Scan(&loserRows); err != nil {
+		t.Fatal(err)
+	}
+	if loserRows != 0 {
+		t.Fatal("the losing racing token was durably audited")
+	}
+	issuances, err := executionpg.NewIssuanceStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorded, ok, err := issuances.Recorded(ctx, "workspace-commit", "project-commit", "workflow-commit:commit"); err != nil || !ok || recorded.AuthorizationID != "authorization-commit" || recorded.RunID != "run-commit" || recorded.AuthorizationJWS != "synthetic.compact.token" {
+		t.Fatalf("recorded issuance=%#v ok=%v err=%v", recorded, ok, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_control.commit_issuances SET authorization_id='authorization-racing' WHERE workspace_id='workspace-commit' AND project_id='project-commit' AND operation_key='workflow-commit:commit'`); err == nil {
+		t.Fatal("recorded commit issuance was mutable")
 	}
 	operationStore, err := commitpg.New(pool)
 	if err != nil {
@@ -412,6 +474,186 @@ func assertCommitBoundaries(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	}
 	if _, err := pool.Exec(ctx, `UPDATE agent_artifacts.metadata SET state='pending',version=version+1 WHERE workspace_id=$1 AND project_id=$2 AND artifact_id='artifact-commit'`, scope.WorkspaceID, scope.ProjectID); err == nil {
 		t.Fatal("artifact lifecycle moved backward")
+	}
+}
+
+// assertArtifactLifecycle proves the durable artifact module end to end: the
+// executor-facing port records an immutable candidate, review finalizes it,
+// commit eligibility answers from the finalized state, a confirmed effect
+// commits it, grants are audited durably, and the object bytes are write-once.
+// assertEvidenceStore proves the durable AgentEvidence boundary: independent
+// per-run sequences, idempotent appends, immutable rows, and access-audited
+// reads.
+func assertEvidenceStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	store, err := eventpg.NewEvidenceStore(pool, func() time.Time { return time.Unix(700, 0).UTC() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact := events.Evidence{
+		WorkspaceID:    "workspace-evidence",
+		ProjectID:      "project-evidence",
+		RunID:          "run-evidence",
+		EvidenceID:     "evidence-commit-1",
+		Type:           "commit.authorization-issued",
+		OccurredAt:     time.Unix(699, 0).UTC(),
+		Producer:       events.EvidenceProducer{Component: "agent-executor", DefinitionDigest: "sha256:" + strings.Repeat("d", 64), PolicyDigest: "sha256:" + strings.Repeat("a", 64), ContractBOMDigest: "sha256:" + strings.Repeat("c", 64)},
+		Classification: "internal",
+		Retention:      "audit",
+		Traceparent:    "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+		Payload:        map[string]string{"authorizationId": "authorization-evidence"},
+	}
+	first, err := store.AppendEvidence(ctx, fact)
+	if err != nil || first != 1 {
+		t.Fatalf("first evidence sequence=%d err=%v", first, err)
+	}
+	second := fact
+	second.EvidenceID = "evidence-domain-1"
+	second.Type = "domain.effect-confirmed"
+	if sequence, err := store.AppendEvidence(ctx, second); err != nil || sequence != 2 {
+		t.Fatalf("second evidence sequence=%d err=%v", sequence, err)
+	}
+	if replayed, err := store.AppendEvidence(ctx, fact); err != nil || replayed != 1 {
+		t.Fatalf("replayed evidence sequence=%d err=%v, want the recorded 1", replayed, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_evidence.records SET evidence_type='domain.tampered' WHERE workspace_id='workspace-evidence'`); err == nil {
+		t.Fatal("recorded evidence was mutable")
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM agent_evidence.records WHERE workspace_id='workspace-evidence'`); err == nil {
+		t.Fatal("recorded evidence was deletable")
+	}
+	records, err := store.ReadEvidence(ctx, events.Scope{WorkspaceID: "workspace-evidence", ProjectID: "project-evidence"}, "run-evidence", "operator-1", "integration-verification", 10)
+	if err != nil || len(records) != 2 || records[0].Sequence != 1 || records[1].Sequence != 2 {
+		t.Fatalf("evidence read records=%d err=%v", len(records), err)
+	}
+	var audited int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_evidence.access_audit WHERE workspace_id='workspace-evidence' AND accessor='operator-1' AND purpose='integration-verification'`).Scan(&audited); err != nil || audited != 1 {
+		t.Fatalf("evidence access audit rows=%d err=%v", audited, err)
+	}
+}
+
+func assertArtifactLifecycle(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	store, err := artifactspg.NewStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	objects, err := artifactspg.NewObjects(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := artifactspg.NewHMACReader(pool, []byte("integration-grant-signing-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	material := json.RawMessage(`{"synthetic":true}`)
+	activeAuthority := authority.NewStatic(authority.Current{Definition: material, ContractBOM: material, Policy: material, Budget: material, WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true})
+	service, err := artifacts.New(store, objects, reader, activeAuthority, time.Hour, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(600, 0).UTC()
+	clock := testClock{now}
+	port, err := execution.NewServiceArtifactPort(service, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateBytes := []byte(`{"kind":"ComponentPackageSpec","name":"integration-artifact"}`)
+	digestOf := sha256.Sum256(candidateBytes)
+	candidateDigest := "sha256:" + hex.EncodeToString(digestOf[:])
+	sha := func(character byte) string { return "sha256:" + strings.Repeat(string(character), 64) }
+	candidate := execution.ArtifactCandidate{
+		WorkspaceID:         "workspace-artifact",
+		ProjectID:           "project-artifact",
+		RunID:               "run-artifact",
+		Digest:              candidateDigest,
+		Bytes:               candidateBytes,
+		SchemaComponent:     "anvilkit.contract.schema.component-package-spec",
+		SchemaDigest:        sha('a'),
+		BOMDigest:           sha('b'),
+		CatalogDigest:       sha('c'),
+		OperationKey:        "workflow-artifact:finalize",
+		ExecutionGeneration: 1,
+		BuildIdentity:       sha('d'),
+		Producer:            "anvilkit-agent-runner",
+	}
+	if err := port.RecordCandidate(ctx, candidate); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.RecordCandidate(ctx, candidate); err != nil {
+		t.Fatalf("candidate recording must converge under replay: %v", err)
+	}
+	query := execution.ArtifactQuery{WorkspaceID: candidate.WorkspaceID, ProjectID: candidate.ProjectID, RunID: candidate.RunID, ArtifactDigest: candidateDigest}
+	if eligibility, err := port.Eligible(ctx, query); err != nil || eligibility.Eligible {
+		t.Fatalf("a valid but unfinalized artifact must be ineligible, got %+v err=%v", eligibility, err)
+	}
+	if err := port.EnsureFinalized(ctx, query); err != nil {
+		t.Fatal(err)
+	}
+	if eligibility, err := port.Eligible(ctx, query); err != nil || !eligibility.Eligible {
+		t.Fatalf("a finalized artifact must be eligible, got %+v err=%v", eligibility, err)
+	}
+	artifactID := execution.ArtifactRecordID(candidate.RunID, candidateDigest)
+	grant, err := service.Grant(ctx, candidate.WorkspaceID, candidate.ProjectID, artifactID, artifacts.ReadAccess, "actor-artifact", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var audited int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_artifacts.access_grants WHERE workspace_id=$1 AND project_id=$2 AND artifact_id=$3`, candidate.WorkspaceID, candidate.ProjectID, artifactID).Scan(&audited); err != nil || audited != 1 {
+		t.Fatalf("grant audit rows=%d err=%v", audited, err)
+	}
+	if _, err := service.UseGrant(ctx, candidate.WorkspaceID, candidate.ProjectID, "actor-artifact", grant, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := port.EnsureCommitted(ctx, query); err != nil {
+		t.Fatal(err)
+	}
+	record, err := service.Get(ctx, candidate.WorkspaceID, candidate.ProjectID, artifactID)
+	if err != nil || record.State != artifacts.Committed {
+		t.Fatalf("record=%#v err=%v, want committed", record, err)
+	}
+	// Committed artifacts leave the governed-effect window: eligibility is
+	// exactly the finalized state.
+	if eligibility, err := port.Eligible(ctx, query); err != nil || eligibility.Eligible {
+		t.Fatalf("a committed artifact must not be re-eligible, got %+v err=%v", eligibility, err)
+	}
+	// Quarantine after commit increments the security generation and the old
+	// grant dies with it.
+	quarantined, err := service.Transition(ctx, candidate.WorkspaceID, candidate.ProjectID, artifactID, record.Version, artifacts.Quarantined, now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quarantined.SecurityGeneration <= record.SecurityGeneration {
+		t.Fatal("quarantine must increment the security generation")
+	}
+	if _, err := service.UseGrant(ctx, candidate.WorkspaceID, candidate.ProjectID, "actor-artifact", grant, now.Add(3*time.Minute)); err == nil {
+		t.Fatal("a grant must not survive quarantine")
+	}
+	// Revocation is recorded immutably on the audited rows: the history stays,
+	// the revocation marker lands, and neither can be deleted or rewritten.
+	var revoked int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_artifacts.access_grants WHERE workspace_id=$1 AND project_id=$2 AND artifact_id=$3 AND revoked_at IS NOT NULL`, candidate.WorkspaceID, candidate.ProjectID, artifactID).Scan(&revoked); err != nil || revoked != 1 {
+		t.Fatalf("revocation must mark audited grants immutably, revoked rows=%d err=%v", revoked, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_artifacts.access_grants WHERE workspace_id=$1 AND project_id=$2 AND artifact_id=$3`, candidate.WorkspaceID, candidate.ProjectID, artifactID).Scan(&audited); err != nil || audited != 1 {
+		t.Fatalf("revocation must never delete audit history, rows=%d err=%v", audited, err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM agent_artifacts.access_grants WHERE workspace_id=$1 AND project_id=$2 AND artifact_id=$3`, candidate.WorkspaceID, candidate.ProjectID, artifactID); err == nil {
+		t.Fatal("audited artifact grants were deletable")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_artifacts.access_grants SET revoked_at=NULL WHERE workspace_id=$1 AND project_id=$2 AND artifact_id=$3`, candidate.WorkspaceID, candidate.ProjectID, artifactID); err == nil {
+		t.Fatal("a recorded revocation was reversible")
+	}
+	// Object bytes are write-once at the database boundary.
+	if err := objects.PutOnce(ctx, record.Reference, []byte("different bytes")); err == nil {
+		t.Fatal("object store accepted a rewrite")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_artifacts.objects SET bytes=$3 WHERE bucket=$1 AND object_key=$2`, record.Reference.Bucket, record.Reference.ObjectKey, []byte("mutated")); err == nil {
+		t.Fatal("artifact object bytes were mutable")
+	}
+	stored, err := objects.Read(ctx, record.Reference)
+	if err != nil || string(stored) != string(candidateBytes) {
+		t.Fatalf("stored bytes mismatch err=%v", err)
 	}
 }
 
@@ -740,9 +982,9 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if err != nil {
 		t.Fatal(err)
 	}
-	runStore := runpg.New(pool, idempotencyStore)
+	runStore := runpg.New(pool, idempotencyStore, pinnedGuard(t))
 	runService := runs.NewService(runStore, noOpStarter{}, runID("control-run"), testClock{time.Unix(300, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
-	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-control"}}`)
+	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-control","workspaceId":"workspace-control","projectId":"project-control"}}`)
 	digest, _ := canonical.Digest(raw)
 	scope := runs.Scope{WorkspaceID: "workspace-control", ProjectID: "project-control", ActorID: "actor"}
 	trace := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
@@ -758,7 +1000,7 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := interruptpg.New(pool, idempotencyStore)
+	store, err := interruptpg.New(pool, idempotencyStore, pinnedGuard(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -798,7 +1040,9 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_workflow.checkpoints WHERE workspace_id=$1 AND project_id=$2 AND workflow_id=$3`, scope.WorkspaceID, scope.ProjectID, string(current.RunID)+":g1").Scan(&checkpointCount); err != nil {
 		t.Fatal(err)
 	}
-	if eventCount != 7 || checkpointCount != 7 {
+	// Seven state transitions checkpoint; the two opened input requests each
+	// add a public run.input-requested event without a checkpoint.
+	if eventCount != 9 || checkpointCount != 7 {
 		t.Fatalf("atomic Control evidence events=%d checkpoints=%d", eventCount, checkpointCount)
 	}
 	outbox, err := eventpg.NewOutboxStore(pool)
@@ -810,7 +1054,7 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		t.Fatal(err)
 	}
 	var publishedCount int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.outbox WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND published_at IS NOT NULL`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&publishedCount); err != nil || publishedCount != 7 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.outbox WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND published_at IS NOT NULL`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&publishedCount); err != nil || publishedCount != 9 {
 		t.Fatalf("published outbox count=%d err=%v", publishedCount, err)
 	}
 	if len(publisher.messages) < publishedCount {
@@ -875,7 +1119,7 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if err := pool.QueryRow(ctx, `SELECT stuck_at FROM agent_control.run_progress WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&stuckAt); err != nil || stuckAt != nil {
 		t.Fatalf("failed stuck transaction left marker=%v err=%v", stuckAt, err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&eventCount); err != nil || eventCount != 7 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&eventCount); err != nil || eventCount != 9 {
 		t.Fatalf("failed stuck transaction leaked event count=%d err=%v", eventCount, err)
 	}
 	marked, err := store.MarkStuck(ctx, currentProgress, breachedAt, "agent-service-oncall")
@@ -890,7 +1134,7 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_control.run_alerts WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND state=$4`, scope.WorkspaceID, scope.ProjectID, current.RunID, runs.Planning).Scan(&alertCount); err != nil || alertCount != 1 {
 		t.Fatalf("durable stuck alert count=%d err=%v", alertCount, err)
 	}
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&eventCount); err != nil || eventCount != 8 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, current.RunID).Scan(&eventCount); err != nil || eventCount != 10 {
 		t.Fatalf("durable stuck event count=%d err=%v", eventCount, err)
 	}
 	afterStuck, err := store.Current(ctx, scope, current.RunID)
@@ -941,8 +1185,8 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		t.Fatal(err)
 	}
 	replay, err := eventpg.NewReader(pool, guard).Replay(ctx, events.ReplayRequest{Scope: events.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID}, RunID: string(current.RunID), Limit: 100})
-	if err != nil || len(replay.Events) != 11 {
-		t.Fatalf("control event replay=%#v err=%v", replay, err)
+	if err != nil || len(replay.Events) != 13 {
+		t.Fatalf("control event replay: events=%d err=%v", len(replay.Events), err)
 	}
 	if err := events.ValidateContiguous(replay.Events, 0); err != nil {
 		t.Fatal(err)
@@ -975,7 +1219,7 @@ func assertDurableCreateLatency(t *testing.T, ctx context.Context, pool *pgxpool
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := runs.NewService(runpg.New(pool, idempotencyStore), noOpStarter{}, &sequentialRunIDs{}, testClock{time.Now().UTC()}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
+	service := runs.NewService(runpg.New(pool, idempotencyStore, pinnedGuard(t)), noOpStarter{}, &sequentialRunIDs{}, testClock{time.Now().UTC()}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
 	scope := runs.Scope{WorkspaceID: "workspace-durable-load", ProjectID: "project-durable-load", ActorID: "actor"}
 	authority := durableAuthority()
 	latencies := make([]time.Duration, requests)
@@ -997,7 +1241,7 @@ func assertDurableCreateLatency(t *testing.T, ctx context.Context, pool *pgxpool
 				case <-timer.C:
 				}
 			}
-			raw := []byte(fmt.Sprintf(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"load-%06d"}}`, index))
+			raw := []byte(fmt.Sprintf(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"load-%06d","workspaceId":"workspace-durable-load","projectId":"project-durable-load"}}`, index))
 			digest, digestErr := canonical.Digest(raw)
 			if digestErr != nil {
 				errorsByRequest <- digestErr
@@ -1065,10 +1309,10 @@ func assertDurableRunCore(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := runpg.New(pool, idempotencyStore)
+	store := runpg.New(pool, idempotencyStore, pinnedGuard(t))
 	starter := &durableStarter{store: store, started: make(map[string]bool)}
 	service := runs.NewService(store, starter, runID("durable-run"), testClock{time.Unix(200, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
-	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-durable"}}`)
+	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-durable","workspaceId":"workspace-durable","projectId":"project-durable"}}`)
 	digest, _ := canonical.Digest(raw)
 	scope := runs.Scope{WorkspaceID: "workspace-durable", ProjectID: "project-durable", ActorID: "actor"}
 	input := runs.CreateInput{Scope: scope, Key: "durable-key", ClaimedDigest: digest, Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", Raw: raw, Authority: durableAuthority()}
@@ -1118,13 +1362,16 @@ func assertDurableRunCore(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	if err != nil || len(page.Items) != 1 {
 		t.Fatalf("page=%#v err=%v", page, err)
 	}
-	different := []byte(`{"domain":"platform-agent","operation":"image-operation","target":{"targetType":"page","targetId":"page-durable"}}`)
+	different := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"image-operation","target":{"targetType":"page","targetId":"page-durable","workspaceId":"workspace-durable","projectId":"project-durable"}}`)
 	differentDigest, _ := canonical.Digest(different)
 	conflicting := input
 	conflicting.Raw = different
 	conflicting.ClaimedDigest = differentDigest
+	// The same key with changed canonical bytes is the governed
+	// IDEMPOTENCY_KEY_REUSED (ADR-021 §4), reported as its own code rather
+	// than folded into the general idempotency conflict.
 	_, err = service.Create(ctx, conflicting)
-	assertProblemCode(t, err, problem.CodeIdempotencyConflict)
+	assertProblemCode(t, err, problem.CodeIdempotencyKeyReused)
 	transitionErrors := make(chan error, 2)
 	for range 2 {
 		wait.Add(1)
@@ -1200,6 +1447,22 @@ func assertDurableRunCore(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	}
 	_, err = reader.Replay(ctx, events.ReplayRequest{Scope: eventScope, RunID: "durable-run", AfterEventID: "expired", Limit: 100})
 	assertProblemCode(t, err, problem.CodeCursorExpired)
+	// A cursor whose event has aged past the deployment's retention window
+	// answers 410 even while the bytes still exist: clients recover through
+	// the snapshot, never through an unbounded replay contract.
+	retained, err := eventpg.NewRetainedReader(pool, guard, events.DefaultBounds(), time.Hour, func() time.Time { return time.Now().Add(48 * time.Hour) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = retained.Replay(ctx, events.ReplayRequest{Scope: eventScope, RunID: "durable-run", AfterEventID: "durable-run:1", Limit: 100})
+	assertProblemCode(t, err, problem.CodeCursorExpired)
+	fresh, err := eventpg.NewRetainedReader(pool, guard, events.DefaultBounds(), 720*time.Hour, func() time.Time { return time.Unix(200, 0).Add(time.Minute) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fresh.Replay(ctx, events.ReplayRequest{Scope: eventScope, RunID: "durable-run", AfterEventID: "durable-run:1", Limit: 100}); err != nil {
+		t.Fatalf("a cursor inside the retention window must replay: %v", err)
+	}
 	duplicate := replay.Events[0]
 	if err := reader.Append(ctx, eventScope, duplicate); err != nil {
 		t.Fatalf("identical event replay rejected: %v", err)
@@ -1221,9 +1484,9 @@ func assertDurableRunStoreAtomicity(t *testing.T, ctx context.Context, pool *pgx
 	for index, point := range points {
 		runID := runs.ID(fmt.Sprintf("durable-atomic-create-%d", index))
 		scope := runs.Scope{WorkspaceID: "workspace-durable-atomic", ProjectID: "project-durable-atomic", ActorID: "actor"}
-		raw := []byte(fmt.Sprintf(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"atomic-create-%d"}}`, index))
+		raw := []byte(fmt.Sprintf(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"atomic-create-%d","workspaceId":"workspace-durable-atomic","projectId":"project-durable-atomic"}}`, index))
 		digest, _ := canonical.Digest(raw)
-		store := runpg.NewConfigured(pool, idempotencyStore, events.DefaultBounds(), func(actual runpg.FailurePoint) error {
+		store := runpg.NewConfigured(pool, idempotencyStore, events.DefaultBounds(), pinnedGuard(t), func(actual runpg.FailurePoint) error {
 			if actual == point {
 				return errors.New("fault")
 			}
@@ -1235,7 +1498,7 @@ func assertDurableRunStoreAtomicity(t *testing.T, ctx context.Context, pool *pgx
 		}
 		assertDurableAtomicCounts(t, ctx, pool, scope, runID, 0, 0)
 
-		base := runs.NewService(runpg.New(pool, idempotencyStore), noOpStarter{}, runIDGenerator(runID), testClock{time.Unix(250, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
+		base := runs.NewService(runpg.New(pool, idempotencyStore, pinnedGuard(t)), noOpStarter{}, runIDGenerator(runID), testClock{time.Unix(250, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
 		created, err := base.Create(ctx, runs.CreateInput{Scope: scope, Key: fmt.Sprintf("atomic-base-%d", index), ClaimedDigest: digest, Traceparent: traceparent, Raw: raw, Authority: durableAuthority()})
 		if err != nil {
 			t.Fatal(err)
@@ -1289,6 +1552,15 @@ func (id runID) NewID() (runs.ID, error) { return runs.ID(id), nil }
 type runIDGenerator runs.ID
 
 func (id runIDGenerator) NewID() (runs.ID, error) { return runs.ID(id), nil }
+
+func pinnedGuard(t *testing.T) *contractguard.Guard {
+	t.Helper()
+	guard, err := contractguard.NewGuard("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return guard
+}
 
 type testClock struct{ value time.Time }
 
@@ -1454,7 +1726,7 @@ func assertIdempotency(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := idempotency.Request{WorkspaceID: "w", ProjectID: "p", Operation: "cancel", Key: "same", Digest: []byte("canonical"), RunID: "idem", VersionBound: 1}
+	request := idempotency.Request{WorkspaceID: "w", ProjectID: "p", Subject: "actor-idem", Method: "POST", Operation: "cancel", Key: "same", Digest: []byte("canonical"), RunID: "idem", VersionBound: 1}
 	var calls atomic.Int64
 	handler := func(ctx context.Context, tx pgx.Tx) (idempotency.Response, error) {
 		calls.Add(1)
@@ -1509,7 +1781,37 @@ func assertIdempotency(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	}); err == nil || ran {
 		t.Fatal("stale precondition with fresh key mutated")
 	}
+	// Key isolation includes the authenticated subject and the method: a
+	// different actor presenting the same key and digest is a fresh execution,
+	// never a replay of the first actor's recorded response (ADR-021 §4).
+	crossActor := request
+	crossActor.Subject = "actor-other"
+	crossActor.VersionBound = 2
+	crossActorRan := false
+	crossActorResponse, err := store.Execute(ctx, crossActor, func(ctx context.Context, tx pgx.Tx) (idempotency.Response, error) {
+		crossActorRan = true
+		return idempotency.Response{Status: 200, ContentType: "application/json", Body: []byte(`{"actor":"other"}`)}, nil
+	})
+	if err != nil || !crossActorRan || crossActorResponse.Replayed || string(crossActorResponse.Body) != `{"actor":"other"}` {
+		t.Fatalf("cross-actor execution response=%#v ran=%v err=%v, want an independent execution", crossActorResponse, crossActorRan, err)
+	}
+	crossMethod := request
+	crossMethod.Method = "INTERNAL"
+	crossMethod.VersionBound = 2
+	crossMethodRan := false
+	if _, err := store.Execute(ctx, crossMethod, func(context.Context, pgx.Tx) (idempotency.Response, error) {
+		crossMethodRan = true
+		return idempotency.Response{Status: 200, ContentType: "application/json", Body: []byte(`{}`)}, nil
+	}); err != nil || !crossMethodRan {
+		t.Fatalf("cross-method execution ran=%v err=%v, want an independent execution", crossMethodRan, err)
+	}
 }
+
+// clusterRoleLockKey is the cluster-wide advisory lock coordinating the
+// cluster-global service roles: isolated test databases hold it shared for
+// their lifetime; the migration rollback that drops the roles takes it
+// exclusively.
+const clusterRoleLockKey = 0x5750334b
 
 func isolatedDatabase(t *testing.T, ctx context.Context, baseURL string) (string, func()) {
 	t.Helper()
@@ -1546,7 +1848,7 @@ func assertDurableInterruptExpiry(t *testing.T, ctx context.Context, pool *pgxpo
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := interruptpg.New(pool, idempotencyStore)
+	store, err := interruptpg.New(pool, idempotencyStore, pinnedGuard(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1558,9 +1860,9 @@ func assertDurableInterruptExpiry(t *testing.T, ctx context.Context, pool *pgxpo
 
 	awaiting := func(suffix string) (runs.Scope, runs.Snapshot, interrupts.InputRequest, interrupts.OperationResult) {
 		t.Helper()
-		runStore := runpg.New(pool, idempotencyStore)
+		runStore := runpg.New(pool, idempotencyStore, pinnedGuard(t))
 		runService := runs.NewService(runStore, noOpStarter{}, runID("expiry-run-"+suffix), testClock{time.Unix(300, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
-		raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-expiry"}}`)
+		raw := []byte(fmt.Sprintf(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:%s"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-expiry","workspaceId":"workspace-expiry-%s","projectId":"project-expiry"}}`, strings.Repeat("a", 64), suffix))
 		digest, _ := canonical.Digest(raw)
 		scope := runs.Scope{WorkspaceID: "workspace-expiry-" + suffix, ProjectID: "project-expiry", ActorID: "actor"}
 		created, err := runService.Create(ctx, runs.CreateInput{Scope: scope, Key: "create", ClaimedDigest: digest, Traceparent: trace, Raw: raw, Authority: durableAuthority()})
@@ -1630,7 +1932,7 @@ func assertDurableInterruptExpiry(t *testing.T, ctx context.Context, pool *pgxpo
 	// the explicit concurrency conflict the superseded outcome exists for: the
 	// expiry writes nothing and reports it.
 	staleScope, stale, staleRequest, staleOpened := awaiting("stale")
-	staleRuns := runs.NewService(runpg.New(pool, idempotencyStore), noOpStarter{}, runID(stale.RunID), testClock{time.Unix(300, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
+	staleRuns := runs.NewService(runpg.New(pool, idempotencyStore, pinnedGuard(t)), noOpStarter{}, runID(stale.RunID), testClock{time.Unix(300, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
 	cancelling, err := staleRuns.Transition(ctx, staleScope, stale.RunID, staleOpened.Snapshot.Version, runs.Command{Kind: runs.RequestCancellation, Traceparent: trace})
 	if err != nil {
 		t.Fatal(err)
@@ -1872,5 +2174,286 @@ func assertCancellationReconciliation(t *testing.T, ctx context.Context, pool *p
 	// A reconciler that cannot read an effect domain must not exist at all.
 	if _, err := cancellation.New(cancellation.Pools{Control: pool, Workflow: pool, Artifacts: pool}); err == nil {
 		t.Fatal("a reconciler was built without every effect store")
+	}
+}
+
+// realClock serves live time for durable dispatch tests whose fences compare
+// application time against database transaction time.
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now().UTC() }
+
+// dispatchToolMaterial serves one attested tool definition for the durable
+// dispatch tests.
+type dispatchToolMaterial struct{ definition tools.Definition }
+
+func (m dispatchToolMaterial) ComponentDigest(string) (string, bool) {
+	return m.definition.InputSchema.Digest, true
+}
+
+func (m dispatchToolMaterial) ToolDefinition(string) (tools.Definition, bool) {
+	return m.definition, true
+}
+
+// assertScopedAuthorityStore proves the durable current-authority source:
+// scoped bindings, subject activation, and every revocation kind observed on
+// the next read, with an append-only revocation ledger.
+func assertScopedAuthorityStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	store, err := authoritypg.New(pool, func() time.Time { return time.Now().UTC() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	material := json.RawMessage(`{"synthetic":true}`)
+	bom := json.RawMessage(`{"repository":"anvilkit/contracts","bomDigest":"sha256:` + strings.Repeat("a", 64) + `"}`)
+	binding := authoritypg.Binding{WorkspaceID: "workspace-auth", ProjectID: "project-auth", Definition: material, ContractBOM: bom, Policy: material, Budget: material, Grants: authority.Grants{AllowedCapabilities: []string{"fake.execute"}, MaximumRisk: "low"}}
+	subjects := []authoritypg.Subject{{WorkspaceID: "workspace-auth", ActorID: "actor-auth", Role: "agent-actor"}}
+	if err := store.Seed(ctx, binding, subjects); err != nil {
+		t.Fatal(err)
+	}
+	scope := authority.Scope{WorkspaceID: "workspace-auth", ProjectID: "project-auth", ActorID: "actor-auth"}
+	current, err := store.Current(ctx, scope)
+	if err != nil || !current.Active() || !current.MaterialComplete() || len(current.Grants.AllowedCapabilities) != 1 {
+		t.Fatalf("seeded authority=%+v err=%v, want an active, complete, granted scope", current, err)
+	}
+	if pinned, err := store.PinnedBOMDigest(ctx, "workspace-auth", "project-auth"); err != nil || pinned != "sha256:"+strings.Repeat("a", 64) {
+		t.Fatalf("pinned BOM=%q err=%v", pinned, err)
+	}
+	if _, err := store.Current(ctx, authority.Scope{WorkspaceID: "workspace-auth", ProjectID: "project-unbound", ActorID: "actor-auth"}); err == nil {
+		t.Fatal("an unbound scope served authority")
+	}
+	if unknown, err := store.Current(ctx, authority.Scope{WorkspaceID: "workspace-auth", ProjectID: "project-auth", ActorID: "actor-unknown"}); err != nil || unknown.ActorActive {
+		t.Fatalf("unknown actor authority=%+v err=%v, want an inactive actor axis", unknown, err)
+	}
+	revoke := func(kind authority.RevocationKind, subject string) {
+		t.Helper()
+		if err := store.Revoke(ctx, authority.Revocation{WorkspaceID: "workspace-auth", ProjectID: "project-auth", RevocationID: "revocation-" + string(kind), Kind: kind, Subject: subject, Reason: "test"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	revoke(authority.RevokeTarget, "page-auth")
+	revoke(authority.RevokeApproval, "request.approve-auth")
+	current, err = store.Current(ctx, scope)
+	if err != nil || !current.TargetRevoked("page-auth") || !current.ApprovalRevoked("request.approve-auth") || !current.Active() {
+		t.Fatalf("identity revocations=%+v err=%v, want target and approval withdrawn with the scope still active", current, err)
+	}
+	revoke(authority.RevokePolicy, "policy")
+	if current, err = store.Current(ctx, scope); err != nil || current.PolicyActive {
+		t.Fatalf("policy revocation=%+v err=%v", current, err)
+	}
+	revoke(authority.RevokeBudget, "budget")
+	if current, err = store.Current(ctx, scope); err != nil || current.MaterialComplete() {
+		t.Fatalf("budget revocation=%+v err=%v, want incomplete material", current, err)
+	}
+	revoke(authority.RevokeDefinition, "definition")
+	if current, err = store.Current(ctx, scope); err != nil || len(current.Definition) != 0 {
+		t.Fatalf("definition revocation=%+v err=%v, want withdrawn definition material", current, err)
+	}
+	revoke(authority.RevokeRole, "agent-actor")
+	if current, err = store.Current(ctx, scope); err != nil || current.ActorActive {
+		t.Fatalf("role revocation=%+v err=%v", current, err)
+	}
+	revoke(authority.RevokeActor, "actor-auth")
+	revoke(authority.RevokeWorkspace, "workspace-auth")
+	if current, err = store.Current(ctx, scope); err != nil || current.WorkspaceActive || current.ActorActive || current.Active() {
+		t.Fatalf("workspace and actor revocation=%+v err=%v", current, err)
+	}
+	// A reseed restores material but never erases the recorded revocations.
+	if err := store.Seed(ctx, binding, subjects); err != nil {
+		t.Fatal(err)
+	}
+	if current, err = store.Current(ctx, scope); err != nil || current.Active() {
+		t.Fatalf("reseed=%+v err=%v, want revocations to survive reseeding", current, err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM agent_control.authority_revocations WHERE workspace_id='workspace-auth'`); err == nil {
+		t.Fatal("the authority revocation ledger was deletable")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_control.authority_revocations SET subject='rewritten' WHERE workspace_id='workspace-auth'`); err == nil {
+		t.Fatal("the authority revocation ledger was mutable")
+	}
+}
+
+// assertDomainRedemptionAcrossProcesses proves the strict domain owner over
+// its durable redemption record: one really signed authorization redeems
+// exactly once, a newly constructed owner replays the recorded outcome, and
+// a second operation or a tampered token is rejected.
+func assertDomainRedemptionAcrossProcesses(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	now := time.Now().UTC()
+	digest := func(c string) string { return "sha256:" + strings.Repeat(c, 64) }
+	keyring, err := applyauth.NewSeededKeyRing([]byte("integration-domain-signing-01234"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := applyauth.Binding{RunID: "run-redeem", ActionDigest: digest("1"), ArtifactDigest: digest("1"), Target: applyauth.Target{Type: "page", ID: "page-redeem", WorkspaceID: "workspace-redeem", ProjectID: "project-redeem"}, BaseRevision: "rev:request.redeem", ActorID: "actor-redeem", WorkspaceID: "workspace-redeem", ApprovalVersion: 1, ContractBOMDigest: digest("2"), PolicyDigest: digest("3"), DefinitionDigest: digest("4")}
+	fixedAuthority := fixedApplyAuthority{proof: applyauth.Proof{Approved: binding, Current: binding, ApprovalCurrent: true, ArtifactEligible: true}}
+	audit, err := applyauthpg.New(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer, err := applyauth.New(fixedAuthority, execution.RandomAuthorizationIDs{}, keyring, audit, journal.NewMemoryStore(), pinnedGuard(t), testClock{now}, 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization, err := issuer.Issue(ctx, applyauth.Command{WorkspaceID: "workspace-redeem", ProjectID: "project-redeem", RunID: "run-redeem", ApprovalRequestID: "request.redeem", ArtifactID: digest("1"), OperationKey: "workflow-redeem:commit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	redemptions, err := executionpg.NewRedemptionStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := execution.NewVerifyingDomainPort(execution.DomainConfirmed, keyring, redemptions, testClock{now.Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := execution.DomainCommand{
+		OperationID:       "domain.redeem-op",
+		WorkspaceID:       "workspace-redeem",
+		ProjectID:         "project-redeem",
+		RunID:             "run-redeem",
+		ArtifactDigest:    digest("1"),
+		AuthorizationID:   string(authorization.ID),
+		AuthorizationJWS:  authorization.Compact,
+		ActionDigest:      digest("1"),
+		BaseRevision:      "rev:request.redeem",
+		Target:            applyauth.Target{Type: "page", ID: "page-redeem", WorkspaceID: "workspace-redeem", ProjectID: "project-redeem"},
+		ActorID:           "actor-redeem",
+		DefinitionDigest:  digest("4"),
+		ContractBOMDigest: digest("2"),
+		PolicyDigest:      digest("3"),
+	}
+	outcome, err := owner.Commit(ctx, command)
+	if err != nil || outcome.Status != execution.DomainConfirmed {
+		t.Fatalf("first redemption=%+v err=%v", outcome, err)
+	}
+	// A newly constructed owner — a successor process — replays the recorded
+	// outcome and never applies the effect again.
+	successor, err := execution.NewVerifyingDomainPort(execution.DomainConfirmed, keyring, redemptions, testClock{now.Add(2 * time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := successor.Commit(ctx, command)
+	if err != nil || replayed.Status != execution.DomainConfirmed {
+		t.Fatalf("replayed redemption=%+v err=%v", replayed, err)
+	}
+	var redeemedRows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_control.domain_redemptions WHERE workspace_id='workspace-redeem'`).Scan(&redeemedRows); err != nil || redeemedRows != 1 {
+		t.Fatalf("redemption rows=%d err=%v, want exactly one", redeemedRows, err)
+	}
+	secondOperation := command
+	secondOperation.OperationID = "domain.redeem-op-2"
+	if rejected, err := successor.Commit(ctx, secondOperation); err != nil || rejected.Status != execution.DomainRejected {
+		t.Fatalf("second-operation redemption=%+v err=%v, want rejection", rejected, err)
+	}
+	tampered := command
+	parts := strings.Split(tampered.AuthorizationJWS, ".")
+	parts[2] = strings.Repeat("A", len(parts[2]))
+	tampered.AuthorizationJWS = strings.Join(parts, ".")
+	if rejected, err := successor.Commit(ctx, tampered); err != nil || rejected.Status != execution.DomainRejected {
+		t.Fatalf("tampered redemption=%+v err=%v, want rejection", rejected, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_control.domain_redemptions SET outcome='rejected' WHERE workspace_id='workspace-redeem'`); err == nil {
+		t.Fatal("a recorded domain redemption was mutable")
+	}
+}
+
+// fixedApplyAuthority resolves every issuance command to one fixed proof.
+type fixedApplyAuthority struct{ proof applyauth.Proof }
+
+func (a fixedApplyAuthority) Resolve(context.Context, applyauth.Command) (applyauth.Proof, error) {
+	return a.proof, nil
+}
+
+// assertDurableToolDispatch proves the durable fenced dispatch record: task,
+// lease, fence, recovery epoch, accepted result, and replayable output all
+// live in Postgres, and a newly constructed executor — a successor process —
+// replays the recorded output without executing the worker again.
+func assertDurableToolDispatch(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	register, err := recoverypg.NewMirrorEpochSource(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := register.EnsureBaseline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	newExecutor := func(owner string, worker execution.ToolExecutor) execution.ToolExecutor {
+		t.Helper()
+		freshRegister, err := recoverypg.NewMirrorEpochSource(pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dispatch, err := schedulerpg.NewDurableScheduler(pool, freshRegister, execution.DispatchIDs{}, realClock{}, scheduler.PrerequisiteFunc(func(_ context.Context, value scheduler.Create) error {
+			if value.ReservationID == "" || !value.ReservationCurrent || !value.PolicyAllowed {
+				return fmt.Errorf("task prerequisites are unsatisfied")
+			}
+			return nil
+		}), time.Minute)
+		if err != nil {
+			t.Fatal(err)
+		}
+		usageStore, err := usagepg.New(pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pipeline, err := usage.New(usageStore, execution.NewControlledUsageSink())
+		if err != nil {
+			t.Fatal(err)
+		}
+		reservations, err := executionpg.NewToolReservations(pool, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		material := dispatchToolMaterial{definition: tools.Definition{Kind: "ToolDefinition", ToolID: "anvilkit.tool.context-echo", Capability: "fake.execute", InputSchema: tools.SchemaReference{ComponentName: "anvilkit.tool.context-echo.arguments", Digest: "sha256:" + strings.Repeat("a", 64)}}}
+		synthetic := json.RawMessage(`{"synthetic":true}`)
+		source := authority.NewStatic(authority.Current{Definition: synthetic, ContractBOM: synthetic, Policy: synthetic, Budget: synthetic, WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true, Grants: authority.Grants{AllowedCapabilities: []string{"fake.execute"}}})
+		executor, err := execution.NewScheduledToolExecutor(dispatch, freshRegister, source, material, worker, pipeline, reservations, realClock{}, owner, "sha256:"+strings.Repeat("b", 64))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return executor
+	}
+	invocation := execution.ToolInvocation{
+		IdempotencyKey:      "workflow-dispatch:action-0001",
+		ToolID:              "anvilkit.tool.context-echo",
+		Arguments:           json.RawMessage(`{"query":"durable"}`),
+		WorkspaceID:         "workspace-dispatch",
+		ProjectID:           "project-dispatch",
+		RunID:               "run-dispatch",
+		RootRunID:           "run-dispatch",
+		ActorID:             "actor-dispatch",
+		ExecutionGeneration: 1,
+		Traceparent:         "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+	}
+	firstWorker := execution.NewControlledToolExecutor()
+	original, err := newExecutor("dispatch-executor-a", firstWorker).Execute(ctx, invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstWorker.Executions() != 1 {
+		t.Fatalf("first executions=%d, want 1", firstWorker.Executions())
+	}
+	successorWorker := execution.NewControlledToolExecutor()
+	replayed, err := newExecutor("dispatch-executor-b", successorWorker).Execute(ctx, invocation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(replayed.Output) != string(original.Output) {
+		t.Fatalf("replayed output=%s, want the recorded original %s", replayed.Output, original.Output)
+	}
+	if successorWorker.Executions() != 0 {
+		t.Fatalf("successor executions=%d, want the worker never executed again", successorWorker.Executions())
+	}
+	var tasks, attempts, results, outputs int
+	if err := pool.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM agent_workflow.agent_tasks WHERE workspace_id='workspace-dispatch' AND state='completed'),
+		(SELECT count(*) FROM agent_workflow.worker_attempts WHERE workspace_id='workspace-dispatch' AND state='accepted'),
+		(SELECT count(*) FROM agent_workflow.worker_results WHERE workspace_id='workspace-dispatch'),
+		(SELECT count(*) FROM agent_workflow.worker_outputs WHERE workspace_id='workspace-dispatch')`).Scan(&tasks, &attempts, &results, &outputs); err != nil || tasks != 1 || attempts != 1 || results != 1 || outputs != 1 {
+		t.Fatalf("tasks=%d attempts=%d results=%d outputs=%d err=%v, want one durable dispatch record", tasks, attempts, results, outputs, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.worker_outputs SET output='\x00' WHERE workspace_id='workspace-dispatch'`); err == nil {
+		t.Fatal("a recorded replayable output was mutable")
 	}
 }
