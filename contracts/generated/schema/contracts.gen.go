@@ -4509,6 +4509,10 @@ type ContractsBundleJson struct {
 	// "ProviderContinuation".
 	ProviderContinuation *ProviderContinuation `json:"ProviderContinuation,omitempty,omitzero" yaml:"ProviderContinuation,omitempty" mapstructure:"ProviderContinuation,omitempty"`
 
+	// ResolveDomainOperationRequest corresponds to the JSON schema field
+	// "ResolveDomainOperationRequest".
+	ResolveDomainOperationRequest *ResolveDomainOperationRequest `json:"ResolveDomainOperationRequest,omitempty,omitzero" yaml:"ResolveDomainOperationRequest,omitempty" mapstructure:"ResolveDomainOperationRequest,omitempty"`
+
 	// SharedPrimitives corresponds to the JSON schema field "SharedPrimitives".
 	SharedPrimitives *SharedPrimitives `json:"SharedPrimitives,omitempty,omitzero" yaml:"SharedPrimitives,omitempty" mapstructure:"SharedPrimitives,omitempty"`
 
@@ -5500,6 +5504,108 @@ func (j *ProviderContinuation) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("field %s length: must be <= %d", "encryptedBinding", 24576)
 	}
 	*j = ProviderContinuation(plain)
+	return nil
+}
+
+// Intent-only operator recovery command governed by ADR-021. It records which
+// authoritative outcome an escalated governed effect actually had, bound to the
+// exact domain operation the operator reviewed and to the evidence the decision
+// rests on. The basis is a bounded evidence reference, never free-form prose: an
+// operator names the authoritative record a reviewer can retrieve, so the audited
+// decision can be recorded as immutable internal evidence without ever carrying
+// operator-authored content. The resolving operator is never carried on the wire:
+// Agent Service derives it from the verified request authority.
+type ResolveDomainOperationRequest struct {
+	// Basis corresponds to the JSON schema field "basis".
+	Basis string `json:"basis" yaml:"basis" mapstructure:"basis"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// OperationId corresponds to the JSON schema field "operationId".
+	OperationId string `json:"operationId" yaml:"operationId" mapstructure:"operationId"`
+
+	// Outcome corresponds to the JSON schema field "outcome".
+	Outcome ResolveDomainOperationRequestOutcome `json:"outcome" yaml:"outcome" mapstructure:"outcome"`
+}
+
+type ResolveDomainOperationRequestOutcome string
+
+const ResolveDomainOperationRequestOutcomeConfirmed ResolveDomainOperationRequestOutcome = "confirmed"
+const ResolveDomainOperationRequestOutcomeConflict ResolveDomainOperationRequestOutcome = "conflict"
+const ResolveDomainOperationRequestOutcomeRejected ResolveDomainOperationRequestOutcome = "rejected"
+
+var enumValues_ResolveDomainOperationRequestOutcome = []interface{}{
+	"confirmed",
+	"conflict",
+	"rejected",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ResolveDomainOperationRequestOutcome) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ResolveDomainOperationRequestOutcome {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ResolveDomainOperationRequestOutcome, v)
+	}
+	*j = ResolveDomainOperationRequestOutcome(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ResolveDomainOperationRequest) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["basis"]; raw != nil && !ok {
+		return fmt.Errorf("field basis in ResolveDomainOperationRequest: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ResolveDomainOperationRequest: required")
+	}
+	if _, ok := raw["operationId"]; raw != nil && !ok {
+		return fmt.Errorf("field operationId in ResolveDomainOperationRequest: required")
+	}
+	if _, ok := raw["outcome"]; raw != nil && !ok {
+		return fmt.Errorf("field outcome in ResolveDomainOperationRequest: required")
+	}
+	type Plain ResolveDomainOperationRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^anvilkit://evidence/[a-z0-9][a-z0-9-]{1,31}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, string(plain.Basis)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Basis", `^anvilkit://evidence/[a-z0-9][a-z0-9-]{1,31}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Basis)) < 24 {
+		return fmt.Errorf("field %s length: must be >= %d", "basis", 24)
+	}
+	if utf8.RuneCountInString(string(plain.Basis)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "basis", 256)
+	}
+	if utf8.RuneCountInString(string(plain.OperationId)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "operationId", 1)
+	}
+	if utf8.RuneCountInString(string(plain.OperationId)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "operationId", 128)
+	}
+	*j = ResolveDomainOperationRequest(plain)
 	return nil
 }
 

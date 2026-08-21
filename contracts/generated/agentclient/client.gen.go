@@ -182,6 +182,14 @@ type ProblemDetails struct {
 	TraceId      *string                `json:"traceId,omitempty"`
 }
 
+// ResolveDomainOperationRequest Intent-only operator recovery command governed by ADR-021. It records which authoritative outcome an escalated governed effect actually had, bound to the exact domain operation the operator reviewed and to the evidence the decision rests on. The basis is a bounded evidence reference, never free-form prose: an operator names the authoritative record a reviewer can retrieve, so the audited decision can be recorded as immutable internal evidence without ever carrying operator-authored content. The resolving operator is never carried on the wire: Agent Service derives it from the verified request authority.
+type ResolveDomainOperationRequest struct {
+	Basis       string      `json:"basis"`
+	Kind        interface{} `json:"kind"`
+	OperationId string      `json:"operationId"`
+	Outcome     interface{} `json:"outcome"`
+}
+
 // SharedPrimitivesActorId defines model for SharedPrimitivesActorId.
 type SharedPrimitivesActorId = SharedPrimitivesOpaqueId
 
@@ -321,6 +329,9 @@ type IdempotencyKey = string
 // IfMatch defines model for IfMatch.
 type IfMatch = string
 
+// OperationId defines model for OperationId.
+type OperationId = string
+
 // RequestDigest defines model for RequestDigest.
 type RequestDigest = string
 
@@ -395,6 +406,16 @@ type DiscardAgentRunParams struct {
 	IfMatch IfMatch `json:"If-Match"`
 }
 
+// ResolveAgentDomainOperationParams defines parameters for ResolveAgentDomainOperation.
+type ResolveAgentDomainOperationParams struct {
+	IdempotencyKey         IdempotencyKey `json:"Idempotency-Key"`
+	XAnvilKitRequestDigest RequestDigest  `json:"X-AnvilKit-Request-Digest"`
+	Traceparent            Traceparent    `json:"traceparent"`
+
+	// IfMatch Strong ETag "run:<runId>:<resourceRevision>". Missing returns 428; stale returns 412.
+	IfMatch IfMatch `json:"If-Match"`
+}
+
 // StreamAgentRunEventsParams defines parameters for StreamAgentRunEvents.
 type StreamAgentRunEventsParams struct {
 	Traceparent Traceparent `json:"traceparent"`
@@ -436,6 +457,9 @@ type IssueApplyAuthorizationJSONRequestBody = IssueApplyAuthorizationRequest
 
 // DecideAgentApprovalJSONRequestBody defines body for DecideAgentApproval for application/json ContentType.
 type DecideAgentApprovalJSONRequestBody = SubmitApprovalDecisionRequest
+
+// ResolveAgentDomainOperationJSONRequestBody defines body for ResolveAgentDomainOperation for application/json ContentType.
+type ResolveAgentDomainOperationJSONRequestBody = ResolveDomainOperationRequest
 
 // RespondToAgentInputJSONRequestBody defines body for RespondToAgentInput for application/json ContentType.
 type RespondToAgentInputJSONRequestBody = SubmitInputResponseRequest
@@ -575,6 +599,24 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/discard (the `DiscardAgentRun` operationId).
 	DiscardAgentRun(ctx context.Context, workspaceId WorkspaceId, runId RunId, params *DiscardAgentRunParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ResolveAgentDomainOperationWithBody Record the audited operator resolution of an escalated governed domain effect.
+	//
+	// Operator recovery for a run holding at the submit boundary whose governed effect is durably escalated. The command states which authoritative outcome the effect actually had, bound to the exact domain operation the operator reviewed and to the evidence the decision rests on. The resolving operator is derived from the verified request authority and is never carried on the wire. Agent Service re-reads current authority on every call and requires the caller to be admitted under the operator role in this workspace and project; the durable resolution is a compare-and-set on the escalated state, so racing operators produce exactly one audited decision and a replayed decision converges on the recorded one. Nothing here contacts the domain owner and nothing is resubmitted.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/domain-operations/{operationId}/resolution (the `ResolveAgentDomainOperation` operationId).
+	ResolveAgentDomainOperationWithBody(ctx context.Context, workspaceId WorkspaceId, runId RunId, operationId OperationId, params *ResolveAgentDomainOperationParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ResolveAgentDomainOperation Record the audited operator resolution of an escalated governed domain effect.
+	//
+	// Operator recovery for a run holding at the submit boundary whose governed effect is durably escalated. The command states which authoritative outcome the effect actually had, bound to the exact domain operation the operator reviewed and to the evidence the decision rests on. The resolving operator is derived from the verified request authority and is never carried on the wire. Agent Service re-reads current authority on every call and requires the caller to be admitted under the operator role in this workspace and project; the durable resolution is a compare-and-set on the escalated state, so racing operators produce exactly one audited decision and a replayed decision converges on the recorded one. Nothing here contacts the domain owner and nothing is resubmitted.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/domain-operations/{operationId}/resolution (the `ResolveAgentDomainOperation` operationId).
+	ResolveAgentDomainOperation(ctx context.Context, workspaceId WorkspaceId, runId RunId, operationId OperationId, params *ResolveAgentDomainOperationParams, body ResolveAgentDomainOperationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// StreamAgentRunEvents Stream durable public AgentEvent frames with Last-Event-ID recovery.
 	//
@@ -758,6 +800,44 @@ func (c *Client) CancelAgentRun(ctx context.Context, workspaceId WorkspaceId, ru
 // Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/discard (the `DiscardAgentRun` operationId).
 func (c *Client) DiscardAgentRun(ctx context.Context, workspaceId WorkspaceId, runId RunId, params *DiscardAgentRunParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewDiscardAgentRunRequest(c.Server, workspaceId, runId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ResolveAgentDomainOperationWithBody Record the audited operator resolution of an escalated governed domain effect.
+//
+// Operator recovery for a run holding at the submit boundary whose governed effect is durably escalated. The command states which authoritative outcome the effect actually had, bound to the exact domain operation the operator reviewed and to the evidence the decision rests on. The resolving operator is derived from the verified request authority and is never carried on the wire. Agent Service re-reads current authority on every call and requires the caller to be admitted under the operator role in this workspace and project; the durable resolution is a compare-and-set on the escalated state, so racing operators produce exactly one audited decision and a replayed decision converges on the recorded one. Nothing here contacts the domain owner and nothing is resubmitted.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/domain-operations/{operationId}/resolution (the `ResolveAgentDomainOperation` operationId).
+func (c *Client) ResolveAgentDomainOperationWithBody(ctx context.Context, workspaceId WorkspaceId, runId RunId, operationId OperationId, params *ResolveAgentDomainOperationParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResolveAgentDomainOperationRequestWithBody(c.Server, workspaceId, runId, operationId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ResolveAgentDomainOperation Record the audited operator resolution of an escalated governed domain effect.
+//
+// Operator recovery for a run holding at the submit boundary whose governed effect is durably escalated. The command states which authoritative outcome the effect actually had, bound to the exact domain operation the operator reviewed and to the evidence the decision rests on. The resolving operator is derived from the verified request authority and is never carried on the wire. Agent Service re-reads current authority on every call and requires the caller to be admitted under the operator role in this workspace and project; the durable resolution is a compare-and-set on the escalated state, so racing operators produce exactly one audited decision and a replayed decision converges on the recorded one. Nothing here contacts the domain owner and nothing is resubmitted.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/domain-operations/{operationId}/resolution (the `ResolveAgentDomainOperation` operationId).
+func (c *Client) ResolveAgentDomainOperation(ctx context.Context, workspaceId WorkspaceId, runId RunId, operationId OperationId, params *ResolveAgentDomainOperationParams, body ResolveAgentDomainOperationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewResolveAgentDomainOperationRequest(c.Server, workspaceId, runId, operationId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1422,6 +1502,107 @@ func NewDiscardAgentRunRequest(server string, workspaceId WorkspaceId, runId Run
 	return req, nil
 }
 
+// NewResolveAgentDomainOperationRequest calls the generic ResolveAgentDomainOperation builder with application/json body
+func NewResolveAgentDomainOperationRequest(server string, workspaceId WorkspaceId, runId RunId, operationId OperationId, params *ResolveAgentDomainOperationParams, body ResolveAgentDomainOperationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewResolveAgentDomainOperationRequestWithBody(server, workspaceId, runId, operationId, params, "application/json", bodyReader)
+}
+
+// NewResolveAgentDomainOperationRequestWithBody constructs an http.Request for the ResolveAgentDomainOperation method, with any body, and a specified content type
+func NewResolveAgentDomainOperationRequestWithBody(server string, workspaceId WorkspaceId, runId RunId, operationId OperationId, params *ResolveAgentDomainOperationParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "workspaceId", workspaceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "runId", runId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam2 string
+
+	pathParam2, err = runtime.StyleParamWithOptions("simple", false, "operationId", operationId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/workspaces/%s/agent-runs/%s/domain-operations/%s/resolution", pathParam0, pathParam1, pathParam2)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "Idempotency-Key", params.IdempotencyKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("Idempotency-Key", headerParam0)
+
+		var headerParam1 string
+
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "X-AnvilKit-Request-Digest", params.XAnvilKitRequestDigest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-AnvilKit-Request-Digest", headerParam1)
+
+		var headerParam2 string
+
+		headerParam2, err = runtime.StyleParamWithOptions("simple", false, "traceparent", params.Traceparent, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("traceparent", headerParam2)
+
+		var headerParam3 string
+
+		headerParam3, err = runtime.StyleParamWithOptions("simple", false, "If-Match", params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("If-Match", headerParam3)
+
+	}
+
+	return req, nil
+}
+
 // NewStreamAgentRunEventsRequest constructs an http.Request for the StreamAgentRunEvents method
 func NewStreamAgentRunEventsRequest(server string, workspaceId WorkspaceId, runId RunId, params *StreamAgentRunEventsParams) (*http.Request, error) {
 	var err error
@@ -1836,6 +2017,24 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/discard (the `DiscardAgentRun` operationId).
 	DiscardAgentRunWithResponse(ctx context.Context, workspaceId WorkspaceId, runId RunId, params *DiscardAgentRunParams, reqEditors ...RequestEditorFn) (*DiscardAgentRunResponse, error)
+
+	// ResolveAgentDomainOperationWithBodyWithResponse Record the audited operator resolution of an escalated governed domain effect.
+	//
+	// Operator recovery for a run holding at the submit boundary whose governed effect is durably escalated. The command states which authoritative outcome the effect actually had, bound to the exact domain operation the operator reviewed and to the evidence the decision rests on. The resolving operator is derived from the verified request authority and is never carried on the wire. Agent Service re-reads current authority on every call and requires the caller to be admitted under the operator role in this workspace and project; the durable resolution is a compare-and-set on the escalated state, so racing operators produce exactly one audited decision and a replayed decision converges on the recorded one. Nothing here contacts the domain owner and nothing is resubmitted.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/domain-operations/{operationId}/resolution (the `ResolveAgentDomainOperation` operationId).
+	ResolveAgentDomainOperationWithBodyWithResponse(ctx context.Context, workspaceId WorkspaceId, runId RunId, operationId OperationId, params *ResolveAgentDomainOperationParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResolveAgentDomainOperationResponse, error)
+
+	// ResolveAgentDomainOperationWithResponse Record the audited operator resolution of an escalated governed domain effect.
+	//
+	// Operator recovery for a run holding at the submit boundary whose governed effect is durably escalated. The command states which authoritative outcome the effect actually had, bound to the exact domain operation the operator reviewed and to the evidence the decision rests on. The resolving operator is derived from the verified request authority and is never carried on the wire. Agent Service re-reads current authority on every call and requires the caller to be admitted under the operator role in this workspace and project; the durable resolution is a compare-and-set on the escalated state, so racing operators produce exactly one audited decision and a replayed decision converges on the recorded one. Nothing here contacts the domain owner and nothing is resubmitted.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/domain-operations/{operationId}/resolution (the `ResolveAgentDomainOperation` operationId).
+	ResolveAgentDomainOperationWithResponse(ctx context.Context, workspaceId WorkspaceId, runId RunId, operationId OperationId, params *ResolveAgentDomainOperationParams, body ResolveAgentDomainOperationJSONRequestBody, reqEditors ...RequestEditorFn) (*ResolveAgentDomainOperationResponse, error)
 
 	// StreamAgentRunEventsWithResponse Stream durable public AgentEvent frames with Last-Event-ID recovery.
 	//
@@ -2562,6 +2761,119 @@ func (r DiscardAgentRunResponse) ContentType() string {
 	return ""
 }
 
+// ResolveAgentDomainOperationResponse200Headers the declared response headers of an HTTP 200 response for ResolveAgentDomainOperation
+type ResolveAgentDomainOperationResponse200Headers struct {
+	ETag                   *string
+	IdempotencyReplayed    *bool
+	XAnvilKitRequestDigest *string
+}
+
+type ResolveAgentDomainOperationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *AgentRun
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *ProblemDetails
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *ProblemDetails
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *ProblemDetails
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *ProblemDetails
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *ProblemDetails
+	// ApplicationproblemJSON412 the response for an HTTP 412 `application/problem+json` response
+	ApplicationproblemJSON412 *ProblemDetails
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *ProblemDetails
+	// ApplicationproblemJSON428 the response for an HTTP 428 `application/problem+json` response
+	ApplicationproblemJSON428 *ProblemDetails
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *ProblemDetails
+	// Headers200 the parsed response headers for an HTTP 200 response
+	Headers200 *ResolveAgentDomainOperationResponse200Headers
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ResolveAgentDomainOperationResponse) GetJSON200() *AgentRun {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r ResolveAgentDomainOperationResponse) GetApplicationproblemJSON400() *ProblemDetails {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r ResolveAgentDomainOperationResponse) GetApplicationproblemJSON401() *ProblemDetails {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r ResolveAgentDomainOperationResponse) GetApplicationproblemJSON403() *ProblemDetails {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r ResolveAgentDomainOperationResponse) GetApplicationproblemJSON404() *ProblemDetails {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r ResolveAgentDomainOperationResponse) GetApplicationproblemJSON409() *ProblemDetails {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON412 returns the response for an HTTP 412 `application/problem+json` response
+func (r ResolveAgentDomainOperationResponse) GetApplicationproblemJSON412() *ProblemDetails {
+	return r.ApplicationproblemJSON412
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r ResolveAgentDomainOperationResponse) GetApplicationproblemJSON422() *ProblemDetails {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON428 returns the response for an HTTP 428 `application/problem+json` response
+func (r ResolveAgentDomainOperationResponse) GetApplicationproblemJSON428() *ProblemDetails {
+	return r.ApplicationproblemJSON428
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r ResolveAgentDomainOperationResponse) GetApplicationproblemJSON500() *ProblemDetails {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r ResolveAgentDomainOperationResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ResolveAgentDomainOperationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ResolveAgentDomainOperationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ResolveAgentDomainOperationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type StreamAgentRunEventsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3047,6 +3359,36 @@ func (c *ClientWithResponses) DiscardAgentRunWithResponse(ctx context.Context, w
 		return nil, err
 	}
 	return ParseDiscardAgentRunResponse(rsp)
+}
+
+// ResolveAgentDomainOperationWithBodyWithResponse Record the audited operator resolution of an escalated governed domain effect.
+//
+// Operator recovery for a run holding at the submit boundary whose governed effect is durably escalated. The command states which authoritative outcome the effect actually had, bound to the exact domain operation the operator reviewed and to the evidence the decision rests on. The resolving operator is derived from the verified request authority and is never carried on the wire. Agent Service re-reads current authority on every call and requires the caller to be admitted under the operator role in this workspace and project; the durable resolution is a compare-and-set on the escalated state, so racing operators produce exactly one audited decision and a replayed decision converges on the recorded one. Nothing here contacts the domain owner and nothing is resubmitted.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/domain-operations/{operationId}/resolution (the `ResolveAgentDomainOperation` operationId).
+func (c *ClientWithResponses) ResolveAgentDomainOperationWithBodyWithResponse(ctx context.Context, workspaceId WorkspaceId, runId RunId, operationId OperationId, params *ResolveAgentDomainOperationParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ResolveAgentDomainOperationResponse, error) {
+	rsp, err := c.ResolveAgentDomainOperationWithBody(ctx, workspaceId, runId, operationId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseResolveAgentDomainOperationResponse(rsp)
+}
+
+// ResolveAgentDomainOperationWithResponse Record the audited operator resolution of an escalated governed domain effect.
+//
+// Operator recovery for a run holding at the submit boundary whose governed effect is durably escalated. The command states which authoritative outcome the effect actually had, bound to the exact domain operation the operator reviewed and to the evidence the decision rests on. The resolving operator is derived from the verified request authority and is never carried on the wire. Agent Service re-reads current authority on every call and requires the caller to be admitted under the operator role in this workspace and project; the durable resolution is a compare-and-set on the escalated state, so racing operators produce exactly one audited decision and a replayed decision converges on the recorded one. Nothing here contacts the domain owner and nothing is resubmitted.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /workspaces/{workspaceId}/agent-runs/{runId}/domain-operations/{operationId}/resolution (the `ResolveAgentDomainOperation` operationId).
+func (c *ClientWithResponses) ResolveAgentDomainOperationWithResponse(ctx context.Context, workspaceId WorkspaceId, runId RunId, operationId OperationId, params *ResolveAgentDomainOperationParams, body ResolveAgentDomainOperationJSONRequestBody, reqEditors ...RequestEditorFn) (*ResolveAgentDomainOperationResponse, error) {
+	rsp, err := c.ResolveAgentDomainOperation(ctx, workspaceId, runId, operationId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseResolveAgentDomainOperationResponse(rsp)
 }
 
 // StreamAgentRunEventsWithResponse Stream durable public AgentEvent frames with Last-Event-ID recovery.
@@ -3770,6 +4112,122 @@ func ParseDiscardAgentRunResponse(rsp *http.Response) (*DiscardAgentRunResponse,
 	switch {
 	case rsp.StatusCode == 200:
 		var headers DiscardAgentRunResponse200Headers
+		if values := rsp.Header.Values("ETag"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "ETag", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.ETag = &value
+		}
+		if values := rsp.Header.Values("Idempotency-Replayed"); len(values) > 0 {
+			var value bool
+			if err := runtime.BindStyledParameterWithOptions("simple", "Idempotency-Replayed", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.IdempotencyReplayed = &value
+		}
+		if values := rsp.Header.Values("X-AnvilKit-Request-Digest"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-AnvilKit-Request-Digest", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XAnvilKitRequestDigest = &value
+		}
+		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseResolveAgentDomainOperationResponse parses an HTTP response from a ResolveAgentDomainOperationWithResponse call
+func ParseResolveAgentDomainOperationResponse(rsp *http.Response) (*ResolveAgentDomainOperationResponse, error) {
+	bodyBytes, err := readBoundedResponseBody(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ResolveAgentDomainOperationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest AgentRun
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 412:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON412 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 428:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON428 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 200:
+		var headers ResolveAgentDomainOperationResponse200Headers
 		if values := rsp.Header.Values("ETag"); len(values) > 0 {
 			var value string
 			if err := runtime.BindStyledParameterWithOptions("simple", "ETag", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {

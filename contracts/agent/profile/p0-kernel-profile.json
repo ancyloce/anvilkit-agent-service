@@ -47,7 +47,7 @@
     },
     "registrySet": {
       "path": "contracts/agent/registries/registry-set.json",
-      "digest": "sha256:b275fc7bd76b20a45a823987e44140fad53e641e6aa0d06632b8f0e9303363c8"
+      "digest": "sha256:661d4731def9d498dc28b0aa7e61c44eb79f9d53f7bedba1c029dbed5505cc06"
     },
     "registrySetSchema": {
       "path": "contracts/agent/registries/registry-set.schema.json",
@@ -56,7 +56,7 @@
     "openapi": [
       {
         "path": "contracts/agent/openapi/agent-service.openapi.json",
-        "digest": "sha256:1e8ff603e1f6b8503c613fbb3f02bd711f6c4c22bee3b23398ac1779ba7dc8e3"
+        "digest": "sha256:0eda9569f7e7bc5f2bef9d1a1958b78a8fa8dca0f478ba35bea5ea885937236d"
       },
       {
         "path": "contracts/agent/openapi/pagix-agent-integration.openapi.json",
@@ -75,7 +75,7 @@
     ],
     "fixtureManifest": {
       "path": "contracts/agent/fixtures/manifest.json",
-      "digest": "sha256:c5b75f61706eae583f607957bcb36741db4f976be3d42a154382761b454d846a"
+      "digest": "sha256:7357e1ed88a746f5bf4ddacfbe9bada6057ecef8d5cf49b9bf3ddcdd0ef0a391"
     },
     "fixtureManifestSchema": {
       "path": "contracts/agent/fixtures/manifest.schema.json",
@@ -506,6 +506,22 @@
         "minimum",
         "full",
         "maximum-bound",
+        "invalid",
+        "adversarial"
+      ],
+      "descriptions": [
+        "contracts/agent/openapi/agent-service.openapi.json"
+      ]
+    },
+    {
+      "logicalId": "ResolveDomainOperationRequest",
+      "componentName": "anvilkit.contract.schema.resolve-domain-operation-request",
+      "schemaPath": "contracts/agent/schemas/resolve-domain-operation-request.schema.json",
+      "digest": "sha256:c8118aaaa8f7e73b84f9d307def3536463926ce6290b8ad4b3ad9cad804b1d8b",
+      "owner": "Agent Service Workflow owner",
+      "stability": "p0-kernel",
+      "fixtureCoverage": [
+        "minimum",
         "invalid",
         "adversarial"
       ],
