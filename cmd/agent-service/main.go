@@ -323,6 +323,9 @@ type runtimeCore struct {
 	artifacts        *artifacts.Service
 	registry         *agent.Registry
 	deltas           *events.DeltaBroker
+	// cancellationReconciler is the authoritative external-effect reader the
+	// cancellation recovery sweep asks before it concludes any accounting.
+	cancellationReconciler interrupts.CancellationReconciler
 	// executorHandle carries the terminal-budget settlement port into services
 	// that are composed before the executor exists.
 	executorHandle *executorHandle
@@ -368,6 +371,27 @@ func (h *executorHandle) SettleRunBudget(ctx context.Context, snapshot runs.Snap
 		return fmt.Errorf("terminal budget settlement is unavailable: the execution pipeline is not composed")
 	}
 	return h.inner.SettleRunBudget(ctx, snapshot, release)
+}
+
+func (h *executorHandle) FenceRunBudget(ctx context.Context, snapshot runs.Snapshot) error {
+	if h.inner == nil {
+		return fmt.Errorf("cancellation budget fencing is unavailable: the execution pipeline is not composed")
+	}
+	return h.inner.FenceRunBudget(ctx, snapshot)
+}
+
+func (h *executorHandle) SettleCancelledRunBudget(ctx context.Context, snapshot runs.Snapshot) error {
+	if h.inner == nil {
+		return fmt.Errorf("cancelled budget settlement is unavailable: the execution pipeline is not composed")
+	}
+	return h.inner.SettleCancelledRunBudget(ctx, snapshot)
+}
+
+func (h *executorHandle) OutstandingCancelledRunBudget(ctx context.Context, snapshot runs.Snapshot) (bool, error) {
+	if h.inner == nil {
+		return false, fmt.Errorf("cancelled budget hold lookup is unavailable: the execution pipeline is not composed")
+	}
+	return h.inner.OutstandingCancelledRunBudget(ctx, snapshot)
 }
 
 var _ interrupts.TerminalBudget = (*executorHandle)(nil)
@@ -634,7 +658,7 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 		DomainRetryBase:   cfg.DomainRetryBase,
 		DomainRetryCap:    cfg.DomainRetryCap,
 	}
-	return &runtimeCore{runStore: runStore, interruptStore: interruptStore, interruptService: interruptService, idempotency: idempotencyStore, authority: authoritySource, receipts: receipts, guard: guard, clock: clock, eventBounds: eventBounds, artifacts: artifactService, registry: registry, deltas: deltaBroker, trust: trust, executorHandle: settlementHandle}, executionConfig, nil
+	return &runtimeCore{runStore: runStore, interruptStore: interruptStore, interruptService: interruptService, idempotency: idempotencyStore, authority: authoritySource, receipts: receipts, guard: guard, clock: clock, eventBounds: eventBounds, artifacts: artifactService, registry: registry, deltas: deltaBroker, trust: trust, cancellationReconciler: cancellationReconciler, executorHandle: settlementHandle}, executionConfig, nil
 }
 
 // selectModelImplementation returns the explicitly configured model stack.
@@ -1162,6 +1186,16 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 		return nil, err
 	}
 	go monitor.Run(ctx, time.Minute)
+	// Cancellation fences a run's budget immediately and settles it only once
+	// every physical attempt has durably reported. A cancellation that
+	// interrupts an in-flight provider call cannot be concluded at request
+	// time, and nothing else would ever come back to it, so the recovery sweep
+	// is part of the production composition rather than an operator chore.
+	cancellationRecovery, err := interrupts.NewCancellationRecovery(core.interruptStore, core.cancellationReconciler, core.executorHandle)
+	if err != nil {
+		return nil, err
+	}
+	go cancellationRecovery.Run(ctx, time.Minute)
 	// The governed AgentRun mutation surface is part of the production API:
 	// authentication, authorization, concurrency, idempotency, and canonical
 	// schema validation each fail closed on their own, so no feature gate

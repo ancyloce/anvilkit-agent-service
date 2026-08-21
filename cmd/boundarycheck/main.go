@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -26,8 +27,14 @@ func main() {
 	// comment, metric, or configuration key binds the code to a delivery
 	// schedule that stops being true the moment the schedule moves.
 	deliveryMarker := regexp.MustCompile(deliveryLabelPattern)
-	governedPath := regexp.MustCompile(governedNamePattern(governedPathNames()))
-	governedContent := regexp.MustCompile(governedNamePattern(governedContentNames()))
+	// The canonical scope names ADR-018 established are readable only at the
+	// exact governance-owned locations that own them. Everywhere else the only
+	// allowance is measurement vocabulary, which is not a delivery label at
+	// all. Two allowlists, selected per path, are what keeps a governed name
+	// from becoming a licence to spell it anywhere.
+	governed := governedLocations(*root)
+	ordinary := regexp.MustCompile(governedNamePattern(measurementNames()))
+	canonical := regexp.MustCompile(governedNamePattern(append(measurementNames(), canonicalScopeNames()...)))
 	deliveryIdentifier := regexp.MustCompile(deliveryIdentifierPattern)
 	deliveryCamel := regexp.MustCompile(deliveryCamelPattern)
 	err := filepath.WalkDir(*root, func(path string, entry os.DirEntry, walkErr error) error {
@@ -45,6 +52,10 @@ func main() {
 			return err
 		}
 		relative = filepath.ToSlash(relative)
+		allowed := ordinary
+		if governed[relative] {
+			allowed = canonical
+		}
 		if entry.Type().IsRegular() {
 			body, err := os.ReadFile(path)
 			if err != nil {
@@ -52,20 +63,27 @@ func main() {
 			}
 			// The path is scanned in every case; the body only when it is
 			// text, because a binary run of bytes is not a name anyone reads.
-			if label := deliveryLabel(deliveryMarker, governedPath, []byte(relative)); label != "" {
+			if label := deliveryLabel(deliveryMarker, allowed, []byte(relative)); label != "" {
 				failures = append(failures, relative+": delivery-stage naming is forbidden ("+label+")")
 			} else if bytes.IndexByte(body, 0) < 0 {
-				if label := deliveryLabel(deliveryMarker, governedContent, body); label != "" {
+				if label := deliveryLabel(deliveryMarker, allowed, body); label != "" {
 					failures = append(failures, relative+": delivery-stage naming is forbidden ("+label+")")
 				}
 			}
 		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		if !strings.HasSuffix(path, ".go") {
 			return nil
 		}
 		if isEvidenceCommand(relative) || strings.HasPrefix(relative, "cmd/boundarycheck/") || strings.HasPrefix(relative, "contracts/generated/") {
 			return nil
 		}
+		// Test files are parsed for the names they declare and nothing else.
+		// A test name is a name someone reads, so it is held to the same
+		// naming rule as production code; the import, package-state, and
+		// environment rules are production boundaries that say nothing about
+		// a test, and applying them here would only teach people to keep
+		// tests out of the checker's way.
+		test := strings.HasSuffix(path, "_test.go")
 		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ParseComments)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: parse: %v", relative, err))
@@ -74,7 +92,7 @@ func main() {
 
 		for _, declaration := range parsed.Decls {
 			general, ok := declaration.(*ast.GenDecl)
-			if ok && general.Tok == token.VAR && !isEmbedded(general) && !isCompileAssertion(general) {
+			if ok && !test && general.Tok == token.VAR && !isEmbedded(general) && !isCompileAssertion(general) {
 				failures = append(failures, relative+": package-level mutable state is forbidden")
 			}
 		}
@@ -82,11 +100,14 @@ func main() {
 		// free text cannot use without matching digests.
 		for _, name := range declaredNames(parsed) {
 			for _, marker := range []*regexp.Regexp{deliveryIdentifier, deliveryCamel} {
-				if label := deliveryLabel(marker, governedContent, []byte(name)); label != "" {
+				if label := deliveryLabel(marker, allowed, []byte(name)); label != "" {
 					failures = append(failures, relative+": delivery-stage naming is forbidden in identifier "+name+" ("+label+")")
 					break
 				}
 			}
+		}
+		if test {
+			return nil
 		}
 		for _, imported := range parsed.Imports {
 			name, err := strconv.Unquote(imported.Path.Value)
@@ -172,24 +193,74 @@ const deliveryIdentifierPattern = `(^|[^A-Za-z0-9])` + deliveryLabelAlternation 
 // carry no hump, so they are names, not labels.
 const deliveryCamelPattern = `([a-z0-9])` + deliveryLabelCapitalAlternation + `([^a-z0-9]|$)`
 
-// governedPathNames are the exact names permitted to appear in a file or
-// directory name: the canonical contract profile ADR-018 names, and the
-// directory that profile's scope owns. Keeping this tier separate from the
-// content tier is what stops the allowlist from becoming a licence to create
-// new delivery-labelled files — a name not spelled here cannot be a path.
-func governedPathNames() []string {
-	return []string{"p0-kernel-profile", "p0-kernel", "P0-Kernel"}
+// canonicalScopeNames are the exact names ADR-018 established for the
+// canonical contract profile and the scope it governs. This service does not
+// own the freedom to rename them: they are the profile artifact's own name and
+// the scope identity quoted throughout the canonical contract descriptions.
+//
+// They are readable only at the exact governance-owned locations
+// governedLocations names. That path scoping is the whole point — a bare
+// allowance for these names would let any file anywhere spell a delivery
+// label and call it canonical, which is exactly the bypass this guard exists
+// to close.
+func canonicalScopeNames() []string {
+	return []string{"p0-kernel-profile", "p0-kernel", "P0-Kernel", "P0"}
 }
 
-// governedContentNames are additionally permitted inside file contents. They
-// are names this service does not own the freedom to rename: the profile scope
-// identity ADR-018 established, and the latency percentiles a metric reports
-// under. Every entry is an exact string matched verbatim — not a directory
-// prefix and not a file bypass — so an entry excuses the governed name it
-// spells and nothing else. Adding one is a governance decision.
-func governedContentNames() []string {
-	return append(governedPathNames(), "P0", "p999", "p99", "p95", "p90", "p50")
+// measurementNames are not delivery labels. They are the latency percentiles a
+// metric reports under — measurement vocabulary with a fixed meaning that no
+// schedule can move — so they are readable anywhere, exactly as they are
+// written.
+func measurementNames() []string {
+	return []string{"p999", "p99", "p95", "p90", "p50"}
 }
+
+// governedLocations is the exact set of repository-relative paths permitted to
+// carry a canonical scope name, in their own name or in their contents.
+//
+// It is derived rather than listed, from the canonical lock ADR-018 makes the
+// authority on what the canonical contract set is: the profile it pins and
+// every source it enumerates. Deriving it is what keeps it exact and current —
+// a hand-written list drifts, and a directory prefix would readmit the bypass.
+// The few remaining entries are spelled out because they are not contract
+// artifacts: the pinned intake reference, the drift script that names the
+// profile file, the package that verifies the pinned identity, and the
+// governance sources that necessarily spell the names they govern.
+//
+// A missing or unreadable lock yields no governed locations at all, so the
+// scan gets stricter rather than more permissive when the authority is absent.
+func governedLocations(root string) map[string]bool {
+	locations := map[string]bool{
+		"contracts/pin.json":              true,
+		"scripts/check-contract-drift.sh": true,
+		"internal/contracts/material.go":  true,
+		"cmd/boundarycheck/main.go":       true,
+	}
+	body, err := os.ReadFile(filepath.Join(root, canonicalLockPath))
+	if err != nil {
+		return locations
+	}
+	var lock struct {
+		Profile struct {
+			Path string `json:"path"`
+		} `json:"profile"`
+		Sources map[string]string `json:"sources"`
+	}
+	if err := json.Unmarshal(body, &lock); err != nil {
+		return locations
+	}
+	locations[canonicalLockPath] = true
+	if lock.Profile.Path != "" {
+		locations[lock.Profile.Path] = true
+	}
+	for source := range lock.Sources {
+		locations[source] = true
+	}
+	return locations
+}
+
+// canonicalLockPath is the canonical lock's own repository-relative path.
+const canonicalLockPath = "contracts/agent/lock/contracts.lock.json"
 
 // governedNamePattern renders an allowlist longest-first, so a longer governed
 // name is preferred over a shorter one it contains.
