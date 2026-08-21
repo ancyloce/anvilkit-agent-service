@@ -1,0 +1,8 @@
+{
+  "kind": "MemoryPolicy",
+  "policyId": "policy.memory.none",
+  "version": "v1",
+  "rules": {
+    "memory": "none"
+  }
+}

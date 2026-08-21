@@ -1,0 +1,126 @@
+{
+  "approval": {
+    "lockDigest": "sha256:3e405ef00f921db7147dcafe7eb04a38f0fc3b6ae866bdc55f36e371f8e9b5ac",
+    "profileDigest": "sha256:2a77492ffa7f5edaa8b12e393940b7a7b5c91531a5fb3c9df39dda2c765239d6"
+  },
+  "catalogVersion": 1,
+  "definitions": [
+    {
+      "definitionDigest": "sha256:7da738ced420827192031ae3f4e10c8cdace9227c9df294111842e45d4eabe4a",
+      "definitionId": "definition.platform.component-spec-specialist",
+      "document": "definition.platform.component-spec-specialist.json",
+      "documentDigest": "sha256:81f49d27a34c0b2abfa9ff6a149aa085bfc2840f9d07f33b410d813c7aae492b",
+      "instruction": "definition.platform.component-spec-specialist.instruction.txt",
+      "instructionDigest": "sha256:e68bdfe93b8fe858950f7e0aebf41d4d90c56e8ac53f242f2b8d1d1a29359f34"
+    },
+    {
+      "definitionDigest": "sha256:c3fcaa8c924797377d74a9f5cb535158284ac79d702ad0711057c37b0296ad61",
+      "definitionId": "definition.platform.manager",
+      "document": "definition.platform.manager.json",
+      "documentDigest": "sha256:510043ec98be79a4e1735ad3d2f30869d5c5fc028d56affa4325238032d82e0c",
+      "instruction": "definition.platform.manager.instruction.txt",
+      "instructionDigest": "sha256:33e04839cbe737047a70176afc6f81016feac5defb535d47772d3f46161c9902"
+    }
+  ],
+  "kind": "AgentDefinitionCatalog",
+  "policies": [
+    {
+      "document": "policy.model.default.json",
+      "documentDigest": "sha256:c7a007e60d62331f77dbaa17cbc1c1945ce4fe061130c082adc658770eadd879",
+      "kind": "ModelPolicy",
+      "policyId": "policy.model.default",
+      "version": "v1"
+    },
+    {
+      "document": "policy.memory.none.json",
+      "documentDigest": "sha256:819819ef4b7a473288ce0e0116410b5fb0491a754b38ea4cc424bf3266a6f57c",
+      "kind": "MemoryPolicy",
+      "policyId": "policy.memory.none",
+      "version": "v1"
+    },
+    {
+      "document": "policy.guardrail.baseline.json",
+      "documentDigest": "sha256:80ca0c4751b2df4cbe5b68642ea75b183c212b8fa002823df174c5ddb7e32a80",
+      "kind": "GuardrailPolicy",
+      "policyId": "policy.guardrail.baseline",
+      "version": "v1"
+    }
+  ],
+  "toolSchemas": [
+    {
+      "componentName": "anvilkit.tool.artifact-scan",
+      "definition": {
+        "acceptedDataClasses": [
+          "public",
+          "internal"
+        ],
+        "approvalPolicy": {
+          "digest": "sha256:61e67b664f0d67945f9c7ee33dc371dd11e78095576b7642d905c51558f7803e",
+          "policyId": "policy.tool.baseline",
+          "version": "v1"
+        },
+        "backoffMilliseconds": 0,
+        "capability": "artifact.scan",
+        "maximumAttempts": 1,
+        "retryability": [
+          "safe-immediate"
+        ],
+        "riskClass": "low",
+        "sideEffectClass": "read",
+        "timeoutMilliseconds": 30000,
+        "toolId": "anvilkit.tool.artifact-scan"
+      },
+      "digest": "sha256:33a5f0bedb07f109dbc733cda107e655d2bced37fe94af068b576be9244deea8"
+    },
+    {
+      "componentName": "anvilkit.tool.context-echo",
+      "definition": {
+        "acceptedDataClasses": [
+          "public",
+          "internal"
+        ],
+        "approvalPolicy": {
+          "digest": "sha256:61e67b664f0d67945f9c7ee33dc371dd11e78095576b7642d905c51558f7803e",
+          "policyId": "policy.tool.baseline",
+          "version": "v1"
+        },
+        "backoffMilliseconds": 0,
+        "capability": "fake.execute",
+        "maximumAttempts": 1,
+        "retryability": [
+          "safe-immediate"
+        ],
+        "riskClass": "low",
+        "sideEffectClass": "read",
+        "timeoutMilliseconds": 30000,
+        "toolId": "anvilkit.tool.context-echo"
+      },
+      "digest": "sha256:e653a85c2922d75464275bc15840a97dafd6f1de3d6faefec9c9ba65e933e710"
+    },
+    {
+      "componentName": "anvilkit.tool.contract-validate",
+      "definition": {
+        "acceptedDataClasses": [
+          "public",
+          "internal"
+        ],
+        "approvalPolicy": {
+          "digest": "sha256:61e67b664f0d67945f9c7ee33dc371dd11e78095576b7642d905c51558f7803e",
+          "policyId": "policy.tool.baseline",
+          "version": "v1"
+        },
+        "backoffMilliseconds": 0,
+        "capability": "contract.validate",
+        "maximumAttempts": 1,
+        "retryability": [
+          "safe-immediate"
+        ],
+        "riskClass": "low",
+        "sideEffectClass": "read",
+        "timeoutMilliseconds": 30000,
+        "toolId": "anvilkit.tool.contract-validate"
+      },
+      "digest": "sha256:707d26ee1ab3824c5e79573b1fe63897c7c61d6ec725432c3a8f378a8a489f5d"
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "allowedDelegates": [
+    "definition.platform.component-spec-specialist"
+  ],
+  "definitionDigest": "sha256:c3fcaa8c924797377d74a9f5cb535158284ac79d702ad0711057c37b0296ad61",
+  "definitionId": "definition.platform.manager",
+  "domain": "platform-agent",
+  "evaluators": [],
+  "guardrailPolicy": {
+    "policyId": "policy.guardrail.baseline",
+    "version": "v1",
+    "digest": "sha256:80ca0c4751b2df4cbe5b68642ea75b183c212b8fa002823df174c5ddb7e32a80"
+  },
+  "inputSchema": {
+    "componentName": "anvilkit.contract.schema.create-agent-run-request",
+    "digest": "sha256:ae244db518fe7b181990406994ff42623cfebe97756e4b073fc9ea3df83b8fb0"
+  },
+  "kind": "AgentDefinition",
+  "maximumDelegationDepth": 1,
+  "maximumFanOut": 2,
+  "memoryPolicy": {
+    "policyId": "policy.memory.none",
+    "version": "v1",
+    "digest": "sha256:819819ef4b7a473288ce0e0116410b5fb0491a754b38ea4cc424bf3266a6f57c"
+  },
+  "modelPolicy": {
+    "policyId": "policy.model.default",
+    "version": "v1",
+    "digest": "sha256:c7a007e60d62331f77dbaa17cbc1c1945ce4fe061130c082adc658770eadd879"
+  },
+  "outputSchema": {
+    "componentName": "anvilkit.contract.schema.component-package-spec",
+    "digest": "sha256:d694500504b19346c06da12db9cfee37b0810f6e6bb6b07298e3b03c78518061"
+  },
+  "owner": "Platform Agent Runtime owner",
+  "promptDigest": "sha256:33e04839cbe737047a70176afc6f81016feac5defb535d47772d3f46161c9902",
+  "repairPolicy": {
+    "maximumAttempts": 2,
+    "mode": "bounded-repair"
+  },
+  "role": "manager",
+  "stopConditions": [
+    "completed",
+    "refused",
+    "budget-exhausted",
+    "approval-required",
+    "input-required"
+  ],
+  "toolProfile": {
+    "tools": [
+      {
+        "componentName": "anvilkit.tool.context-echo",
+        "digest": "sha256:e653a85c2922d75464275bc15840a97dafd6f1de3d6faefec9c9ba65e933e710"
+      }
+    ],
+    "maximumParallelTools": 1
+  },
+  "turnLimit": 16
+}

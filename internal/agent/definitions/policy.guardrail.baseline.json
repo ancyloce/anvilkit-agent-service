@@ -1,0 +1,11 @@
+{
+  "kind": "GuardrailPolicy",
+  "policyId": "policy.guardrail.baseline",
+  "version": "v1",
+  "rules": {
+    "effects": [
+      "read"
+    ],
+    "maximumRiskClass": "low"
+  }
+}

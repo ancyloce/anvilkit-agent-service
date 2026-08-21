@@ -1,0 +1,21 @@
+{
+  "kind": "ModelPolicy",
+  "policyId": "policy.model.default",
+  "version": "v1",
+  "rules": {
+    "providerClass": "general",
+    "maximumRiskClass": "low",
+    "allowedDataClasses": [
+      "public",
+      "internal"
+    ],
+    "allowedRegions": [
+      "local"
+    ],
+    "capability": "provider.invoke",
+    "allowRetention": false,
+    "allowTraining": false,
+    "minimumSafety": 1,
+    "maximumCostMicros": 10000000
+  }
+}
