@@ -165,9 +165,11 @@ func (c *restartComposition) runService(t *testing.T) *runs.Service {
 func decideApprovalWhenOpen(ctx context.Context, t *testing.T, composition *restartComposition, observe *pgxpool.Pool, runID, key string, deadline time.Time) bool {
 	t.Helper()
 	for time.Now().Before(deadline) {
-		var requestID string
+		var requestID, actionDigest string
 		var version uint64
-		err := observe.QueryRow(ctx, `SELECT request_id,decision_version FROM agent_control.approval_requests WHERE workspace_id='workspace' AND project_id='project' AND run_id=$1 AND decided_at IS NULL`, runID).Scan(&requestID, &version)
+		// The reviewer states the action they decided; the service proves it
+		// is the digest the open request carries.
+		err := observe.QueryRow(ctx, `SELECT request_id,decision_version,action_digest FROM agent_control.approval_requests WHERE workspace_id='workspace' AND project_id='project' AND run_id=$1 AND decided_at IS NULL`, runID).Scan(&requestID, &version, &actionDigest)
 		if err == nil {
 			snapshot, getErr := composition.core.runStore.Get(ctx, runs.Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "reviewer"}, runs.ID(runID))
 			if getErr != nil {
@@ -179,7 +181,7 @@ func decideApprovalWhenOpen(ctx context.Context, t *testing.T, composition *rest
 				ExpectedVersion: snapshot.Version,
 				IdempotencyKey:  key,
 				Traceparent:     restartTrace,
-			}, interrupts.ApprovalDecisionCommand{RequestID: interrupts.RequestID(requestID), RequestVersion: version, Decision: interrupts.DecisionApprove}); decideErr == nil {
+			}, interrupts.ApprovalDecisionCommand{RequestID: interrupts.RequestID(requestID), RequestVersion: version, Decision: interrupts.DecisionApprove, ActionDigest: actionDigest}); decideErr == nil {
 				return true
 			}
 			// A version race retries on the next poll.
@@ -576,7 +578,7 @@ func resolveEscalationOverAPI(ctx context.Context, t *testing.T, composition *re
 	client := &http.Client{Timeout: 30 * time.Second}
 	runPath := "/v1/workspaces/workspace/agent-runs/" + runID
 
-	call := func(token, path, key, etag string, body []byte) (int, []byte) {
+	call := func(token, path, key, etag string, body []byte) (int, []byte, http.Header) {
 		t.Helper()
 		var reader *bytes.Reader
 		if body == nil {
@@ -606,7 +608,7 @@ func resolveEscalationOverAPI(ctx context.Context, t *testing.T, composition *re
 		if err != nil {
 			t.Fatal(err)
 		}
-		return response.StatusCode, payload
+		return response.StatusCode, payload, response.Header
 	}
 
 	etag := func() string {
@@ -630,9 +632,10 @@ func resolveEscalationOverAPI(ctx context.Context, t *testing.T, composition *re
 	}
 
 	body, err := json.Marshal(runapp.EscalationResolution{
+		Kind:        runapp.EscalationResolutionKind,
 		OperationID: operationID,
 		Outcome:     execution.DomainRejected,
-		Basis:       "restart-proof: the authoritative owner has no record of the operation",
+		Basis:       restartEvidenceBasis,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -640,34 +643,77 @@ func resolveEscalationOverAPI(ctx context.Context, t *testing.T, composition *re
 
 	held := etag()
 	// The run actor can write to its own run but holds no operate scope.
-	if status, payload := call(identities.actor, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve-denied-scope", held, body); status != http.StatusForbidden {
+	if status, payload, _ := call(identities.actor, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve-denied-scope", held, body); status != http.StatusForbidden {
 		t.Fatalf("actor resolution status=%d body=%s, want the operate scope to be required", status, payload)
 	}
 	// The impostor holds the operate scope but is admitted under the actor
 	// role, so current authority denies the recovery.
-	if status, payload := call(identities.impostor, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve-denied-role", held, body); status != http.StatusForbidden {
+	if status, payload, _ := call(identities.impostor, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve-denied-role", held, body); status != http.StatusForbidden {
 		t.Fatalf("impostor resolution status=%d body=%s, want the operator role to be required", status, payload)
 	}
 	// A workspace the operator's verified authority does not cover is
 	// indistinguishable from a run that does not exist.
-	if status, payload := call(identities.operator, "/v1/workspaces/other-workspace/agent-runs/"+runID+"/domain-operations/"+operationID+"/resolution", "restart-resolve-cross-tenant", held, body); status != http.StatusNotFound {
+	if status, payload, _ := call(identities.operator, "/v1/workspaces/other-workspace/agent-runs/"+runID+"/domain-operations/"+operationID+"/resolution", "restart-resolve-cross-tenant", held, body); status != http.StatusNotFound {
 		t.Fatalf("cross-tenant resolution status=%d body=%s, want non-disclosure", status, payload)
 	}
 	// A decision naming a different operation never lands on this run's one.
-	otherBody, err := json.Marshal(runapp.EscalationResolution{OperationID: "domain.not-this-operation", Outcome: execution.DomainRejected, Basis: "restart-proof: wrong operation"})
+	otherBody, err := json.Marshal(runapp.EscalationResolution{Kind: runapp.EscalationResolutionKind, OperationID: "domain.not-this-operation", Outcome: execution.DomainRejected, Basis: restartEvidenceBasis})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status, payload := call(identities.operator, runPath+"/domain-operations/domain.not-this-operation/resolution", "restart-resolve-wrong-operation", held, otherBody); status != http.StatusConflict {
+	if status, payload, _ := call(identities.operator, runPath+"/domain-operations/domain.not-this-operation/resolution", "restart-resolve-wrong-operation", held, otherBody); status != http.StatusConflict {
 		t.Fatalf("mismatched operation status=%d body=%s, want a conflict", status, payload)
 	}
+	// The canonical ResolveDomainOperationRequest contract closes the object,
+	// so a body smuggling its own resolving operator is refused before
+	// anything is decoded: the audited resolver can only ever be the
+	// authenticated identity.
+	smuggled := []byte(`{"kind":"` + runapp.EscalationResolutionKind + `","operationId":"` + operationID + `","outcome":"` + execution.DomainRejected + `","basis":"` + restartEvidenceBasis + `","resolvedBy":"operator.impersonated"}`)
+	if status, payload, _ := call(identities.operator, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve-smuggled", held, smuggled); status != http.StatusUnprocessableEntity {
+		t.Fatalf("smuggled resolver status=%d body=%s, want the canonical contract to reject it", status, payload)
+	}
+	// The basis is a bounded evidence reference, not operator prose: a
+	// decision whose audit record could carry unbounded content is refused by
+	// the canonical contract before anything is decoded.
+	prose := []byte(`{"kind":"` + runapp.EscalationResolutionKind + `","operationId":"` + operationID + `","outcome":"` + execution.DomainRejected + `","basis":"the authoritative owner has no record of the operation"}`)
+	if status, payload, _ := call(identities.operator, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve-prose", held, prose); status != http.StatusUnprocessableEntity {
+		t.Fatalf("prose basis status=%d body=%s, want the canonical contract to reject it", status, payload)
+	}
 
-	if status, payload := call(identities.operator, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve", held, body); status != http.StatusOK {
+	status, payload, headers := call(identities.operator, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve", held, body)
+	if status != http.StatusOK {
 		t.Fatalf("operator resolution status=%d body=%s", status, payload)
 	}
-	// The identical audited decision replays onto the recorded one instead of
-	// deciding twice.
-	if status, payload := call(identities.operator, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve", etag(), body); status != http.StatusOK {
-		t.Fatalf("replayed operator resolution status=%d body=%s, want convergence", status, payload)
+	if headers.Get("Idempotency-Replayed") != "" {
+		t.Fatal("the first operator resolution reported itself as a replay")
+	}
+	settledETag := headers.Get("ETag")
+	if settledETag == "" {
+		t.Fatal("the operator resolution returned no strong revision")
+	}
+	// The identical command under the same key returns the recorded
+	// representation, marked as a replay, instead of deciding twice.
+	replayStatus, replayPayload, replayHeaders := call(identities.operator, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve", held, body)
+	if replayStatus != http.StatusOK || replayHeaders.Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("replayed operator resolution status=%d replayed=%q body=%s, want the recorded outcome", replayStatus, replayHeaders.Get("Idempotency-Replayed"), replayPayload)
+	}
+	if string(replayPayload) != string(payload) || replayHeaders.Get("ETag") != settledETag {
+		t.Fatalf("replay body/etag differ from the recorded outcome: %s / %q", replayPayload, replayHeaders.Get("ETag"))
+	}
+	// Reusing the key against a different observed revision, or with
+	// different command bytes, is a conflict rather than a replay.
+	if status, payload, _ := call(identities.operator, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve", etag(), body); status != http.StatusConflict {
+		t.Fatalf("key reuse against a new revision status=%d body=%s, want a conflict", status, payload)
+	}
+	confirmed, err := json.Marshal(runapp.EscalationResolution{Kind: runapp.EscalationResolutionKind, OperationID: operationID, Outcome: execution.DomainConfirmed, Basis: restartEvidenceBasis})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, payload, _ := call(identities.operator, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve", held, confirmed); status != http.StatusConflict {
+		t.Fatalf("key reuse with different bytes status=%d body=%s, want a conflict", status, payload)
 	}
 }
+
+// restartEvidenceBasis is the bounded evidence reference the restart proof's
+// operator recovery cites.
+const restartEvidenceBasis = "anvilkit://evidence/domain-owner-audit/restart-proof-no-record"

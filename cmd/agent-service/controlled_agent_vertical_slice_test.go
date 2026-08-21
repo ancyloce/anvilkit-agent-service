@@ -34,7 +34,7 @@ import (
 	workflowdbos "github.com/ancyloce/anvilkit-agent-service/internal/workflow/dbos"
 )
 
-// TestP0VerticalSliceEndToEnd drives the complete governed flow through the
+// TestControlledAgentVerticalSlice drives the complete governed flow through the
 // production composition: HTTP create → durable preparation → planning → a
 // durable input wait answered over HTTP → a fenced tool execution → contract
 // validation → an immutable artifact → review → a durable approval answered
@@ -42,7 +42,7 @@ import (
 // outcome → completion. Everything below the HTTP handler is the same code
 // path main() composes; nothing is faked beyond the explicitly selected
 // controlled implementations, and no state is fixed up by hand.
-func TestP0VerticalSliceEndToEnd(t *testing.T) {
+func TestControlledAgentVerticalSlice(t *testing.T) {
 	base := os.Getenv("POSTGRES_TEST_URL")
 	if base == "" {
 		t.Skip("POSTGRES_TEST_URL is not set")
@@ -322,10 +322,24 @@ func TestP0VerticalSliceEndToEnd(t *testing.T) {
 	if err != nil || inputRequestID == "" {
 		t.Fatalf("run.input-requested payload does not disclose identity and version: %#v", inputEvent)
 	}
-	inputBody := []byte(fmt.Sprintf(`{"requestVersion":%d,"value":{"answer":"the hero section"}}`, inputVersion))
+	inputBody := []byte(fmt.Sprintf(`{"kind":"SubmitInputResponseRequest","requestVersion":%d,"responsePayload":{"answer":"the hero section"}}`, inputVersion))
 	missingPrecondition, _ := call(http.MethodPost, runPath+"/inputs/"+inputRequestID+"/responses", "slice-input-1", "", inputBody)
 	if missingPrecondition.StatusCode != http.StatusPreconditionRequired {
 		t.Fatalf("missing If-Match answered %d, want 428", missingPrecondition.StatusCode)
+	}
+	// The canonical SubmitInputResponseRequest contract is enforced at the
+	// boundary, so the shape the contract describes is the only shape the
+	// deployed API accepts: the pre-canonical body is refused, and so is one
+	// missing the discriminator.
+	for name, rejected := range map[string][]byte{
+		"pre-canonical-value-field": []byte(fmt.Sprintf(`{"requestVersion":%d,"value":{"answer":"the hero section"}}`, inputVersion)),
+		"missing-kind":              []byte(fmt.Sprintf(`{"requestVersion":%d,"responsePayload":{"answer":"the hero section"}}`, inputVersion)),
+		"non-string-payload":        []byte(fmt.Sprintf(`{"kind":"SubmitInputResponseRequest","requestVersion":%d,"responsePayload":{"answer":{"nested":true}}}`, inputVersion)),
+	} {
+		response, payload := call(http.MethodPost, runPath+"/inputs/"+inputRequestID+"/responses", "slice-input-reject-"+name, etag, rejected)
+		if response.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("%s input body status=%d body=%s, want the canonical contract to reject it", name, response.StatusCode, payload)
+		}
 	}
 	answered, answeredPayload := call(http.MethodPost, runPath+"/inputs/"+inputRequestID+"/responses", "slice-input-1", etag, inputBody)
 	if answered.StatusCode != http.StatusOK {
@@ -344,7 +358,29 @@ func TestP0VerticalSliceEndToEnd(t *testing.T) {
 	if err != nil || approvalRequestID == "" || approvalEvent["actionDigest"] == "" {
 		t.Fatalf("run.approval-requested payload does not disclose identity, version, and action binding: %#v", approvalEvent)
 	}
-	decisionBody := []byte(fmt.Sprintf(`{"decisionVersion":%d,"decision":"approve"}`, approvalVersion))
+	// The reviewer binds the exact action they decided; the digest comes from
+	// the same public event that disclosed the request identity.
+	decisionBody := []byte(fmt.Sprintf(`{"kind":"SubmitApprovalDecisionRequest","decision":"approve","decisionVersion":%d,"actionDigest":%q}`, approvalVersion, approvalEvent["actionDigest"]))
+	// The canonical SubmitApprovalDecisionRequest contract is enforced the same
+	// way: the pre-canonical body, a decision without its action binding, and
+	// a decision spelling the third outcome with the retired vocabulary are all
+	// refused. A well-formed decision naming a different action is refused by
+	// the service instead, because the binding is a state check, not a shape.
+	for name, rejected := range map[string][]byte{
+		"pre-canonical-no-kind":  []byte(fmt.Sprintf(`{"decisionVersion":%d,"decision":"approve"}`, approvalVersion)),
+		"missing-action-digest":  []byte(fmt.Sprintf(`{"kind":"SubmitApprovalDecisionRequest","decision":"approve","decisionVersion":%d}`, approvalVersion)),
+		"retired-decision-value": []byte(fmt.Sprintf(`{"kind":"SubmitApprovalDecisionRequest","decision":"change","decisionVersion":%d,"actionDigest":%q}`, approvalVersion, approvalEvent["actionDigest"])),
+		"pre-canonical-reason":   []byte(fmt.Sprintf(`{"kind":"SubmitApprovalDecisionRequest","decision":"approve","decisionVersion":%d,"actionDigest":%q,"reason":"looks good"}`, approvalVersion, approvalEvent["actionDigest"])),
+	} {
+		response, payload := callAs(reviewerBearer, http.MethodPost, runPath+"/approvals/"+approvalRequestID+"/decisions", "slice-approve-reject-"+name, etag, rejected)
+		if response.StatusCode != http.StatusUnprocessableEntity {
+			t.Fatalf("%s decision body status=%d body=%s, want the canonical contract to reject it", name, response.StatusCode, payload)
+		}
+	}
+	otherAction := []byte(fmt.Sprintf(`{"kind":"SubmitApprovalDecisionRequest","decision":"approve","decisionVersion":%d,"actionDigest":"sha256:%s"}`, approvalVersion, strings.Repeat("b", 64)))
+	if response, payload := callAs(reviewerBearer, http.MethodPost, runPath+"/approvals/"+approvalRequestID+"/decisions", "slice-approve-other-action", etag, otherAction); response.StatusCode != http.StatusConflict {
+		t.Fatalf("decision on another action status=%d body=%s, want the action binding to refuse it", response.StatusCode, payload)
+	}
 	decided, decidedPayload := callAs(reviewerBearer, http.MethodPost, runPath+"/approvals/"+approvalRequestID+"/decisions", "slice-approve-1", etag, decisionBody)
 	if decided.StatusCode != http.StatusOK {
 		t.Fatalf("approval decision status=%d body=%s", decided.StatusCode, decidedPayload)
@@ -440,7 +476,7 @@ func isolatedSliceDatabase(t *testing.T, ctx context.Context, base string) strin
 	if _, err := admin.Exec(ctx, `SELECT pg_advisory_lock_shared($1)`, clusterRoleLockKey); err != nil {
 		t.Fatal(err)
 	}
-	name := fmt.Sprintf("wp3_slice_%d", time.Now().UnixNano())
+	name := fmt.Sprintf("agent_slice_%d", time.Now().UnixNano())
 	if _, err := admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
 		t.Fatal(err)
 	}

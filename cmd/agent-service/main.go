@@ -59,6 +59,7 @@ import (
 	queuepg "github.com/ancyloce/anvilkit-agent-service/internal/queue/postgres"
 	recoverypg "github.com/ancyloce/anvilkit-agent-service/internal/recovery/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runapp"
+	runapppg "github.com/ancyloce/anvilkit-agent-service/internal/runapp/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
 	runpg "github.com/ancyloce/anvilkit-agent-service/internal/runs/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/scheduler"
@@ -1143,7 +1144,15 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	// The operator recovery path is part of the production API: it is
 	// authenticated, scoped, role-gated against current authority, audited,
 	// and idempotent on its own, so no feature gate stands in front of it.
-	application.WithEscalations(core.executor)
+	// Its receipts share the retention the rest of the write-idempotency
+	// record keeps; the claim lease is short because it only has to outlast a
+	// single in-flight recovery, and a claim held longer than that is one
+	// whose process died.
+	escalationReceipts, err := runapppg.NewReceipts(pools.Authority, 30*24*time.Hour, 2*time.Minute, clockOf{core.clock}.Now)
+	if err != nil {
+		return nil, err
+	}
+	application.WithEscalations(core.executor, escalationReceipts)
 	policies := make(map[runs.State]interrupts.DwellPolicy)
 	for _, state := range []runs.State{runs.Created, runs.Preparing, runs.Planning, runs.AwaitingInput, runs.Executing, runs.Validating, runs.AwaitingReview, runs.AwaitingApproval, runs.Committing, runs.AwaitingDomainConfirmation, runs.Conflict, runs.Cancelling, runs.Failed} {
 		policies[state] = interrupts.DwellPolicy{Deadline: cfg.DwellDeadline, Owner: "agent-service-oncall"}
