@@ -153,6 +153,7 @@ func TestPostgresFoundations(t *testing.T) {
 	assertBudgetControllerLedger(t, ctx, authorityPool)
 	assertBudgetHeadroomIsAtomicAndScoped(t, ctx, authorityPool)
 	assertLateSupersededFinalityRecovers(t, ctx, authorityPool)
+	assertBudgetSettlementIsConcurrencySafe(t, ctx, authorityPool)
 	assertWorkerLeaseRenewal(t, ctx, authorityPool)
 	assertCommandReceipts(t, ctx, authorityPool)
 	if os.Getenv("DURABLE_CREATE_LOAD_TEST") == "1" {

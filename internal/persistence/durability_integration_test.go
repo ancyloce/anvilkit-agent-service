@@ -961,3 +961,113 @@ func isReceiptConflict(err error, detail string) bool {
 	var details problem.Details
 	return errors.As(err, &details) && details.Code == string(code) && details.Detail == detail
 }
+
+// assertBudgetSettlementIsConcurrencySafe proves the durable settlement is a
+// compare-and-set against the usage and finality the caller read, and that
+// cancellation fencing is a durable, irreversible property of the row rather
+// than a decision one writer makes.
+//
+// The defect it stands against loses money: a settlement that writes a cost
+// derived from a stale read silently overwrites usage that committed inside
+// the window, and the attempt's real spend disappears from the ledger. The
+// database is the enforcement point, so the proof is here rather than only
+// over the in-memory ledger.
+func assertBudgetSettlementIsConcurrencySafe(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_control.agent_runs(workspace_id,project_id,run_id,state,version,execution_generation,next_event_sequence,snapshot) VALUES('workspace-cas','project-cas','run-cas','created',1,1,2,'{}')`); err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := budgetpg.NewLedger(pool, func() time.Time { return time.Now().UTC() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	generations, err := budgetpg.NewRunGenerations(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller, err := budget.New(ledger, generations, discardExposure{}, realClock{}, budget.HeadroomPolicy{MaximumReservedMicros: 1_000_000, ReviewAtBasisPoints: 8000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := budget.Scope{WorkspaceID: "workspace-cas", ProjectID: "project-cas"}
+	reserved, err := controller.ReserveInitial(ctx, budget.Estimate{
+		ReservationID:     "budget:run-cas:g1",
+		RootRunID:         "run-cas",
+		RunID:             "run-cas",
+		WorkspaceID:       "workspace-cas",
+		ProjectID:         "project-cas",
+		PolicyVersion:     "policy-v1",
+		BudgetVersion:     "budget-v1",
+		MaximumCostMicros: 10_000,
+		ExpiresAt:         time.Now().Add(time.Hour).UTC(),
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := func(id string, cost int64, final bool) budget.Observation {
+		return budget.Observation{ID: id, Scope: scope, ReservationID: reserved.ID, RootRunID: "run-cas", RunID: "run-cas", TaskID: "model:turn-0000", AttemptID: budget.AttemptID("attempt-" + id), ExecutionGeneration: 1, CostMicros: cost, Final: final}
+	}
+	if err := controller.Observe(ctx, usage("cas-first", 400, true)); err != nil {
+		t.Fatal(err)
+	}
+	// The usage a settling caller read, and the usage that commits after it.
+	read, err := controller.Reservation(ctx, scope, reserved.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Observe(ctx, usage("cas-late", 250, false)); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := ledger.Settle(ctx, budget.Settlement{Scope: scope, ReservationID: reserved.ID, Generation: 1, FinalCost: read.ObservedMicros, ExpectedObservedMicros: read.ObservedMicros, ExpectedAttemptFinal: read.AttemptFinal, Release: true, Actor: budget.SettlementActor})
+	var conflict budget.Conflict
+	if !errors.As(err, &conflict) {
+		t.Fatalf("stale durable settlement returned %+v err=%v, want a typed conflict", stale, err)
+	}
+	if !conflict.Retryable() || conflict.ObservedMicros != 650 {
+		t.Fatalf("durable conflict = %+v, want a retryable conflict carrying the usage the row now holds", conflict)
+	}
+	intact, err := controller.Reservation(ctx, scope, reserved.ID)
+	if err != nil || intact.ObservedMicros != 650 || intact.Released {
+		t.Fatalf("reservation after the losing settlement = %+v err=%v, want the concurrent usage intact and unreleased", intact, err)
+	}
+	// Cancellation fencing withdraws dispatch authority durably and settles
+	// nothing: the hold keeps its worst-case bound and claims no finality.
+	fenced, err := controller.FenceCancelledRun(ctx, scope, "run-cas", "run-cas")
+	if err != nil || len(fenced) != 1 || !fenced[0].Cancelled || fenced[0].Released || fenced[0].UpperBoundMicros != 10_000 {
+		t.Fatalf("durable cancellation fence = %+v err=%v, want the worst case held and no manufactured finality", fenced, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_control.budget_reservations SET cancelled=false WHERE workspace_id='workspace-cas' AND reservation_id='budget:run-cas:g1'`); err == nil {
+		t.Fatal("a durable cancellation fence was reversible")
+	}
+	if err := controller.Dispatch(ctx, scope, reserved.ID, 1, func(context.Context, budget.Reservation) error {
+		t.Fatal("a cancelled durable reservation authorized a dispatch")
+		return nil
+	}); err == nil {
+		t.Fatal("a cancelled durable reservation authorized a dispatch")
+	}
+	// A fenced hold still accepts the usage its interrupted attempt reports.
+	if err := controller.Observe(ctx, usage("cas-after-fence", 125, false)); err != nil {
+		t.Fatalf("a cancelled durable hold refused the usage its attempt reported: %v", err)
+	}
+	concluded, err := controller.ConcludeCancelledRun(ctx, scope, "run-cas", "run-cas", budget.SettlementActor)
+	if err != nil || len(concluded) != 1 {
+		t.Fatalf("durable conclusion settled %v err=%v, want the fenced hold settled", concluded, err)
+	}
+	if concluded[0].ObservedMicros != 775 || concluded[0].UpperBoundMicros != 775 || !concluded[0].Released || !concluded[0].Cancelled {
+		t.Fatalf("durable concluded hold = %+v, want it settled at the full reported usage, released, and still fenced", concluded[0])
+	}
+	// Replay and restart converge: a fresh controller over the same durable
+	// rows settles nothing further and charges nothing more.
+	restarted, err := budget.New(ledger, generations, discardExposure{}, realClock{}, budget.HeadroomPolicy{MaximumReservedMicros: 1_000_000, ReviewAtBasisPoints: 8000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := restarted.RecoverCancelledFinality(ctx, scope, "run-cas", budget.SettlementActor)
+	if err != nil || len(again) != 0 {
+		t.Fatalf("durable recovery after restart settled %v err=%v, want nothing further", again, err)
+	}
+	total, err := restarted.RootTotal(ctx, scope, "run-cas")
+	if err != nil || total != 775 {
+		t.Fatalf("durable root total = %d err=%v, want exactly the usage the attempt reported once", total, err)
+	}
+}
