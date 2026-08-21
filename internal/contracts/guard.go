@@ -23,10 +23,20 @@ const (
 	ContractRuntimeOut Boundary = "contract-runtime-out"
 	ContractRuntimeIn  Boundary = "contract-runtime-in"
 	EventIn            Boundary = "event-in"
+	// EvidenceIn is the durable internal AgentEvidence boundary: a rendered
+	// evidence document proves the canonical evidence contract before it is
+	// stored, so the durable internal record can never hold a shape the
+	// contract rejects.
+	EvidenceIn Boundary = "evidence-in"
+	// DeltaOut is the provisional AgentStreamDelta boundary: a rendered delta
+	// proves the canonical provisional contract before it reaches a live
+	// subscriber, so nothing that fails the provisional shape — a delta
+	// claiming durability above all — ever leaves the service.
+	DeltaOut Boundary = "delta-out"
 )
 
 func RequiredBoundaries() []Boundary {
-	return []Boundary{APIIn, ProviderOut, ProviderIn, WorkerIn, PagixOut, PagixIn, ContractRuntimeOut, ContractRuntimeIn, EventIn}
+	return []Boundary{APIIn, ProviderOut, ProviderIn, WorkerIn, PagixOut, PagixIn, ContractRuntimeOut, ContractRuntimeIn, EventIn, EvidenceIn, DeltaOut}
 }
 
 type Guard struct {
@@ -89,4 +99,32 @@ func isRequired(candidate Boundary) bool {
 		}
 	}
 	return false
+}
+
+// DocumentValidator proves one rendered document against its pinned canonical
+// contract. It lets a consumer demand contract proof without carrying
+// trust-boundary vocabulary of its own.
+type DocumentValidator interface {
+	Require(ctx context.Context, schemaURI string, raw []byte) error
+}
+
+// At binds the guard to one trust boundary. A missing guard or an
+// unregistered boundary yields no validator at all rather than one that fails
+// later: a consumer that requires contract proof then refuses to construct at
+// all, so a miswired composition fails where it is built instead of at the
+// first document it should have proven.
+func (g *Guard) At(boundary Boundary) DocumentValidator {
+	if g == nil || g.adapter == nil || !isRequired(boundary) {
+		return nil
+	}
+	return boundaryValidator{guard: g, boundary: boundary}
+}
+
+type boundaryValidator struct {
+	guard    *Guard
+	boundary Boundary
+}
+
+func (b boundaryValidator) Require(ctx context.Context, schemaURI string, raw []byte) error {
+	return b.guard.Require(ctx, b.boundary, schemaURI, raw)
 }
