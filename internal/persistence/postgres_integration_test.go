@@ -140,6 +140,7 @@ func TestPostgresFoundations(t *testing.T) {
 	assertModelEvidence(t, ctx, pool)
 	assertCommitBoundaries(t, ctx, pool)
 	assertEvidenceStore(t, ctx, pool)
+	assertStreamCursorsAndSequenceSeparation(t, ctx, pool)
 	assertArtifactLifecycle(t, ctx, pool)
 	assertSchedulerBoundaries(t, ctx, pool)
 	assertWorkflowLeaseCleanup(t, ctx, pool)
@@ -488,7 +489,9 @@ func assertCommitBoundaries(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 // reads.
 func assertEvidenceStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	store, err := eventpg.NewEvidenceStore(pool, func() time.Time { return time.Unix(700, 0).UTC() })
+	guard := pinnedGuard(t)
+	now := time.Unix(700, 0).UTC()
+	store, err := eventpg.NewEvidenceStore(pool, guard.At(contractguard.EvidenceIn), func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -524,13 +527,263 @@ func assertEvidenceStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 	if _, err := pool.Exec(ctx, `DELETE FROM agent_evidence.records WHERE workspace_id='workspace-evidence'`); err == nil {
 		t.Fatal("recorded evidence was deletable")
 	}
-	records, err := store.ReadEvidence(ctx, events.Scope{WorkspaceID: "workspace-evidence", ProjectID: "project-evidence"}, "run-evidence", "operator-1", "integration-verification", 10)
+	authority := events.EvidenceAuthority{Scope: events.Scope{WorkspaceID: "workspace-evidence", ProjectID: "project-evidence"}, Accessor: "operator-1", Purpose: "integration-verification", Clearance: "restricted"}
+	records, err := store.ReadEvidence(ctx, authority, "run-evidence", 10)
 	if err != nil || len(records) != 2 || records[0].Sequence != 1 || records[1].Sequence != 2 {
 		t.Fatalf("evidence read records=%d err=%v", len(records), err)
 	}
+	// A read returns the record's full causal and trace correlation, not a
+	// lossy summary of it: a durable evidence read has to be enough to
+	// reconstruct what the fact attests.
+	if records[0].EvidenceID != "evidence-commit-1" || records[0].Type != "commit.authorization-issued" || records[0].Traceparent != fact.Traceparent || records[0].Producer != fact.Producer || !records[0].OccurredAt.Equal(fact.OccurredAt) {
+		t.Fatalf("evidence read lost run correlation: %+v", records[0])
+	}
 	var audited int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_evidence.access_audit WHERE workspace_id='workspace-evidence' AND accessor='operator-1' AND purpose='integration-verification'`).Scan(&audited); err != nil || audited != 1 {
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_evidence.access_audit WHERE workspace_id='workspace-evidence' AND accessor='operator-1' AND purpose='integration-verification' AND clearance='restricted'`).Scan(&audited); err != nil || audited != 1 {
 		t.Fatalf("evidence access audit rows=%d err=%v", audited, err)
+	}
+
+	// An accessor authorized for a different tenant reads nothing, and the
+	// denial is still audited under its own scope: the tenant an evidence
+	// read reaches is the accessor's own, never a caller-supplied filter.
+	neighbour := authority
+	neighbour.Scope.WorkspaceID = "workspace-evidence-neighbour"
+	if disclosed, err := store.ReadEvidence(ctx, neighbour, "run-evidence", 10); err != nil || len(disclosed) != 0 {
+		t.Fatalf("cross-tenant evidence read records=%d err=%v, want none", len(disclosed), err)
+	}
+	// Clearance bounds disclosure by data classification.
+	confidential := fact
+	confidential.EvidenceID = "evidence-confidential-1"
+	confidential.Type = "model.call-completed"
+	confidential.Classification = "confidential"
+	if _, err := store.AppendEvidence(ctx, confidential); err != nil {
+		t.Fatal(err)
+	}
+	limited := authority
+	limited.Clearance = "internal"
+	disclosed, err := store.ReadEvidence(ctx, limited, "run-evidence", 10)
+	if err != nil || len(disclosed) != 2 {
+		t.Fatalf("clearance-bound read records=%d err=%v, want the two internal facts", len(disclosed), err)
+	}
+	for _, record := range disclosed {
+		if record.Classification == "confidential" {
+			t.Fatalf("a confidential fact was disclosed to an internal clearance: %+v", record)
+		}
+	}
+	// An unregistered clearance or an anonymous read fails closed.
+	for name, denied := range map[string]events.EvidenceAuthority{
+		"unregistered clearance": func() events.EvidenceAuthority { a := authority; a.Clearance = "unbounded"; return a }(),
+		"anonymous accessor":     func() events.EvidenceAuthority { a := authority; a.Accessor = ""; return a }(),
+		"purposeless read":       func() events.EvidenceAuthority { a := authority; a.Purpose = ""; return a }(),
+		"unscoped read":          func() events.EvidenceAuthority { a := authority; a.Scope.ProjectID = ""; return a }(),
+	} {
+		if _, err := store.ReadEvidence(ctx, denied, "run-evidence", 10); err == nil {
+			t.Fatalf("%s was allowed to read evidence", name)
+		}
+	}
+
+	// Payload characters that the renderer escapes but RFC 8785 does not are
+	// still disclosable: the integrity digest is taken over the canonical
+	// form on both sides, so storage re-encoding cannot break verification.
+	escaped := fact
+	escaped.EvidenceID = "evidence-escaped-1"
+	escaped.Payload = map[string]string{"note": "a & b <c> \"q\" \\z \u2028"}
+	if _, err := store.AppendEvidence(ctx, escaped); err != nil {
+		t.Fatalf("append evidence carrying escaped characters: %v", err)
+	}
+	roundTripped, err := store.ReadEvidence(ctx, authority, "run-evidence", 10)
+	if err != nil {
+		t.Fatalf("read evidence carrying escaped characters: %v", err)
+	}
+	var found bool
+	for _, record := range roundTripped {
+		if record.EvidenceID == "evidence-escaped-1" {
+			found = record.Payload["note"] == escaped.Payload["note"]
+		}
+	}
+	if !found {
+		t.Fatalf("escaped payload characters did not survive the durable round trip: %+v", roundTripped)
+	}
+
+	// Retention bounds disclosure without rewriting history: past the
+	// governed window the rows still exist and stay immutable, but nothing is
+	// disclosed any more. The deadline is derived, never stored, so it always
+	// reflects the governed window in force.
+	window, err := events.RetentionWindow(events.RetentionAudit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deadline, err := events.DisclosureDeadline(now, events.RetentionAudit); err != nil || !deadline.Equal(now.Add(window)) {
+		t.Fatalf("derived disclosure deadline=%v err=%v", deadline, err)
+	}
+	expired, err := eventpg.NewEvidenceStore(pool, guard.At(contractguard.EvidenceIn), func() time.Time { return now.Add(window).Add(time.Second) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disclosed, err := expired.ReadEvidence(ctx, authority, "run-evidence", 10); err != nil || len(disclosed) != 0 {
+		t.Fatalf("post-retention read records=%d err=%v, want none", len(disclosed), err)
+	}
+	var retained int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_evidence.records WHERE workspace_id='workspace-evidence'`).Scan(&retained); err != nil || retained != 4 {
+		t.Fatalf("retention deleted history: rows=%d err=%v", retained, err)
+	}
+
+	// Integrity is re-verified before disclosure: a record whose stored
+	// digest no longer attests its document is never returned as evidence.
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_evidence.records(workspace_id,project_id,run_id,evidence_id,evidence_sequence,evidence_type,data_classification,retention_category,evidence_bytes,content_digest,recorded_at) VALUES('workspace-evidence','project-evidence','run-tampered','evidence-tampered-1',1,'commit.authorization-issued','internal','audit',$1,$2,$3)`,
+		mustRenderEvidence(t, fact, 1, now), "sha256:"+strings.Repeat("f", 64), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReadEvidence(ctx, authority, "run-tampered", 10); err == nil {
+		t.Fatal("a record whose digest does not attest its document was disclosed")
+	}
+
+	// A clock finer than the attested precision must still round-trip: the
+	// stored time is recorded at exactly the precision the document attests,
+	// so the two can never disagree by construction.
+	fine := now.Add(1234 * time.Microsecond)
+	precise, err := eventpg.NewEvidenceStore(pool, guard.At(contractguard.EvidenceIn), func() time.Time { return fine })
+	if err != nil {
+		t.Fatal(err)
+	}
+	subMillisecond := fact
+	subMillisecond.EvidenceID = "evidence-sub-millisecond-1"
+	subMillisecond.RunID = "run-precision"
+	if _, err := precise.AppendEvidence(ctx, subMillisecond); err != nil {
+		t.Fatalf("append under a sub-millisecond clock: %v", err)
+	}
+	recordedPrecise, err := precise.ReadEvidence(ctx, authority, "run-precision", 10)
+	if err != nil || len(recordedPrecise) != 1 {
+		t.Fatalf("sub-millisecond read records=%d err=%v", len(recordedPrecise), err)
+	}
+	if !recordedPrecise[0].RecordedAt.Equal(fine.Truncate(time.Millisecond)) {
+		t.Fatalf("recorded time %v does not match the attested precision", recordedPrecise[0].RecordedAt)
+	}
+
+	// Only the document is under the digest: relabelling a stored row's
+	// classification column to widen a read is refused, not disclosed.
+	relabelled := fact
+	relabelled.EvidenceID = "evidence-relabelled-1"
+	relabelled.RunID = "run-relabelled"
+	relabelled.Classification = "restricted"
+	rendered := mustRenderEvidence(t, relabelled, 1, now)
+	digest, err := events.EvidenceDigest(rendered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_evidence.records(workspace_id,project_id,run_id,evidence_id,evidence_sequence,evidence_type,data_classification,retention_category,evidence_bytes,content_digest,recorded_at) VALUES('workspace-evidence','project-evidence','run-relabelled','evidence-relabelled-1',1,'commit.authorization-issued','internal','audit',$1,$2,$3)`,
+		rendered, digest, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReadEvidence(ctx, limited, "run-relabelled", 10); err == nil {
+		t.Fatal("a restricted document relabelled internal in its column was disclosed to an internal clearance")
+	}
+}
+
+// mustRenderEvidence renders one canonical evidence document for a durable
+// fixture the store itself did not write.
+func mustRenderEvidence(t *testing.T, value events.Evidence, sequence uint64, recordedAt time.Time) []byte {
+	t.Helper()
+	rendered, err := events.RenderEvidence(value, sequence, recordedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rendered
+}
+
+// assertStreamCursorsAndSequenceSeparation proves the two ADR-020 sequence
+// boundaries on real storage: the public sequence stays continuous while
+// hidden internal evidence is recorded for the same run, evidence carries its
+// own independent sequence, and every ended stream connection leaves exactly
+// one durable cursor record under its own connection identity.
+func assertStreamCursorsAndSequenceSeparation(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	guard := pinnedGuard(t)
+	now := time.Unix(900, 0).UTC()
+	reader := eventpg.NewReader(pool, guard)
+	evidenceStore, err := eventpg.NewEvidenceStore(pool, guard.At(contractguard.EvidenceIn), func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := events.Scope{WorkspaceID: "w", ProjectID: "p"}
+	const runID = "run-sequence-separation"
+	hidden := events.Evidence{
+		WorkspaceID:    scope.WorkspaceID,
+		ProjectID:      scope.ProjectID,
+		RunID:          runID,
+		Type:           "model.call-completed",
+		OccurredAt:     now,
+		Producer:       events.EvidenceProducer{Component: "agent-executor", PolicyDigest: "sha256:" + strings.Repeat("a", 64), ContractBOMDigest: "sha256:" + strings.Repeat("c", 64)},
+		Classification: "internal",
+		Retention:      "audit",
+		Traceparent:    "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+	}
+	// Public events and hidden evidence interleave for the same run: four
+	// internal facts around three public ones.
+	for sequence := uint64(1); sequence <= 3; sequence++ {
+		fact := hidden
+		fact.EvidenceID = fmt.Sprintf("evidence-separation-before-%d", sequence)
+		if _, err := evidenceStore.AppendEvidence(ctx, fact); err != nil {
+			t.Fatal(err)
+		}
+		eventID := fmt.Sprintf("%s:%d", runID, sequence)
+		if err := reader.Append(ctx, scope, events.Event{ID: eventID, RunID: runID, Sequence: sequence, Bytes: validEventBytes(eventID, runID, sequence, "run.state-changed"), CreatedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	trailing := hidden
+	trailing.EvidenceID = "evidence-separation-after"
+	if _, err := evidenceStore.AppendEvidence(ctx, trailing); err != nil {
+		t.Fatal(err)
+	}
+	page, err := reader.Replay(ctx, events.ReplayRequest{Scope: scope, RunID: runID, Limit: 100})
+	if err != nil || len(page.Events) != 3 {
+		t.Fatalf("public replay events=%d err=%v, want the three public events", len(page.Events), err)
+	}
+	if err := events.ValidateContiguous(page.Events, 0); err != nil {
+		t.Fatalf("hidden evidence opened a gap in the public sequence: %v", err)
+	}
+	authority := events.EvidenceAuthority{Scope: scope, Accessor: "operator-separation", Purpose: "sequence-separation-verification", Clearance: "restricted"}
+	records, err := evidenceStore.ReadEvidence(ctx, authority, runID, 100)
+	if err != nil || len(records) != 4 {
+		t.Fatalf("evidence records=%d err=%v, want the four internal facts", len(records), err)
+	}
+	for index, record := range records {
+		if record.Sequence != uint64(index+1) {
+			t.Fatalf("evidence sequence %d at index %d is not independently continuous", record.Sequence, index)
+		}
+	}
+
+	cursors, err := eventpg.NewStreamCursors(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, connection := range []string{"stream.separation-1", "stream.separation-2"} {
+		if err := cursors.RecordCursor(ctx, scope, runID, connection, runID+":3", "client-closed"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A repeated connection identity keeps the record it already has: a
+	// duplicate recording never rewrites what a connection actually had.
+	if err := cursors.RecordCursor(ctx, scope, runID, "stream.separation-1", runID+":1", "slow-consumer"); err != nil {
+		t.Fatal(err)
+	}
+	var recorded int
+	var firstCursor, firstReason string
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.stream_cursors WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, scope.WorkspaceID, scope.ProjectID, runID).Scan(&recorded); err != nil || recorded != 2 {
+		t.Fatalf("recorded stream cursors=%d err=%v, want one per connection", recorded, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT last_event_id,reason FROM agent_events.stream_cursors WHERE workspace_id=$1 AND project_id=$2 AND connection_id='stream.separation-1'`, scope.WorkspaceID, scope.ProjectID).Scan(&firstCursor, &firstReason); err != nil {
+		t.Fatal(err)
+	}
+	if firstCursor != runID+":3" || firstReason != "client-closed" {
+		t.Fatalf("a duplicate recording rewrote a connection record: cursor=%s reason=%s", firstCursor, firstReason)
+	}
+	if err := cursors.RecordCursor(ctx, scope, runID, "", "", "client-closed"); err == nil {
+		t.Fatal("an incomplete connection record was accepted")
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_events.stream_cursors(workspace_id,project_id,run_id,connection_id,last_event_id,reason,recorded_at) VALUES($1,$2,$3,'stream.separation-3','','disconnected',$4)`, scope.WorkspaceID, scope.ProjectID, runID, now); err == nil {
+		t.Fatal("an unregistered disconnection reason was recorded")
 	}
 }
 
