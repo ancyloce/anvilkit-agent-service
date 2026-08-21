@@ -125,25 +125,15 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 		return
 	}
 	if len(parts) == 6 && parts[5] == "snapshot" && request.Method == http.MethodGet {
-		projection, err := h.core.Snapshot(request.Context(), claims, workspaceID, parts[4])
-		if err != nil {
-			writeProblem(response, err, request.Header.Get("traceparent"))
-			return
-		}
-		body, err := json.Marshal(projection)
-		if err != nil {
-			writeProblem(response, problem.Internal(""), request.Header.Get("traceparent"))
-			return
-		}
-		response.Header().Set("Content-Type", "application/json")
-		response.WriteHeader(http.StatusOK)
-		_, _ = response.Write(body)
+		result, err := h.core.Snapshot(request.Context(), claims, workspaceID, parts[4])
+		h.writeRepresentation(response, result, err, request)
 		return
 	}
 	if len(parts) == 6 && parts[5] == "events" && request.Method == http.MethodGet {
 		tracked := &trackedResponse{ResponseWriter: response}
 		if err := h.core.Stream(request.Context(), claims, workspaceID, parts[4], request.Header.Get("Last-Event-ID"), tracked); err != nil {
 			if !tracked.wrote {
+				linkCursorRecovery(response, err, request.URL.Path)
 				writeProblem(response, err, request.Header.Get("traceparent"))
 			}
 		}
@@ -280,6 +270,24 @@ func (h *Handler) writeRepresentationStatus(response http.ResponseWriter, result
 	response.WriteHeader(status)
 	_, _ = response.Write(result.Body)
 }
+
+// snapshotRecoveryRelation is the RFC 8288 relation type the canonical Agent
+// Service description declares for the run snapshot an expired event cursor
+// recovers through.
+const snapshotRecoveryRelation = "urn:anvilkit:relation:run-snapshot"
+
+// linkCursorRecovery names the tenant- and run-scoped snapshot operation on an
+// expired-cursor response. The recovery path is derived from the stream route
+// the caller already proved authority for, so the link a client discovers can
+// only ever point at its own run.
+func linkCursorRecovery(response http.ResponseWriter, err error, streamPath string) {
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeCursorExpired) {
+		return
+	}
+	response.Header().Set("Link", "<"+strings.TrimSuffix(streamPath, "/events")+"/snapshot>; rel=\""+snapshotRecoveryRelation+"\"")
+}
+
 func writeProblem(response http.ResponseWriter, err error, traceReference string) {
 	var details problem.Details
 	if !errors.As(err, &details) {
@@ -334,10 +342,21 @@ func (r *trackedResponse) Write(body []byte) (int, error) {
 	r.wrote = true
 	return r.ResponseWriter.Write(body)
 }
-func (r *trackedResponse) Flush() {
-	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
+
+// Unwrap exposes the writer underneath so http.ResponseController can reach
+// the server's own deadline and flush support through this wrapper. Without
+// it a long-lived stream would silently lose both: write deadlines would be
+// unavailable and every flush would look successful.
+func (r *trackedResponse) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// FlushError flushes through the underlying writer and reports what happened.
+// It deliberately replaces a plain Flush: an http.Flusher on a wrapper makes
+// http.ResponseController stop unwrapping and report success unconditionally,
+// which is exactly how a failed hand-off to a stalled consumer becomes
+// invisible.
+func (r *trackedResponse) FlushError() error {
+	r.wrote = true
+	return http.NewResponseController(r.ResponseWriter).Flush()
 }
 
 func (h *Handler) BeginDrain() { h.draining.Store(true) }

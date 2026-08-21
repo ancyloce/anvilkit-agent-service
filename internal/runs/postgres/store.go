@@ -13,6 +13,7 @@ import (
 
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
+	eventpg "github.com/ancyloce/anvilkit-agent-service/internal/events/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/idempotency"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
@@ -34,6 +35,11 @@ type Store struct {
 	idempotency *idempotency.Store
 	eventBounds events.Bounds
 	guard       *contractguard.Guard
+	// projections is the one production path from an internal fact to a
+	// durable public event. This store never writes an event any other way,
+	// so every event it produces carries its source evidence and the digest
+	// of the ruleset that projected it.
+	projections *eventpg.ProjectionWriter
 	inject      FailureInjector
 }
 
@@ -43,17 +49,35 @@ func New(database *pgxpool.Pool, idempotencyStore *idempotency.Store, guard *con
 }
 
 func NewConfigured(database *pgxpool.Pool, idempotencyStore *idempotency.Store, eventBounds events.Bounds, guard *contractguard.Guard, inject FailureInjector) *Store {
-	return &Store{database: database, idempotency: idempotencyStore, eventBounds: eventBounds, guard: guard, inject: inject}
+	store := &Store{database: database, idempotency: idempotencyStore, eventBounds: eventBounds, guard: guard, inject: inject}
+	// A store without the projector cannot emit: projectEvent fails closed,
+	// which is the same rule the guard already enforced for event bytes.
+	if guard != nil {
+		if projections, err := eventpg.NewProjectionWriter(guard, eventBounds, time.Now); err == nil {
+			store.projections = projections
+		}
+	}
+	return store
 }
 
-// requireEvent validates rendered public event bytes against the pinned
-// AgentEvent contract before they are written. Emission without the guard is
-// not a mode.
-func (s *Store) requireEvent(ctx context.Context, event []byte) error {
-	if s.guard == nil {
+// projectEvent is this store's only route to a durable public event: it
+// records the authoritative evidence behind the fact, projects the event from
+// it through the repository-owned projector, and persists both together with
+// the outbox hand-off in the caller's transaction.
+func (s *Store) projectEvent(ctx context.Context, tx pgx.Tx, scope runs.Scope, snapshot runs.Snapshot, projection events.Projection) error {
+	if s.projections == nil {
 		return fmt.Errorf("public event emission requires the pinned contract guard")
 	}
-	return s.guard.Require(ctx, contractguard.EventIn, events.AgentEventSchemaURI, event)
+	producer, err := events.ProjectionProducer("agent-runs", snapshot.Definition, snapshot.ContractBOM, snapshot.Policy)
+	if err != nil {
+		return err
+	}
+	_, err = s.projections.Write(ctx, tx, events.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID}, eventpg.Fact{
+		Projection:  projection,
+		Producer:    producer,
+		Correlation: events.ProjectionCorrelation{WorkflowID: string(snapshot.RunID) + ":g1"},
+	})
+	return err
 }
 
 func (s *Store) Create(ctx context.Context, record runs.CreateRecord) (runs.CreateOutcome, error) {
@@ -72,7 +96,7 @@ func (s *Store) Create(ctx context.Context, record runs.CreateRecord) (runs.Crea
 		if err := s.fail(AfterRunWrite); err != nil {
 			return idempotency.Response{}, err
 		}
-		eventBytes, err := events.Project(events.Projection{
+		if err := s.projectEvent(ctx, tx, record.Scope, record.Snapshot, events.Projection{
 			WorkspaceID: record.Snapshot.WorkspaceID,
 			ProjectID:   record.Snapshot.Target.ProjectID,
 			RunID:       string(record.Snapshot.RunID),
@@ -84,21 +108,11 @@ func (s *Store) Create(ctx context.Context, record runs.CreateRecord) (runs.Crea
 			Traceparent: record.Traceparent,
 			ContractBOM: record.Snapshot.ContractBOM,
 			Payload:     events.CreatedPayload(string(runs.Created)),
-		}, s.eventBounds)
-		if err != nil {
-			return idempotency.Response{}, fmt.Errorf("project created event: %w", err)
-		}
-		if err := s.requireEvent(ctx, eventBytes); err != nil {
-			return idempotency.Response{}, fmt.Errorf("validate created event contract: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,1,$4,$5,$6)`, record.Scope.WorkspaceID, record.Scope.ProjectID, record.Snapshot.RunID, record.Snapshot.LatestEventID, eventBytes, record.Snapshot.CreatedAt); err != nil {
-			return idempotency.Response{}, fmt.Errorf("persist created event: %w", err)
+		}); err != nil {
+			return idempotency.Response{}, err
 		}
 		if err := s.fail(AfterEventWrite); err != nil {
 			return idempotency.Response{}, err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,1,'agent.public-events',$5,$6)`, record.Scope.WorkspaceID, record.Scope.ProjectID, record.Snapshot.LatestEventID, record.Snapshot.RunID, eventBytes, record.Snapshot.CreatedAt); err != nil {
-			return idempotency.Response{}, fmt.Errorf("persist created outbox: %w", err)
 		}
 		if err := s.fail(AfterOutboxWrite); err != nil {
 			return idempotency.Response{}, err
@@ -235,7 +249,7 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 	if err := s.fail(AfterRunWrite); err != nil {
 		return runs.Snapshot{}, err
 	}
-	eventBytes, err := events.Project(events.Projection{
+	if err := s.projectEvent(ctx, tx, scope, snapshot, events.Projection{
 		WorkspaceID: snapshot.WorkspaceID,
 		ProjectID:   snapshot.Target.ProjectID,
 		RunID:       string(id),
@@ -247,20 +261,10 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 		Traceparent: traceparent,
 		ContractBOM: snapshot.ContractBOM,
 		Payload:     events.StateChangedPayload(string(transition.Previous), string(transition.Current)),
-	}, s.eventBounds)
-	if err != nil {
-		return runs.Snapshot{}, fmt.Errorf("project run transition event: %w", err)
-	}
-	if err := s.requireEvent(ctx, eventBytes); err != nil {
-		return runs.Snapshot{}, fmt.Errorf("validate run transition event contract: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, scope.WorkspaceID, scope.ProjectID, id, sequence, snapshot.LatestEventID, eventBytes, snapshot.UpdatedAt); err != nil {
+	}); err != nil {
 		return runs.Snapshot{}, err
 	}
 	if err := s.fail(AfterEventWrite); err != nil {
-		return runs.Snapshot{}, err
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,$5,'agent.public-events',$6,$7)`, scope.WorkspaceID, scope.ProjectID, snapshot.LatestEventID, id, sequence, eventBytes, snapshot.UpdatedAt); err != nil {
 		return runs.Snapshot{}, err
 	}
 	if err := s.fail(AfterOutboxWrite); err != nil {
@@ -274,30 +278,19 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 		if err := tx.QueryRow(ctx, `UPDATE agent_control.agent_runs SET next_event_sequence=next_event_sequence+1 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 RETURNING next_event_sequence-1`, scope.WorkspaceID, scope.ProjectID, id).Scan(&artifactSequence); err != nil {
 			return runs.Snapshot{}, fmt.Errorf("allocate artifact event sequence: %w", err)
 		}
-		artifactEventID := fmt.Sprintf("%s:artifact:%d", id, artifactSequence)
-		artifactEvent, err := events.Project(events.Projection{
+		if err := s.projectEvent(ctx, tx, scope, snapshot, events.Projection{
 			WorkspaceID: snapshot.WorkspaceID,
 			ProjectID:   snapshot.Target.ProjectID,
 			RunID:       string(id),
 			Sequence:    artifactSequence,
-			EventID:     artifactEventID,
+			EventID:     fmt.Sprintf("%s:artifact:%d", id, artifactSequence),
 			Type:        events.TypeArtifactAvailable,
 			OccurredAt:  snapshot.UpdatedAt,
 			Subject:     events.SystemSubject(),
 			Traceparent: traceparent,
 			ContractBOM: snapshot.ContractBOM,
 			Artifact:    &events.EventArtifact{ArtifactID: command.Artifact.ArtifactID, Digest: command.Artifact.Digest, MediaType: command.Artifact.MediaType, SizeBytes: command.Artifact.SizeBytes},
-		}, s.eventBounds)
-		if err != nil {
-			return runs.Snapshot{}, fmt.Errorf("project artifact-available event: %w", err)
-		}
-		if err := s.requireEvent(ctx, artifactEvent); err != nil {
-			return runs.Snapshot{}, fmt.Errorf("validate artifact-available event contract: %w", err)
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, scope.WorkspaceID, scope.ProjectID, id, artifactSequence, artifactEventID, artifactEvent, snapshot.UpdatedAt); err != nil {
-			return runs.Snapshot{}, err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,$5,'agent.public-events',$6,$7)`, scope.WorkspaceID, scope.ProjectID, artifactEventID, id, artifactSequence, artifactEvent, snapshot.UpdatedAt); err != nil {
+		}); err != nil {
 			return runs.Snapshot{}, err
 		}
 	}

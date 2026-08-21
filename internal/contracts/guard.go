@@ -33,10 +33,16 @@ const (
 	// subscriber, so nothing that fails the provisional shape — a delta
 	// claiming durability above all — ever leaves the service.
 	DeltaOut Boundary = "delta-out"
+	// SnapshotOut is the run snapshot recovery boundary: the rendered
+	// AgentRunSnapshot an expired-cursor client recovers through is proved
+	// against its canonical contract before it leaves the service, so the
+	// documented recovery path cannot answer with a shape the contract does
+	// not describe.
+	SnapshotOut Boundary = "snapshot-out"
 )
 
 func RequiredBoundaries() []Boundary {
-	return []Boundary{APIIn, ProviderOut, ProviderIn, WorkerIn, PagixOut, PagixIn, ContractRuntimeOut, ContractRuntimeIn, EventIn, EvidenceIn, DeltaOut}
+	return []Boundary{APIIn, ProviderOut, ProviderIn, WorkerIn, PagixOut, PagixIn, ContractRuntimeOut, ContractRuntimeIn, EventIn, EvidenceIn, DeltaOut, SnapshotOut}
 }
 
 type Guard struct {

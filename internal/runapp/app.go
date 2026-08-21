@@ -203,12 +203,31 @@ func (a *App) List(ctx context.Context, claims auth.Claims, workspaceID, cursor 
 	body, err := json.Marshal(page)
 	return Representation{Body: body}, err
 }
-func (a *App) Snapshot(ctx context.Context, claims auth.Claims, workspaceID, runID string) (events.SnapshotProjection, error) {
+
+// Snapshot is the governed recovery path an expired event cursor points at.
+// The rendered document is proved against the canonical AgentRunSnapshot
+// contract before it leaves the service, so the recovery a client is told to
+// follow always answers in the shape the description promises.
+func (a *App) Snapshot(ctx context.Context, claims auth.Claims, workspaceID, runID string) (Representation, error) {
+	if a.guard == nil {
+		return Representation{}, fmt.Errorf("run snapshot: the contract guard is required")
+	}
 	scope, err := a.scope(ctx, claims, auth.OpGetRun, workspaceID)
 	if err != nil {
-		return events.SnapshotProjection{}, err
+		return Representation{}, err
 	}
-	return a.events.Snapshot(ctx, events.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID}, runID)
+	projection, err := a.events.Snapshot(ctx, events.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID}, runID)
+	if err != nil {
+		return Representation{}, err
+	}
+	body, err := json.Marshal(projection)
+	if err != nil {
+		return Representation{}, fmt.Errorf("render run snapshot: %w", err)
+	}
+	if err := a.guard.Require(ctx, contractguard.SnapshotOut, events.AgentRunSnapshotSchemaURI, body); err != nil {
+		return Representation{}, err
+	}
+	return Representation{Body: body}, nil
 }
 func (a *App) Stream(ctx context.Context, claims auth.Claims, workspaceID, runID, cursor string, response http.ResponseWriter) error {
 	scope, err := a.scope(ctx, claims, auth.OpStreamEvents, workspaceID)

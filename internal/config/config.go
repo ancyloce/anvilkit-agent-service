@@ -103,14 +103,19 @@ type Config struct {
 	ArtifactGrantTTL              time.Duration
 	EventRetention                time.Duration
 	SSEWriteTimeout               time.Duration
-	ProviderEnabled               bool
-	ProviderPriority              []string
-	PolicySnapshot                string
-	CapabilitySnapshot            string
-	ArtifactPolicy                string
-	BudgetUnits                   int64 // per-child reservation upper bound in currency micros
-	BudgetHeadroomMicros          int64
-	BudgetReviewBasisPoints       int
+	// StreamCursorSpool is the instance's durable directory for stream
+	// disconnect records the authoritative cursor store refused. It must be a
+	// volume that survives a restart: a record held there is the only account
+	// of what a disconnected client received until the reconciler places it.
+	StreamCursorSpool       string
+	ProviderEnabled         bool
+	ProviderPriority        []string
+	PolicySnapshot          string
+	CapabilitySnapshot      string
+	ArtifactPolicy          string
+	BudgetUnits             int64 // per-child reservation upper bound in currency micros
+	BudgetHeadroomMicros    int64
+	BudgetReviewBasisPoints int
 	// BudgetMaxReservedMicros bounds the total unreleased reservation
 	// exposure the Platform budget controller may hold per root run scope.
 	BudgetMaxReservedMicros int64
@@ -157,6 +162,7 @@ func Load() (Config, error) {
 		DefinitionTrustRoot:           env("ANVILKIT_DEFINITION_TRUST_ROOT", ""),
 		DefinitionAttestation:         env("ANVILKIT_DEFINITION_ATTESTATION", ""),
 		AuthTrustSnapshot:             os.Getenv("ANVILKIT_AUTH_TRUST_SNAPSHOT"),
+		StreamCursorSpool:             os.Getenv("ANVILKIT_STREAM_CURSOR_SPOOL"),
 		AuthIssuers:                   csv(os.Getenv("ANVILKIT_AUTH_ISSUERS")),
 		AuthAudience:                  env("ANVILKIT_AUTH_AUDIENCE", "urn:anvilkit:audience:agent-service"),
 		RunAuthorityFile:              os.Getenv("ANVILKIT_RUN_AUTHORITY_FILE"),
@@ -388,6 +394,14 @@ func (c Config) Validate() error {
 	}
 	if c.SSEWriteTimeout <= 0 || c.SSEWriteTimeout > time.Minute {
 		return problem.InvalidConfiguration("ANVILKIT_SSE_WRITE_TIMEOUT", "the event stream write deadline must be positive and at most one minute")
+	}
+	// The authenticated agent API is what serves event streams, so wherever it
+	// is composed the durable holding area for disconnect records must be
+	// declared. Every stream records what its client received before the
+	// connection ends; a deployment with nowhere durable to put that record
+	// when the store refuses it is a deployment that would lose it.
+	if c.AuthTrustSnapshot != "" && strings.TrimSpace(c.StreamCursorSpool) == "" {
+		return problem.InvalidConfiguration("ANVILKIT_STREAM_CURSOR_SPOOL", "a durable stream-cursor spool directory is required wherever event streams are served")
 	}
 	if len(c.ControlledModelScript) < 1 || len(c.ControlledModelScript) > 16 {
 		return problem.InvalidConfiguration("ANVILKIT_CONTROLLED_MODEL_SCRIPT", "the controlled model script must carry between 1 and 16 steps")

@@ -152,6 +152,7 @@ func requiredProductionSettings() map[string]string {
 	return map[string]string{
 		"ANVILKIT_ENVIRONMENT":             "production",
 		"ANVILKIT_AUTH_TRUST_SNAPSHOT":     "/etc/anvilkit/trust.json",
+		"ANVILKIT_STREAM_CURSOR_SPOOL":     "/var/lib/anvilkit/stream-cursors",
 		"ANVILKIT_AUTH_ISSUERS":            "urn:anvilkit:issuer:platform",
 		"ANVILKIT_MIGRATION_DATABASE_URL":  "postgres://owner@db.internal:5432/anvilkit",
 		"ANVILKIT_CONTROL_DATABASE_URL":    "postgres://owner@db.internal:5432/anvilkit",
@@ -200,5 +201,28 @@ func TestDomainReconciliationWindowIsBoundedByTheCommitLoop(t *testing.T) {
 	zero.DomainReconcileLimit = 0
 	if zero.Validate() == nil {
 		t.Fatal("an unbounded reconciliation window was accepted")
+	}
+}
+
+// A deployment that serves the authenticated agent API serves event streams,
+// and every stream records what its client received before the connection
+// ends. Without a durable place to keep a record the cursor store refuses,
+// that record would be lost, so the configuration is refused instead.
+func TestServingEventStreamsRequiresADurableCursorSpool(t *testing.T) {
+	settings := requiredProductionSettings()
+	delete(settings, "ANVILKIT_STREAM_CURSOR_SPOOL")
+	for name, value := range settings {
+		t.Setenv(name, value)
+	}
+	t.Setenv("ANVILKIT_SIGNING_KEY", "production-signing-material-0123456789")
+	t.Setenv("ANVILKIT_ENCRYPTION_KEY", "production-encryption-material-0123456789")
+	_, err := Load()
+	var details problem.Details
+	if !errors.As(err, &details) || !strings.Contains(details.Detail, "durable stream-cursor spool") {
+		t.Fatalf("configuration error = %v, want the missing durable stream-cursor spool refused", err)
+	}
+	t.Setenv("ANVILKIT_STREAM_CURSOR_SPOOL", "/var/lib/anvilkit/stream-cursors")
+	if _, err := Load(); err != nil {
+		t.Fatalf("a deployment declaring a durable spool was refused: %v", err)
 	}
 }

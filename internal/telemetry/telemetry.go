@@ -15,6 +15,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 )
 
 // Fields is a governed telemetry projection. Sensitive bodies and URLs have no
@@ -81,6 +83,7 @@ type Telemetry struct {
 	workCounter     metric.Int64Counter
 	duration        metric.Int64Histogram
 	eventVisibility metric.Float64Histogram
+	cursorFailures  metric.Int64Counter
 }
 
 func New(serviceName string, exporter sdktrace.SpanExporter, redactor *Redactor) (*Telemetry, error) {
@@ -114,7 +117,11 @@ func newTelemetry(serviceName string, exporter sdktrace.SpanExporter, redactor *
 	if err != nil {
 		return nil, fmt.Errorf("create event visibility histogram: %w", err)
 	}
-	return &Telemetry{provider: provider, metricProvider: metricProvider, tracer: provider.Tracer("anvilkit-agent-service"), propagator: propagation.TraceContext{}, redactor: redactor, workCounter: workCounter, duration: duration, eventVisibility: eventVisibility}, nil
+	cursorFailures, err := meter.Int64Counter("agent_event_stream_cursor_record_failures_total")
+	if err != nil {
+		return nil, fmt.Errorf("create stream cursor record failure counter: %w", err)
+	}
+	return &Telemetry{provider: provider, metricProvider: metricProvider, tracer: provider.Tracer("anvilkit-agent-service"), propagator: propagation.TraceContext{}, redactor: redactor, workCounter: workCounter, duration: duration, eventVisibility: eventVisibility, cursorFailures: cursorFailures}, nil
 }
 
 func (t *Telemetry) Start(ctx context.Context, name string, fields Fields) (context.Context, trace.Span) {
@@ -148,6 +155,25 @@ func (t *Telemetry) ObserveEventVisibility(ctx context.Context, workspaceID, pro
 	}
 	t.eventVisibility.Record(ctx, duration.Seconds(), metric.WithAttributes(attribute.Bool("authorized", true), attribute.String("workspace.id", workspaceID), attribute.String("project.id", projectID), attribute.String("run.id", runID)))
 }
+
+// ObserveCursorRecordFailure reports one disconnect record the durable
+// recorder could not persist. The record is the only account of what a
+// disconnected client actually received, so losing one is an operational fact
+// an operator can act on: the counter names the run and connection it belongs
+// to, and the cursor it would have recorded, which is exactly what recovering
+// it by hand needs. The failure itself carries no detail beyond its category
+// — a database error string is not a field this projection admits.
+func (t *Telemetry) ObserveCursorRecordFailure(ctx context.Context, scope events.Scope, runID, connectionID, lastEventID, reason string, _ error) {
+	t.cursorFailures.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("workspace.id", scope.WorkspaceID),
+		attribute.String("project.id", scope.ProjectID),
+		attribute.String("run.id", runID),
+		attribute.String("connection.id", connectionID),
+		attribute.String("cursor.last_event_id", lastEventID),
+		attribute.String("disconnect.reason", reason),
+	))
+}
+
 func (t *Telemetry) Shutdown(ctx context.Context) error {
 	if err := t.provider.Shutdown(ctx); err != nil {
 		return fmt.Errorf("shutdown telemetry: %w", err)

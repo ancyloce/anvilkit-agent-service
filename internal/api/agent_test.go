@@ -89,8 +89,44 @@ func (appEvents) Replay(_ context.Context, request events.ReplayRequest) (events
 	return events.ReplayPage{}, nil
 }
 func (appEvents) Snapshot(context.Context, events.Scope, string) (events.SnapshotProjection, error) {
-	return events.SnapshotProjection{Run: json.RawMessage(`{"runId":"run"}`), Cursor: "run:2"}, nil
+	return events.SnapshotProjection{Run: json.RawMessage(canonicalRunDocument), Cursor: "run:2"}, nil
 }
+
+// canonicalRunDocument is a complete AgentRun as the authoritative store holds
+// one. The snapshot recovery response is proved against its canonical
+// contract before it leaves the service, so the fake has to answer with a real
+// resource rather than a stub.
+const canonicalRunDocument = `{
+  "kind": "AgentRun",
+  "runId": "run",
+  "rootRunId": "run",
+  "workspaceId": "workspace",
+  "actorId": "actor",
+  "domain": "platform-agent",
+  "operation": "artifact-validation",
+  "target": {"targetType": "page", "targetId": "page.1", "workspaceId": "workspace", "projectId": "project"},
+  "definition": {"definitionId": "definition.1", "definitionDigest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+  "contractBomReference": {"repository": "anvilkit/contracts", "bomDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "ociManifestDigest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "evidenceManifestDigest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+  "policy": {"policyId": "policy.1", "version": "v1", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "budget": {
+    "kind": "AgentBudget",
+    "modelLimits": {"maximumCalls": 10, "maximumConcurrentCalls": 2},
+    "tokenLimits": {"inputTokens": 4096, "outputTokens": 2048, "totalTokens": 6144},
+    "workerLimits": {"maximumAttempts": 4, "maximumDurationMilliseconds": 60000},
+    "gpuLimits": {"maximumGpuMilliseconds": 0},
+    "currencyLimits": {"maximumCost": {"amount": "1000", "currency": "USD"}, "reservedCost": {"amount": "500", "currency": "USD"}},
+    "reservationId": "reservation.1",
+    "exceedBehavior": "refuse",
+    "policy": {"policyId": "policy.1", "version": "v1", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+  },
+  "idempotency": {"scope": "workspace:create-run", "key": "idem.1", "canonicalRequestDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "status": "created",
+  "executionGeneration": 0,
+  "resourceRevision": 0,
+  "createdAt": "2026-08-09T12:00:00.000Z",
+  "updatedAt": "2026-08-09T12:00:00.000Z"
+}`
+
 func (appEvents) Wait(context.Context, events.Scope, string, uint64, time.Duration) error { return nil }
 
 type appAuthority struct{}
@@ -226,6 +262,12 @@ func TestExpiredCursorAnswers410AndSnapshotIsTheRecoveryPath(t *testing.T) {
 	if expiredResponse.Code != http.StatusGone || !strings.Contains(expiredResponse.Body.String(), "EVENT_CURSOR_EXPIRED") {
 		t.Fatalf("expired cursor status=%d body=%s", expiredResponse.Code, expiredResponse.Body.String())
 	}
+	// The recovery path is discoverable from the response itself, and it is
+	// scoped to the workspace and run the caller already proved authority for.
+	const wantLink = `</v1/workspaces/workspace/agent-runs/run/snapshot>; rel="urn:anvilkit:relation:run-snapshot"`
+	if expiredResponse.Header().Get("Link") != wantLink {
+		t.Fatalf("expired cursor Link=%q, want %q", expiredResponse.Header().Get("Link"), wantLink)
+	}
 
 	snapshot := httptest.NewRequest(http.MethodGet, "/v1/workspaces/workspace/agent-runs/run/snapshot", nil)
 	snapshot.Header.Set("Authorization", "Bearer verified")
@@ -233,5 +275,11 @@ func TestExpiredCursorAnswers410AndSnapshotIsTheRecoveryPath(t *testing.T) {
 	handler.ServeHTTP(snapshotResponse, snapshot)
 	if snapshotResponse.Code != http.StatusOK || !strings.Contains(snapshotResponse.Body.String(), `"cursor":"run:2"`) {
 		t.Fatalf("snapshot status=%d body=%s", snapshotResponse.Code, snapshotResponse.Body.String())
+	}
+	// The recovery response is the governed contract, not an ad-hoc shape:
+	// it declares its kind and carries the artifact collection even when the
+	// run has none.
+	if !strings.Contains(snapshotResponse.Body.String(), `"kind":"AgentRunSnapshot"`) || !strings.Contains(snapshotResponse.Body.String(), `"artifacts":[]`) {
+		t.Fatalf("snapshot body is not the canonical recovery document: %s", snapshotResponse.Body.String())
 	}
 }

@@ -32,6 +32,11 @@ const (
 	// can decide an escalated effect, and nothing that can decide one can do
 	// the rest.
 	OpResolveEscalation Operation = "resolve-escalation"
+	// OpReadEvidence is the disclosure of internal AgentEvidence. Evidence is
+	// the high-fidelity internal execution record, so reading it is its own
+	// operation under its own scope: nothing that can read, run, review, or
+	// recover a run can disclose evidence by virtue of that.
+	OpReadEvidence Operation = "read-evidence"
 )
 const (
 	ScopeRead     = "agent:read"
@@ -40,6 +45,11 @@ const (
 	ScopeIssuer   = "agent:issue"
 	// ScopeOperator is held only by the operator recovery surface.
 	ScopeOperator = "agent:operate"
+	// ScopeEvidence is held only by a subject authorized to read internal
+	// AgentEvidence. It admits the read; the clearance that bounds which
+	// classifications the read discloses comes from current authority, never
+	// from a claim.
+	ScopeEvidence = "agent:evidence"
 )
 
 func RequiredScopes(operation Operation) []string {
@@ -54,6 +64,8 @@ func RequiredScopes(operation Operation) []string {
 		return []string{ScopeIssuer}
 	case OpResolveEscalation:
 		return []string{ScopeOperator}
+	case OpReadEvidence:
+		return []string{ScopeEvidence}
 	default:
 		return nil
 	}
@@ -152,7 +164,7 @@ func (v *Validator) Revalidate(ctx context.Context, claims Claims, operation Ope
 	return err
 }
 func ProtectedOperations() []Operation {
-	values := []Operation{OpCreateRun, OpListRuns, OpGetRun, OpStreamEvents, OpCancel, OpRetry, OpDiscard, OpRespondInput, OpDecideApproval, OpIssueAuthorization, OpAccessArtifact, OpResolveEscalation}
+	values := []Operation{OpCreateRun, OpListRuns, OpGetRun, OpStreamEvents, OpCancel, OpRetry, OpDiscard, OpRespondInput, OpDecideApproval, OpIssueAuthorization, OpAccessArtifact, OpResolveEscalation, OpReadEvidence}
 	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
 	return values
 }
