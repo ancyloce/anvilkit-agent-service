@@ -89,6 +89,7 @@ func TestControlledAgentVerticalSlice(t *testing.T) {
 		"ANVILKIT_ENCRYPTION_KEY":                  "slice-encryption-material-0123456789",
 		"ANVILKIT_RUN_AUTHORITY_FILE":              authorityPath,
 		"ANVILKIT_AUTH_TRUST_SNAPSHOT":             trustPath,
+		"ANVILKIT_STREAM_CURSOR_SPOOL":             filepath.Join(t.TempDir(), "stream-cursors"),
 		"ANVILKIT_AUTH_ISSUERS":                    "issuer",
 		"ANVILKIT_EXECUTOR_ID":                     "slice-executor-1",
 	}
@@ -412,18 +413,31 @@ func TestControlledAgentVerticalSlice(t *testing.T) {
 	// The public stream carries the complete lifecycle through exactly the
 	// six-event registry: five types appear on the happy path, and nothing
 	// outside the registry is ever observable.
-	eventRows, err := observe.Query(ctx, `SELECT event_bytes,sequence FROM agent_events.agent_events WHERE workspace_id='workspace' AND project_id='project' AND run_id=$1 ORDER BY sequence`, runID)
+	eventRows, err := observe.Query(ctx, `SELECT e.event_bytes,e.sequence,p.evidence_id,p.projector_digest FROM agent_events.agent_events e LEFT JOIN agent_events.event_provenance p ON p.workspace_id=e.workspace_id AND p.project_id=e.project_id AND p.event_id=e.event_id WHERE e.workspace_id='workspace' AND e.project_id='project' AND e.run_id=$1 ORDER BY e.sequence`, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	observedTypes := map[string]bool{}
+	// Every public event names the authoritative evidence it was projected
+	// from; the set is checked against the evidence store below, so the
+	// public stream is traceable rather than merely annotated.
+	eventProvenance := map[string]string{}
+	projectorDigest, err := events.ProjectorDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
 	expectedSequence := uint64(1)
 	for eventRows.Next() {
 		var raw []byte
 		var sequence uint64
-		if err := eventRows.Scan(&raw, &sequence); err != nil {
+		var evidenceID, recordedProjector *string
+		if err := eventRows.Scan(&raw, &sequence, &evidenceID, &recordedProjector); err != nil {
 			t.Fatal(err)
 		}
+		if evidenceID == nil || recordedProjector == nil || *recordedProjector != projectorDigest {
+			t.Fatalf("public event %d lost its provenance: evidence=%v projector=%v", sequence, evidenceID, recordedProjector)
+		}
+		eventProvenance[*evidenceID] = *recordedProjector
 		// The public sequence is continuous even though the same run recorded
 		// hidden internal evidence throughout: hidden facts never open a gap
 		// a consumer would have to reason about (ADR-020 §3).
@@ -448,12 +462,12 @@ func TestControlledAgentVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	slice := events.Scope{WorkspaceID: "workspace", ProjectID: "project"}
-	authority := events.EvidenceAuthority{Scope: slice, Accessor: "slice-verifier", Purpose: "vertical-slice-verification", Clearance: "restricted"}
-	recorded, err := evidenceStore.ReadEvidence(ctx, authority, runID, 1000)
+	sliceAuthority := sliceEvidenceAuthority(t, "workspace", "project")
+	recorded, err := evidenceStore.ReadEvidence(ctx, sliceAuthority, runID, 1000)
 	if err != nil || len(recorded) == 0 {
 		t.Fatalf("durable evidence read records=%d err=%v, want the run's recorded facts", len(recorded), err)
 	}
+	recordedEvidence := map[string]string{}
 	for index, record := range recorded {
 		if record.Sequence != uint64(index+1) {
 			t.Fatalf("evidence sequence %d at index %d is not independently continuous", record.Sequence, index)
@@ -464,9 +478,25 @@ func TestControlledAgentVerticalSlice(t *testing.T) {
 		if events.PublicEventType(record.Type) {
 			t.Fatalf("a public event type reached the internal evidence store: %q", record.Type)
 		}
+		recordedEvidence[record.EvidenceID] = record.PublicEventID
 	}
-	neighbour := authority
-	neighbour.Scope.ProjectID = "project-neighbour"
+	// Provenance resolves: every public event's source evidence exists in the
+	// run's internal record, and that record points back at the public event
+	// it produced. The two layers stay independently sequenced, but the link
+	// between them is real in both directions.
+	if len(eventProvenance) == 0 {
+		t.Fatal("the run produced no public events to trace")
+	}
+	for evidenceID := range eventProvenance {
+		publicEventID, present := recordedEvidence[evidenceID]
+		if !present {
+			t.Fatalf("public event provenance %q names no recorded evidence", evidenceID)
+		}
+		if publicEventID == "" {
+			t.Fatalf("evidence %q does not name the public event it produced", evidenceID)
+		}
+	}
+	neighbour := sliceEvidenceAuthority(t, "workspace", "project-neighbour")
 	if disclosed, err := evidenceStore.ReadEvidence(ctx, neighbour, runID, 1000); err != nil || len(disclosed) != 0 {
 		t.Fatalf("a neighbouring tenant read %d evidence records err=%v, want none", len(disclosed), err)
 	}

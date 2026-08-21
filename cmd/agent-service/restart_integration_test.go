@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -73,9 +74,12 @@ func restartCheckpoints() []restartCheckpoint {
 	}
 }
 
-func restartEnvironment(databaseURL, authorityPath, trustPath, script string) map[string]string {
+// cursorSpool is the durable directory both processes share, so a
+// disconnect record the first process held is still there for the second.
+func restartEnvironment(databaseURL, authorityPath, trustPath, cursorSpool, script string) map[string]string {
 	return map[string]string{
 		"ANVILKIT_AUTH_TRUST_SNAPSHOT":             trustPath,
+		"ANVILKIT_STREAM_CURSOR_SPOOL":             cursorSpool,
 		"ANVILKIT_AUTH_ISSUERS":                    "issuer",
 		"ANVILKIT_ENVIRONMENT":                     "development",
 		"ANVILKIT_CONTRACT_ROOT":                   "../..",
@@ -346,7 +350,7 @@ func TestRestartRecoveryAcrossProductionCheckpoints(t *testing.T) {
 			managerID, managerDigest := managerReference(t)
 			authorityPath := writeRunAuthority(t, managerID, managerDigest)
 			identities := mintBearers(t)
-			environment := restartEnvironment(databaseURL, authorityPath, identities.trustPath, checkpoint.script)
+			environment := restartEnvironment(databaseURL, authorityPath, identities.trustPath, filepath.Join(t.TempDir(), "stream-cursors"), checkpoint.script)
 			for name, value := range environment {
 				t.Setenv(name, value)
 			}

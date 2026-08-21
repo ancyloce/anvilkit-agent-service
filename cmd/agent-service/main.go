@@ -43,6 +43,7 @@ import (
 	domaincommitpg "github.com/ancyloce/anvilkit-agent-service/internal/domaincommit/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	eventpg "github.com/ancyloce/anvilkit-agent-service/internal/events/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/events/spool"
 	"github.com/ancyloce/anvilkit-agent-service/internal/execution"
 	executionpg "github.com/ancyloce/anvilkit-agent-service/internal/execution/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/idempotency"
@@ -1166,7 +1167,24 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	if err != nil {
 		return nil, err
 	}
-	application := runapp.New(validator, runService, reader, events.StreamConfig{Heartbeat: cfg.Limits.SSEHeartbeat, Revalidation: cfg.AuthRevalidation, ReplayLimit: 100, Bounds: core.eventBounds, Observer: observability, WriteTimeout: cfg.SSEWriteTimeout, Cursors: cursors, MaximumConnections: cfg.Limits.SSEConnections, Deltas: core.deltas}, core.authority, core.guard, core.registry)
+	// A disconnect record the cursor store refuses is held on the instance's
+	// own durable volume and placed by the reconciler — at start, so records a
+	// previous process held are placed as soon as the store is reachable, and
+	// then on a bounded sweep. The spool is prepared here rather than lazily,
+	// so a deployment whose volume is missing or read-only fails at startup
+	// instead of at the first disconnect it would have had to record.
+	cursorSpool, err := spool.NewStore(cfg.StreamCursorSpool)
+	if err != nil {
+		return nil, err
+	}
+	cursorReconciler, err := spool.NewReconciler(cursorSpool, cursors)
+	if err != nil {
+		return nil, err
+	}
+	go cursorReconciler.Run(ctx, time.Minute, func(err error) {
+		slog.Error("stream cursor spool reconcile failed", "error", err)
+	})
+	application := runapp.New(validator, runService, reader, events.StreamConfig{Heartbeat: cfg.Limits.SSEHeartbeat, Revalidation: cfg.AuthRevalidation, ReplayLimit: 100, Bounds: core.eventBounds, Observer: observability, WriteTimeout: cfg.SSEWriteTimeout, Cursors: cursors, CursorSpool: cursorSpool, CursorFailures: observability, MaximumConnections: cfg.Limits.SSEConnections, Deltas: core.deltas}, core.authority, core.guard, core.registry)
 	application.WithInterrupts(core.interruptService)
 	// The operator recovery path is part of the production API: it is
 	// authenticated, scoped, role-gated against current authority, audited,
