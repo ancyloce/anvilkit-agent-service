@@ -20,7 +20,10 @@ func main() {
 	root := flag.String("root", ".", "module root")
 	flag.Parse()
 	var failures []string
-	deliveryMarker := regexp.MustCompile(`(?i)(^|[^a-z0-9])(m[0-9]+|p` + `0)([^a-z0-9]|$)`)
+	// Delivery-stage naming is forbidden in code: a milestone or work-package
+	// marker in a file name, identifier, or comment binds the code to a
+	// delivery schedule that stops being true the moment the schedule moves.
+	deliveryMarker := regexp.MustCompile(`(?i)(^|[^a-z0-9])(m[0-9]+|wp[0-9]+|p` + `0)([^a-z0-9]|$)`)
 	err := filepath.WalkDir(*root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
