@@ -98,7 +98,7 @@ func serveUntilDelivered(t *testing.T, stream *Stream, cursor string, want int) 
 func TestDuplicateConnectionsToOneRunAreIndependentAndDeterministic(t *testing.T) {
 	reader := &runHistoryReader{events: []Event{boundedEvent("event.1", 1), boundedEvent("event.2", 2), boundedEvent("event.3", 3)}}
 	recorder := &MemoryCursorRecorder{}
-	stream, err := NewStream(reader, allowAllStreamAuthority{}, StreamConfig{Heartbeat: 50 * time.Millisecond, Revalidation: time.Second, ReplayLimit: 100, Bounds: DefaultBounds(), Cursors: recorder})
+	stream, err := NewStream(reader, allowAllStreamAuthority{}, StreamConfig{Heartbeat: 50 * time.Millisecond, Revalidation: time.Second, ReplayLimit: 100, Bounds: DefaultBounds(), Cursors: recorder, CursorSpool: recorder, CursorFailures: recorder})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestDuplicateConnectionsToOneRunAreIndependentAndDeterministic(t *testing.T
 func TestConcurrentResumeFromDistinctCursorsIsDeterministic(t *testing.T) {
 	reader := &runHistoryReader{events: []Event{boundedEvent("event.1", 1), boundedEvent("event.2", 2), boundedEvent("event.3", 3)}}
 	recorder := &MemoryCursorRecorder{}
-	stream, err := NewStream(reader, allowAllStreamAuthority{}, StreamConfig{Heartbeat: 50 * time.Millisecond, Revalidation: time.Second, ReplayLimit: 100, Bounds: DefaultBounds(), Cursors: recorder})
+	stream, err := NewStream(reader, allowAllStreamAuthority{}, StreamConfig{Heartbeat: 50 * time.Millisecond, Revalidation: time.Second, ReplayLimit: 100, Bounds: DefaultBounds(), Cursors: recorder, CursorSpool: recorder, CursorFailures: recorder})
 	if err != nil {
 		t.Fatal(err)
 	}

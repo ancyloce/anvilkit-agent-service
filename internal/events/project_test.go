@@ -29,6 +29,7 @@ func lifecycleProjection() Projection {
 		Traceparent: projectionTraceparent,
 		ContractBOM: projectionBOM(),
 		Payload:     StateChangedPayload("preparing", "planning"),
+		evidenceID:  "projection.event.1",
 	}
 }
 
@@ -45,8 +46,8 @@ func TestProjectionIsDeterministicAcrossRepeatedRenders(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(first, repeated) {
-			t.Fatalf("projection is not deterministic:\n%s\n%s", first, repeated)
+		if !bytes.Equal(first.Bytes, repeated.Bytes) || first.EvidenceID != repeated.EvidenceID || first.ProjectorDigest != repeated.ProjectorDigest {
+			t.Fatalf("projection is not deterministic:\n%s\n%s", first.Bytes, repeated.Bytes)
 		}
 	}
 }
@@ -80,8 +81,11 @@ func TestProjectedEventsSatisfyTheCanonicalContract(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", projection.Type, err)
 		}
-		if err := guard.Require(context.Background(), contractguard.EventIn, AgentEventSchemaURI, rendered); err != nil {
-			t.Fatalf("%s violates the canonical contract: %v\n%s", projection.Type, err, rendered)
+		if err := guard.Require(context.Background(), contractguard.EventIn, AgentEventSchemaURI, rendered.Bytes); err != nil {
+			t.Fatalf("%s violates the canonical contract: %v\n%s", projection.Type, err, rendered.Bytes)
+		}
+		if rendered.EvidenceID != projection.evidenceID || rendered.ProjectorDigest == "" {
+			t.Fatalf("%s lost its provenance: %#v", projection.Type, rendered)
 		}
 	}
 }
@@ -210,13 +214,13 @@ func TestProjectedEventIdentityIsBoundToItsEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateEnvelope(rendered, DefaultBounds(), "event.1", "run.1", 7); err != nil {
+	if err := ValidateEnvelope(rendered.Bytes, DefaultBounds(), "event.1", "run.1", 7); err != nil {
 		t.Fatalf("the projected event failed its own envelope validation: %v", err)
 	}
 	for name, check := range map[string]func() error{
-		"foreign event identity": func() error { return ValidateEnvelope(rendered, DefaultBounds(), "event.2", "run.1", 7) },
-		"foreign run identity":   func() error { return ValidateEnvelope(rendered, DefaultBounds(), "event.1", "run.2", 7) },
-		"foreign sequence":       func() error { return ValidateEnvelope(rendered, DefaultBounds(), "event.1", "run.1", 8) },
+		"foreign event identity": func() error { return ValidateEnvelope(rendered.Bytes, DefaultBounds(), "event.2", "run.1", 7) },
+		"foreign run identity":   func() error { return ValidateEnvelope(rendered.Bytes, DefaultBounds(), "event.1", "run.2", 7) },
+		"foreign sequence":       func() error { return ValidateEnvelope(rendered.Bytes, DefaultBounds(), "event.1", "run.1", 8) },
 	} {
 		if err := check(); err == nil {
 			t.Fatalf("%s was accepted against the retained envelope", name)

@@ -3,7 +3,6 @@ package events
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 )
 
@@ -18,32 +17,11 @@ func (s Scope) Validate() error {
 	return nil
 }
 
-type Transition struct {
-	Scope           Scope
-	RunID           string
-	ExpectedVersion int64
-	NextState       string
-	Snapshot        json.RawMessage
-	EventID         string
-	EventBytes      []byte
-	OutboxID        string
-	Topic           string
-	OutboxBytes     []byte
-	WorkflowID      string
-	WorkflowVersion int
-	Checkpoint      string
-	CheckpointBytes []byte
-	ProblemBytes    []byte
-}
-
-type Committed struct {
-	Version  int64
-	Sequence Sequence
-}
-
-type Repository interface {
-	Commit(context.Context, Transition) (Committed, error)
-}
+// A durable public event has no caller-supplied write shape. Every one is
+// produced by the repository-owned projector from an authoritative
+// AgentEvidence record (ADR-020 §2), so there is no transition type here for a
+// caller to hand this package event bytes, a source evidence reference, or a
+// projector identity of its own choosing.
 
 type InboxMessage struct {
 	Scope               Scope

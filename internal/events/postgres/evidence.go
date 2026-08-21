@@ -33,9 +33,57 @@ func NewEvidenceStore(database *pgxpool.Pool, validator events.ContractValidator
 
 var _ events.EvidenceRecorder = (*EvidenceStore)(nil)
 var _ events.EvidenceReader = (*EvidenceStore)(nil)
+var _ events.EvidenceLookup = (*EvidenceStore)(nil)
+
+// RecordedEvidence answers what is already recorded under one evidence
+// identity in this tenant, so a producer replaying a durable operation
+// converges on the fact that was recorded rather than stamping a second
+// account of it. It returns identity and timing only — disclosing a payload
+// is what ReadEvidence is for, under a proven accessor authority.
+func (s *EvidenceStore) RecordedEvidence(ctx context.Context, scope events.Scope, evidenceID string) (events.RecordedEvidence, bool, error) {
+	if err := scope.Validate(); err != nil {
+		return events.RecordedEvidence{}, false, err
+	}
+	var record events.RecordedEvidence
+	var occurredAt time.Time
+	var retention string
+	var rendered []byte
+	err := s.database.QueryRow(ctx, `SELECT evidence_sequence,recorded_at,retention_category,content_digest,evidence_bytes FROM agent_evidence.records WHERE workspace_id=$1 AND project_id=$2 AND evidence_id=$3`, scope.WorkspaceID, scope.ProjectID, evidenceID).Scan(&record.Sequence, &record.RecordedAt, &retention, &record.Digest, &rendered)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return events.RecordedEvidence{}, false, nil
+	}
+	if err != nil {
+		return events.RecordedEvidence{}, false, fmt.Errorf("read recorded evidence: %w", err)
+	}
+	decoded, err := events.DecodeEvidence(rendered)
+	if err != nil {
+		return events.RecordedEvidence{}, false, err
+	}
+	occurredAt = decoded.OccurredAt
+	record.Identity, err = events.EvidenceIdentity(decoded.Evidence)
+	if err != nil {
+		return events.RecordedEvidence{}, false, err
+	}
+	deadline, err := events.DisclosureDeadline(record.RecordedAt, retention)
+	if err != nil {
+		return events.RecordedEvidence{}, false, err
+	}
+	record.ExpiresAt = deadline
+	record.Evidence = events.Evidence{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID, EvidenceID: evidenceID, Retention: retention, OccurredAt: occurredAt.UTC()}
+	return record, true, nil
+}
 
 func (s *EvidenceStore) AppendEvidence(ctx context.Context, value events.Evidence) (uint64, error) {
 	if err := events.ValidateEvidence(value); err != nil {
+		return 0, err
+	}
+	// The stable identity binds the append to the tenant, run, evidence
+	// identity, type, classification, retention, and canonical content its
+	// producer decided — and to nothing the store allocates. It is what makes
+	// a replay recognizable and a reused identifier carrying a different fact
+	// a conflict rather than a silent answer with someone else's sequence.
+	identity, err := events.EvidenceIdentity(value)
+	if err != nil {
 		return 0, err
 	}
 	// The canonical document attests millisecond precision, so the column is
@@ -46,22 +94,24 @@ func (s *EvidenceStore) AppendEvidence(ctx context.Context, value events.Evidenc
 	if recordedAt.IsZero() {
 		return 0, fmt.Errorf("evidence store: authoritative time is unavailable")
 	}
-	// Idempotency by evidence identity: a durable operation replay reads the
-	// recorded sequence instead of appending again.
-	var existing uint64
-	err := s.database.QueryRow(ctx, `SELECT evidence_sequence FROM agent_evidence.records WHERE workspace_id=$1 AND project_id=$2 AND evidence_id=$3`, value.WorkspaceID, value.ProjectID, value.EvidenceID).Scan(&existing)
-	if err == nil {
-		return existing, nil
+	// A replay of the same durable operation reads the recorded row instead of
+	// appending again; a different fact under the same identity is refused.
+	sequence, recorded, err := s.recordedIdentity(ctx, value)
+	if err != nil {
+		return 0, err
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return 0, fmt.Errorf("read recorded evidence: %w", err)
+	if recorded != "" {
+		if recorded != identity {
+			return 0, events.EvidenceConflict(value.EvidenceID)
+		}
+		return sequence, nil
 	}
 	for {
-		var sequence uint64
-		if err := s.database.QueryRow(ctx, `SELECT COALESCE(MAX(evidence_sequence),0)+1 FROM agent_evidence.records WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, value.WorkspaceID, value.ProjectID, value.RunID).Scan(&sequence); err != nil {
+		var next uint64
+		if err := s.database.QueryRow(ctx, `SELECT COALESCE(MAX(evidence_sequence),0)+1 FROM agent_evidence.records WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, value.WorkspaceID, value.ProjectID, value.RunID).Scan(&next); err != nil {
 			return 0, fmt.Errorf("allocate evidence sequence: %w", err)
 		}
-		rendered, err := events.RenderEvidence(value, sequence, recordedAt)
+		rendered, err := events.RenderEvidence(value, next, recordedAt)
 		if err != nil {
 			return 0, err
 		}
@@ -75,21 +125,45 @@ func (s *EvidenceStore) AppendEvidence(ctx context.Context, value events.Evidenc
 			return 0, err
 		}
 		tag, err := s.database.Exec(ctx, `INSERT INTO agent_evidence.records(workspace_id,project_id,run_id,evidence_id,evidence_sequence,evidence_type,data_classification,retention_category,evidence_bytes,content_digest,recorded_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING`,
-			value.WorkspaceID, value.ProjectID, value.RunID, value.EvidenceID, sequence, value.Type, value.Classification, value.Retention, rendered, digest, recordedAt)
+			value.WorkspaceID, value.ProjectID, value.RunID, value.EvidenceID, next, value.Type, value.Classification, value.Retention, rendered, digest, recordedAt)
 		if err != nil {
 			return 0, fmt.Errorf("append evidence: %w", err)
 		}
 		if tag.RowsAffected() == 1 {
+			return next, nil
+		}
+		// A concurrent append either recorded this identity (replay or
+		// conflict) or claimed this sequence (retry with the next one).
+		sequence, recorded, err := s.recordedIdentity(ctx, value)
+		if err != nil {
+			return 0, err
+		}
+		if recorded != "" {
+			if recorded != identity {
+				return 0, events.EvidenceConflict(value.EvidenceID)
+			}
 			return sequence, nil
 		}
-		// A concurrent append either recorded this identity (replay wins) or
-		// claimed this sequence (retry with the next one).
-		if err := s.database.QueryRow(ctx, `SELECT evidence_sequence FROM agent_evidence.records WHERE workspace_id=$1 AND project_id=$2 AND evidence_id=$3`, value.WorkspaceID, value.ProjectID, value.EvidenceID).Scan(&existing); err == nil {
-			return existing, nil
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return 0, fmt.Errorf("read recorded evidence: %w", err)
-		}
 	}
+}
+
+// recordedIdentity reads what is already recorded under one evidence
+// identifier in this tenant. An absent row reports an empty identity.
+func (s *EvidenceStore) recordedIdentity(ctx context.Context, value events.Evidence) (uint64, string, error) {
+	var sequence uint64
+	var rendered []byte
+	err := s.database.QueryRow(ctx, `SELECT evidence_sequence,evidence_bytes FROM agent_evidence.records WHERE workspace_id=$1 AND project_id=$2 AND evidence_id=$3`, value.WorkspaceID, value.ProjectID, value.EvidenceID).Scan(&sequence, &rendered)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, "", nil
+	}
+	if err != nil {
+		return 0, "", fmt.Errorf("read recorded evidence: %w", err)
+	}
+	identity, err := identityOfRecorded(rendered)
+	if err != nil {
+		return 0, "", err
+	}
+	return sequence, identity, nil
 }
 
 // ReadEvidence discloses one run's evidence under the accessor's own proven
@@ -98,7 +172,15 @@ func (s *EvidenceStore) AppendEvidence(ctx context.Context, value events.Evidenc
 // accessor's clearance bounds which classifications are disclosed; the
 // governed retention window bounds what is still disclosable; and every
 // returned document is re-verified against its stored integrity digest.
-func (s *EvidenceStore) ReadEvidence(ctx context.Context, authority events.EvidenceAuthority, runID string, limit int) ([]events.RecordedEvidence, error) {
+func (s *EvidenceStore) ReadEvidence(ctx context.Context, accessor events.EvidenceAuthority, runID string, limit int) ([]events.RecordedEvidence, error) {
+	// The authority in force now is what decides this read: a clearance
+	// minted a moment ago is evidence of a past decision, never permission
+	// for this one. Revalidating re-reads the subject, the tenant scope, the
+	// admitted role, the granted clearance, and every revocation axis.
+	authority, err := accessor.Revalidated(ctx)
+	if err != nil {
+		return nil, err
+	}
 	if err := authority.Validate(); err != nil {
 		return nil, err
 	}
@@ -106,13 +188,14 @@ func (s *EvidenceStore) ReadEvidence(ctx context.Context, authority events.Evide
 		return nil, err
 	}
 	limit = events.BoundedEvidencePage(limit)
+	scope := authority.Scope()
 	now := s.now().UTC()
 	if now.IsZero() {
 		return nil, fmt.Errorf("evidence store: authoritative time is unavailable")
 	}
 	// The access audit lands before any bytes are returned: an evidence read
 	// without its audit row is not a mode.
-	if _, err := s.database.Exec(ctx, `INSERT INTO agent_evidence.access_audit(workspace_id,project_id,run_id,accessor,purpose,clearance,accessed_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, authority.Scope.WorkspaceID, authority.Scope.ProjectID, runID, authority.Accessor, authority.Purpose, authority.Clearance, now); err != nil {
+	if _, err := s.database.Exec(ctx, `INSERT INTO agent_evidence.access_audit(workspace_id,project_id,run_id,accessor,purpose,clearance,accessed_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, scope.WorkspaceID, scope.ProjectID, runID, authority.Accessor(), authority.Purpose(), authority.Clearance(), now); err != nil {
 		return nil, fmt.Errorf("audit evidence access: %w", err)
 	}
 	// The disclosure deadline is derived, so retention filters on the
@@ -134,7 +217,7 @@ func (s *EvidenceStore) ReadEvidence(ctx context.Context, authority events.Evide
 		}
 	}
 	rows, err := s.database.Query(ctx, `SELECT evidence_bytes,evidence_sequence,recorded_at,retention_category,content_digest FROM agent_evidence.records WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND data_classification = ANY($4) AND recorded_at > CASE retention_category WHEN 'operational' THEN $5::timestamptz WHEN 'audit' THEN $6::timestamptz WHEN 'security' THEN $7::timestamptz END ORDER BY evidence_sequence LIMIT $8`,
-		authority.Scope.WorkspaceID, authority.Scope.ProjectID, runID, authority.PermittedClassifications(),
+		scope.WorkspaceID, scope.ProjectID, runID, authority.PermittedClassifications(),
 		cutoffs[events.RetentionOperational], cutoffs[events.RetentionAudit], cutoffs[events.RetentionSecurity], limit)
 	if err != nil {
 		return nil, fmt.Errorf("read evidence: %w", err)
@@ -165,7 +248,7 @@ func (s *EvidenceStore) ReadEvidence(ctx context.Context, authority events.Evide
 		// is what stops a direct column write from widening a read: a
 		// restricted fact relabelled "internal" in its column is refused
 		// here, not disclosed.
-		if decoded.WorkspaceID != authority.Scope.WorkspaceID || decoded.ProjectID != authority.Scope.ProjectID || decoded.RunID != runID {
+		if decoded.WorkspaceID != scope.WorkspaceID || decoded.ProjectID != scope.ProjectID || decoded.RunID != runID {
 			return nil, fmt.Errorf("evidence integrity failure: record %d does not attest the scope it is stored under", record.Sequence)
 		}
 		if decoded.Sequence != record.Sequence || !decoded.RecordedAt.Equal(record.RecordedAt) {
@@ -173,6 +256,10 @@ func (s *EvidenceStore) ReadEvidence(ctx context.Context, authority events.Evide
 		}
 		if decoded.Retention != retention {
 			return nil, fmt.Errorf("evidence integrity failure: record %d does not attest the retention category it is stored under", record.Sequence)
+		}
+		record.Identity, err = events.EvidenceIdentity(decoded.Evidence)
+		if err != nil {
+			return nil, err
 		}
 		if !authority.Permits(decoded.Classification) {
 			return nil, fmt.Errorf("evidence integrity failure: record %d does not attest the data classification it is stored under", record.Sequence)

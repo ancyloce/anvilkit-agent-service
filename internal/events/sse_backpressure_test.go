@@ -51,7 +51,7 @@ func boundedEvent(id string, sequence uint64) Event {
 func TestSlowConsumerDisconnectRecordsLastSentCursor(t *testing.T) {
 	reader := &fixedPageReader{events: []Event{boundedEvent("event.1", 1), boundedEvent("event.2", 2)}}
 	recorder := &MemoryCursorRecorder{}
-	stream, err := NewStream(reader, allowAllStreamAuthority{}, StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 100, Bounds: Bounds{MaximumBytes: 1024, MaximumFields: 4, MaximumFieldBytes: 32}, Cursors: recorder})
+	stream, err := NewStream(reader, allowAllStreamAuthority{}, StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 100, Bounds: Bounds{MaximumBytes: 1024, MaximumFields: 4, MaximumFieldBytes: 32}, Cursors: recorder, CursorSpool: recorder, CursorFailures: recorder})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestSlowConsumerDisconnectRecordsLastSentCursor(t *testing.T) {
 func TestClientDisconnectRecordsDeliveredCursor(t *testing.T) {
 	reader := onePageReader{event: boundedEvent("event.1", 1)}
 	recorder := &MemoryCursorRecorder{}
-	stream, err := NewStream(reader, allowAllStreamAuthority{}, StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 100, Bounds: Bounds{MaximumBytes: 1024, MaximumFields: 4, MaximumFieldBytes: 32}, Cursors: recorder})
+	stream, err := NewStream(reader, allowAllStreamAuthority{}, StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 100, Bounds: Bounds{MaximumBytes: 1024, MaximumFields: 4, MaximumFieldBytes: 32}, Cursors: recorder, CursorSpool: recorder, CursorFailures: recorder})
 	if err != nil {
 		t.Fatal(err)
 	}

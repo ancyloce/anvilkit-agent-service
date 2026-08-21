@@ -12,11 +12,21 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 )
 
+// Event is one durable public event as it is stored and replayed, including
+// the provenance every projection carries (ADR-020 §2). The provenance is on
+// the read path deliberately: a public fact whose source evidence and
+// projection ruleset cannot be named from the stored row is not traceable,
+// and a property nothing can observe is a property nothing can hold.
 type Event struct {
 	ID, RunID string
 	Sequence  uint64
 	Bytes     []byte
-	CreatedAt time.Time
+	// EvidenceID names the authoritative AgentEvidence this event was
+	// projected from; ProjectorDigest is the identity of the ruleset that
+	// produced it.
+	EvidenceID      string
+	ProjectorDigest string
+	CreatedAt       time.Time
 }
 type ReplayRequest struct {
 	Scope               Scope
@@ -29,15 +39,64 @@ type ReplayPage struct {
 	CurrentSequence uint64
 	HasMore         bool
 }
+
+// AgentRunSnapshotSchemaURI pins the canonical AgentRunSnapshot contract the
+// governed recovery response is proved against before it leaves the service.
+const AgentRunSnapshotSchemaURI = "anvilkit://schema/agent-run-snapshot?digest=sha256:a75079baf5ecfa347ef501e113ac96abaedb8bdbcf0c06a1cfe568e065ac55db"
+
+// AgentRunSnapshotKind is the canonical kind every rendered snapshot carries.
+const AgentRunSnapshotKind = "AgentRunSnapshot"
+
 type ArtifactProjection struct {
-	ID, State, Digest  string `json:",omitempty"`
-	SecurityGeneration uint64 `json:",omitempty"`
+	ID                 string `json:"artifactId"`
+	State              string `json:"state"`
+	Digest             string `json:"digest"`
+	SecurityGeneration uint64 `json:"securityGeneration"`
 }
+
+// SnapshotProjection is the run snapshot an expired-cursor client recovers
+// through: the authoritative run resource, its governed artifact projections,
+// and the durable public cursor to resume from.
 type SnapshotProjection struct {
-	Run       json.RawMessage      `json:"run"`
-	Artifacts []ArtifactProjection `json:"artifacts"`
-	Cursor    string               `json:"cursor"`
+	Run       json.RawMessage
+	Artifacts []ArtifactProjection
+	Cursor    string
 }
+
+// MarshalJSON renders the canonical AgentRunSnapshot document. The kind and
+// the artifact array are supplied here rather than carried as fields, so no
+// caller can render a snapshot that misdeclares what it is or omits the
+// artifact collection entirely. An absent cursor is omitted, which the
+// contract reads as a run with no durable public event yet.
+func (s SnapshotProjection) MarshalJSON() ([]byte, error) {
+	artifacts := s.Artifacts
+	if artifacts == nil {
+		artifacts = []ArtifactProjection{}
+	}
+	type wire struct {
+		Kind      string               `json:"kind"`
+		Run       json.RawMessage      `json:"run"`
+		Artifacts []ArtifactProjection `json:"artifacts"`
+		Cursor    string               `json:"cursor,omitempty"`
+	}
+	return json.Marshal(wire{Kind: AgentRunSnapshotKind, Run: s.Run, Artifacts: artifacts, Cursor: s.Cursor})
+}
+
+// UnmarshalJSON reads the canonical document back, so a decoded snapshot and
+// the one that was rendered are the same value.
+func (s *SnapshotProjection) UnmarshalJSON(raw []byte) error {
+	var wire struct {
+		Run       json.RawMessage      `json:"run"`
+		Artifacts []ArtifactProjection `json:"artifacts"`
+		Cursor    string               `json:"cursor"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		return err
+	}
+	s.Run, s.Artifacts, s.Cursor = wire.Run, wire.Artifacts, wire.Cursor
+	return nil
+}
+
 type Reader interface {
 	Replay(context.Context, ReplayRequest) (ReplayPage, error)
 	Snapshot(context.Context, Scope, string) (SnapshotProjection, error)

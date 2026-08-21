@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -48,40 +47,11 @@ func NewRetainedReader(database *pgxpool.Pool, guard *contractguard.Guard, bound
 	return reader, nil
 }
 
-func (r *Reader) Append(ctx context.Context, scope events.Scope, event events.Event) error {
-	if err := scope.Validate(); err != nil {
-		return err
-	}
-	if event.ID == "" || event.RunID == "" || event.Sequence == 0 || len(event.Bytes) == 0 {
-		return fmt.Errorf("append event: identity, run, sequence, and bytes are required")
-	}
-	if r.guard == nil {
-		return fmt.Errorf("append event: contract guard is required")
-	}
-	if err := events.ValidateEnvelope(event.Bytes, r.bounds, event.ID, event.RunID, event.Sequence); err != nil {
-		return fmt.Errorf("append event: %w", err)
-	}
-	if err := r.guard.Require(ctx, contractguard.EventIn, agentEventSchema, event.Bytes); err != nil {
-		return err
-	}
-	result, err := r.database.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, scope.WorkspaceID, scope.ProjectID, event.RunID, event.Sequence, event.ID, event.Bytes, event.CreatedAt)
-	if err != nil {
-		return fmt.Errorf("append event: %w", err)
-	}
-	if result.RowsAffected() == 1 {
-		return nil
-	}
-	var sequence uint64
-	var runID string
-	var existing []byte
-	if err := r.database.QueryRow(ctx, `SELECT run_id,sequence,event_bytes FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND event_id=$3`, scope.WorkspaceID, scope.ProjectID, event.ID).Scan(&runID, &sequence, &existing); err != nil {
-		return fmt.Errorf("read duplicate event: %w", err)
-	}
-	if runID != event.RunID || sequence != event.Sequence || !bytes.Equal(existing, event.Bytes) {
-		return fmt.Errorf("event conflict: repeated event ID has different bytes or identity")
-	}
-	return nil
-}
+// This reader has no append: a durable public event is written only by the
+// projection writer, from an authoritative AgentEvidence record it recorded in
+// the same transaction (ADR-020 §2). There is no method here — for production
+// or for tests — that takes event bytes, a source evidence reference, or a
+// projector identity from a caller.
 
 func (r *Reader) Replay(ctx context.Context, request events.ReplayRequest) (events.ReplayPage, error) {
 	if err := request.Scope.Validate(); err != nil || request.RunID == "" {
@@ -109,7 +79,15 @@ func (r *Reader) Replay(ctx context.Context, request events.ReplayRequest) (even
 			return events.ReplayPage{}, events.CursorExpired()
 		}
 	}
-	rows, err := r.database.Query(ctx, `SELECT event_id,sequence,event_bytes,created_at FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND sequence>$4 ORDER BY sequence LIMIT $5`, request.Scope.WorkspaceID, request.Scope.ProjectID, request.RunID, after, request.Limit+1)
+	// Provenance and the evidence it names are joined in rather than assumed.
+	// The database refuses to record either one incorrectly, but replay is
+	// where a public fact is asserted to a consumer, so it proves the account
+	// again from the stored rows: an event with no provenance, provenance
+	// correlated to another run, or provenance naming evidence that does not
+	// exist in this run is store corruption, never an ordinary public fact.
+	// The joins are LEFT so the corruption is reported as itself rather than
+	// disappearing as a shorter page.
+	rows, err := r.database.Query(ctx, `SELECT e.event_id,e.sequence,e.event_bytes,p.evidence_id,p.projector_digest,p.run_id,d.run_id,e.created_at FROM agent_events.agent_events e LEFT JOIN agent_events.event_provenance p ON p.workspace_id=e.workspace_id AND p.project_id=e.project_id AND p.event_id=e.event_id LEFT JOIN agent_evidence.records d ON d.workspace_id=p.workspace_id AND d.project_id=p.project_id AND d.evidence_id=p.evidence_id WHERE e.workspace_id=$1 AND e.project_id=$2 AND e.run_id=$3 AND e.sequence>$4 ORDER BY e.sequence LIMIT $5`, request.Scope.WorkspaceID, request.Scope.ProjectID, request.RunID, after, request.Limit+1)
 	if err != nil {
 		return events.ReplayPage{}, err
 	}
@@ -118,16 +96,30 @@ func (r *Reader) Replay(ctx context.Context, request events.ReplayRequest) (even
 	for rows.Next() {
 		var event events.Event
 		event.RunID = request.RunID
-		if err := rows.Scan(&event.ID, &event.Sequence, &event.Bytes, &event.CreatedAt); err != nil {
+		var evidenceID, projectorDigest, provenanceRunID, evidenceRunID *string
+		if err := rows.Scan(&event.ID, &event.Sequence, &event.Bytes, &evidenceID, &projectorDigest, &provenanceRunID, &evidenceRunID, &event.CreatedAt); err != nil {
 			return events.ReplayPage{}, err
 		}
+		if evidenceID == nil || projectorDigest == nil || provenanceRunID == nil {
+			return events.ReplayPage{}, fmt.Errorf("authoritative event store corruption: event %q has no recorded provenance", event.ID)
+		}
+		if *provenanceRunID != event.RunID {
+			return events.ReplayPage{}, fmt.Errorf("authoritative event store corruption: event %q is explained by provenance correlated to run %q", event.ID, *provenanceRunID)
+		}
+		if evidenceRunID == nil {
+			return events.ReplayPage{}, fmt.Errorf("authoritative event store corruption: event %q names source evidence %q that does not exist", event.ID, *evidenceID)
+		}
+		if *evidenceRunID != event.RunID {
+			return events.ReplayPage{}, fmt.Errorf("authoritative event store corruption: event %q names source evidence %q recorded under run %q", event.ID, *evidenceID, *evidenceRunID)
+		}
+		event.EvidenceID, event.ProjectorDigest = *evidenceID, *projectorDigest
 		if r.guard == nil {
 			return events.ReplayPage{}, fmt.Errorf("replay event: contract guard is required")
 		}
 		if err := events.ValidateEnvelope(event.Bytes, r.bounds, event.ID, event.RunID, event.Sequence); err != nil {
 			return events.ReplayPage{}, fmt.Errorf("authoritative event store corruption: %w", err)
 		}
-		if err := r.guard.Require(ctx, contractguard.EventIn, agentEventSchema, event.Bytes); err != nil {
+		if err := r.guard.Require(ctx, contractguard.EventIn, events.AgentEventSchemaURI, event.Bytes); err != nil {
 			return events.ReplayPage{}, fmt.Errorf("authoritative event store corruption: %w", err)
 		}
 		page.Events = append(page.Events, event)

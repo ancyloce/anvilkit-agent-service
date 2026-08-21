@@ -72,6 +72,24 @@ type Projection struct {
 	ContractBOM json.RawMessage
 	Payload     map[string]string
 	Artifact    *EventArtifact
+	// evidenceID names the authoritative internal AgentEvidence record this
+	// public event is projected from (ADR-020 §2). It is unexported and set
+	// only by ProjectionEvidence, which derives it while building that record:
+	// no caller, in production or in a test, can hand the projector an
+	// evidence reference of its own choosing, and a projection that has not
+	// been through ProjectionEvidence carries none and cannot be projected.
+	evidenceID string
+}
+
+// Projected is one rendered public event together with the provenance every
+// projection carries (ADR-020 §2): the authoritative Evidence the fact came
+// from and the identity of the repository-owned ruleset that produced it.
+// Both travel with the bytes so a durable writer records them beside the
+// event rather than reconstructing them later.
+type Projected struct {
+	Bytes           []byte
+	EvidenceID      string
+	ProjectorDigest string
 }
 
 // CreatedPayload, StateChangedPayload, InputRequestedPayload,
@@ -112,25 +130,32 @@ func ProblemPayload(code, state string) map[string]string {
 // subject bounded, and the rendered bytes must survive the same envelope
 // validation the read path applies. Everything not named in the Projection is
 // projected away by construction.
-func Project(projection Projection, bounds Bounds) ([]byte, error) {
+func Project(projection Projection, bounds Bounds) (Projected, error) {
 	if !PublicEventType(projection.Type) {
-		return nil, fmt.Errorf("public event projection: %q is not a registered public event type", projection.Type)
+		return Projected{}, fmt.Errorf("public event projection: %q is not a registered public event type", projection.Type)
 	}
 	if projection.Subject.Type != "user" && projection.Subject.Type != "system" {
-		return nil, fmt.Errorf("public event projection: subject type %q is not registered", projection.Subject.Type)
+		return Projected{}, fmt.Errorf("public event projection: subject type %q is not registered", projection.Subject.Type)
 	}
 	if projection.Subject.ID == "" {
-		return nil, fmt.Errorf("public event projection: a subject identity is required")
+		return Projected{}, fmt.Errorf("public event projection: a subject identity is required")
+	}
+	if !opaqueIdentity(projection.evidenceID) {
+		return Projected{}, fmt.Errorf("public event projection: a bounded source evidence reference is required; project through ProjectionEvidence")
 	}
 	if (projection.Payload != nil) == (projection.Artifact != nil) {
-		return nil, fmt.Errorf("public event projection: exactly one of payload or artifact reference is required")
+		return Projected{}, fmt.Errorf("public event projection: exactly one of payload or artifact reference is required")
 	}
 	// The payload's field set must be one the registry declares for this
 	// event type. Without this the projector would accept any bounded map,
 	// and a new field could reach the public wire without touching the
 	// registry the projector's pinned identity is computed from.
 	if projection.Payload != nil && !registeredPayload(projection.Type, projection.Payload) {
-		return nil, fmt.Errorf("public event projection: %q has no registered payload vocabulary matching the projected fields", projection.Type)
+		return Projected{}, fmt.Errorf("public event projection: %q has no registered payload vocabulary matching the projected fields", projection.Type)
+	}
+	digest, err := ProjectorDigest()
+	if err != nil {
+		return Projected{}, err
 	}
 	envelope := map[string]any{
 		"kind":                 "AgentEvent",
@@ -158,12 +183,12 @@ func Project(projection Projection, bounds Bounds) ([]byte, error) {
 	}
 	rendered, err := json.Marshal(envelope)
 	if err != nil {
-		return nil, fmt.Errorf("render public event: %w", err)
+		return Projected{}, fmt.Errorf("render public event: %w", err)
 	}
 	if err := ValidateEnvelope(rendered, bounds, projection.EventID, projection.RunID, projection.Sequence); err != nil {
-		return nil, fmt.Errorf("validate projected public event: %w", err)
+		return Projected{}, fmt.Errorf("validate projected public event: %w", err)
 	}
-	return rendered, nil
+	return Projected{Bytes: rendered, EvidenceID: projection.evidenceID, ProjectorDigest: digest}, nil
 }
 
 // PublicEventTypes lists the closed public registry in registry order. It is

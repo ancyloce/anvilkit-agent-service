@@ -100,7 +100,7 @@ func TestDeltaFramesNeverAdvanceTheDurableCursor(t *testing.T) {
 	broker := newTestDeltaBroker(t)
 	recorder := &MemoryCursorRecorder{}
 	reader := &oneShotReader{event: boundedEvent("event.1", 1)}
-	stream, err := NewStream(reader, allowAllStreamAuthority{}, StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 100, Bounds: Bounds{MaximumBytes: 1024, MaximumFields: 4, MaximumFieldBytes: 32}, Cursors: recorder, Deltas: broker})
+	stream, err := NewStream(reader, allowAllStreamAuthority{}, StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 100, Bounds: Bounds{MaximumBytes: 1024, MaximumFields: 4, MaximumFieldBytes: 32}, Cursors: recorder, CursorSpool: recorder, CursorFailures: recorder, Deltas: broker})
 	if err != nil {
 		t.Fatal(err)
 	}

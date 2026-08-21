@@ -2,10 +2,15 @@ package events
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
+	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
+	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
 )
 
 func validEvidence(id string) Evidence {
@@ -53,15 +58,58 @@ func TestEvidenceSequencesAreIndependentAndIdempotent(t *testing.T) {
 	}
 }
 
-// readAuthority is the complete accessor authority the controlled store
-// requires, so a test that needs a permitted read states one explicitly.
-func readAuthority() EvidenceAuthority {
-	return EvidenceAuthority{
-		Scope:     Scope{WorkspaceID: "workspace.1", ProjectID: "project.1"},
-		Accessor:  "operator",
-		Purpose:   "incident-debug",
-		Clearance: "restricted",
+// verifiedRequest stands in for the service's request-authority verification.
+// It returns only the tenant scope a caller proved; it cannot express a
+// clearance, which is the point — clearance comes from current authority.
+type verifiedRequest struct {
+	scope runs.Scope
+	err   error
+}
+
+func (v verifiedRequest) Authorize(context.Context, auth.Claims, auth.Operation) (runs.Scope, error) {
+	return v.scope, v.err
+}
+
+// grantingAuthority is a current-authority source that admits the actor under
+// a role and grants the named data classes, so a test states the authority in
+// force rather than the answer it wants.
+func grantingAuthority(role string, classes ...string) *authority.Static {
+	return authority.NewStatic(authority.Current{
+		Definition:       json.RawMessage(`{"definitionId":"definition.1"}`),
+		ContractBOM:      json.RawMessage(`{"bomDigest":"sha256:1"}`),
+		Policy:           json.RawMessage(`{"policyId":"policy.1"}`),
+		Budget:           json.RawMessage(`{"kind":"AgentBudget"}`),
+		WorkspaceActive:  true,
+		ActorActive:      true,
+		PermissionActive: true,
+		PolicyActive:     true,
+		ActorRole:        role,
+		Grants:           authority.Grants{DataClasses: classes},
+	})
+}
+
+// mintAuthority resolves an evidence read authority the way production does.
+// Every test that reads evidence goes through it, so no test can hold an
+// authority the composition could not have issued.
+func mintAuthority(t *testing.T, scope runs.Scope, purpose string, source *authority.Static) EvidenceAuthority {
+	t.Helper()
+	value, err := MintEvidenceAuthority(context.Background(), verifiedRequest{scope: scope}, source, auth.Claims{}, purpose)
+	if err != nil {
+		t.Fatalf("mint evidence authority: %v", err)
 	}
+	return value
+}
+
+// operatorScope is the tenant and actor the controlled evidence tests read as.
+func operatorScope() runs.Scope {
+	return runs.Scope{WorkspaceID: "workspace.1", ProjectID: "project.1", ActorID: "operator"}
+}
+
+// readAuthority is the fully cleared accessor the controlled store admits, so
+// a test that needs a permitted read states one explicitly.
+func readAuthority(t *testing.T) EvidenceAuthority {
+	t.Helper()
+	return mintAuthority(t, operatorScope(), "incident-debug", grantingAuthority("agent-operator", "public", "internal", "confidential", "restricted"))
 }
 
 // Evidence reads are access-audited: an anonymous or purposeless read is not
@@ -71,17 +119,15 @@ func TestEvidenceReadsRequireAccessorAndPurpose(t *testing.T) {
 	if _, err := store.AppendEvidence(context.Background(), validEvidence("evidence.1")); err != nil {
 		t.Fatal(err)
 	}
-	anonymous := readAuthority()
-	anonymous.Accessor = ""
-	if _, err := store.ReadEvidence(context.Background(), anonymous, "run.1", 10); err == nil {
+	anonymous := operatorScope()
+	anonymous.ActorID = ""
+	if _, err := MintEvidenceAuthority(context.Background(), verifiedRequest{scope: anonymous}, grantingAuthority("agent-operator", "restricted"), auth.Claims{}, "incident-debug"); err == nil {
 		t.Fatal("an anonymous evidence read was allowed")
 	}
-	purposeless := readAuthority()
-	purposeless.Purpose = ""
-	if _, err := store.ReadEvidence(context.Background(), purposeless, "run.1", 10); err == nil {
+	if _, err := MintEvidenceAuthority(context.Background(), verifiedRequest{scope: operatorScope()}, grantingAuthority("agent-operator", "restricted"), auth.Claims{}, ""); err == nil {
 		t.Fatal("a purposeless evidence read was allowed")
 	}
-	records, err := store.ReadEvidence(context.Background(), readAuthority(), "run.1", 10)
+	records, err := store.ReadEvidence(context.Background(), readAuthority(t), "run.1", 10)
 	if err != nil || len(records) != 1 {
 		t.Fatalf("audited read records=%d err=%v", len(records), err)
 	}
@@ -103,25 +149,24 @@ func TestEvidenceReadsAreTenantScopedAndClearanceBound(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	neighbour := readAuthority()
-	neighbour.Scope.WorkspaceID = "workspace.2"
+	neighbourScope := operatorScope()
+	neighbourScope.WorkspaceID = "workspace.2"
+	neighbour := mintAuthority(t, neighbourScope, "incident-debug", grantingAuthority("agent-operator", "restricted"))
 	if records, err := store.ReadEvidence(context.Background(), neighbour, "run.1", 10); err != nil || len(records) != 0 {
 		t.Fatalf("a neighbouring workspace read records=%d err=%v, want none", len(records), err)
 	}
-	sibling := readAuthority()
-	sibling.Scope.ProjectID = "project.2"
+	siblingScope := operatorScope()
+	siblingScope.ProjectID = "project.2"
+	sibling := mintAuthority(t, siblingScope, "incident-debug", grantingAuthority("agent-operator", "restricted"))
 	if records, err := store.ReadEvidence(context.Background(), sibling, "run.1", 10); err != nil || len(records) != 0 {
 		t.Fatalf("a sibling project read records=%d err=%v, want none", len(records), err)
 	}
-	limited := readAuthority()
-	limited.Clearance = "internal"
+	limited := mintAuthority(t, operatorScope(), "incident-debug", grantingAuthority("agent-operator", "public", "internal"))
 	records, err := store.ReadEvidence(context.Background(), limited, "run.1", 10)
 	if err != nil || len(records) != 1 || records[0].EvidenceID != "evidence.1" {
 		t.Fatalf("clearance-bound read records=%d err=%v, want only the internal fact", len(records), err)
 	}
-	unregistered := readAuthority()
-	unregistered.Clearance = "unbounded"
-	if _, err := store.ReadEvidence(context.Background(), unregistered, "run.1", 10); err == nil {
+	if _, err := MintEvidenceAuthority(context.Background(), verifiedRequest{scope: operatorScope()}, grantingAuthority("agent-operator", "unbounded"), auth.Claims{}, "incident-debug"); err == nil {
 		t.Fatal("an unregistered clearance was accepted")
 	}
 }
@@ -145,7 +190,7 @@ func TestEvidencePastItsRetentionWindowIsNoLongerDisclosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = recorded.Add(operationalWindow).Add(time.Second)
-	records, err := store.ReadEvidence(context.Background(), readAuthority(), "run.1", 10)
+	records, err := store.ReadEvidence(context.Background(), readAuthority(t), "run.1", 10)
 	if err != nil || len(records) != 1 || records[0].EvidenceID != "evidence.audit" {
 		t.Fatalf("post-window read records=%d err=%v, want only the audit-retained fact", len(records), err)
 	}
@@ -154,7 +199,7 @@ func TestEvidencePastItsRetentionWindowIsNoLongerDisclosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	now = recorded.Add(auditWindow).Add(time.Second)
-	if records, err := store.ReadEvidence(context.Background(), readAuthority(), "run.1", 10); err != nil || len(records) != 0 {
+	if records, err := store.ReadEvidence(context.Background(), readAuthority(t), "run.1", 10); err != nil || len(records) != 0 {
 		t.Fatalf("expired read records=%d err=%v, want none", len(records), err)
 	}
 }
@@ -257,11 +302,11 @@ func TestEvidencePagesAreBoundedIdentically(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	full, err := store.ReadEvidence(context.Background(), readAuthority(), "run.1", 0)
+	full, err := store.ReadEvidence(context.Background(), readAuthority(t), "run.1", 0)
 	if err != nil || len(full) != 5 {
 		t.Fatalf("unbounded request records=%d err=%v", len(full), err)
 	}
-	page, err := store.ReadEvidence(context.Background(), readAuthority(), "run.1", 2)
+	page, err := store.ReadEvidence(context.Background(), readAuthority(t), "run.1", 2)
 	if err != nil || len(page) != 2 {
 		t.Fatalf("bounded request records=%d err=%v", len(page), err)
 	}

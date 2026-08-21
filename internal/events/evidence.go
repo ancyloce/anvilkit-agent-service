@@ -9,7 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
+	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
+	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
+	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
 )
 
 // AgentEvidenceSchemaURI pins the canonical AgentEvidence contract every
@@ -67,6 +71,10 @@ type RecordedEvidence struct {
 	// stored, so it always reflects the governed window in force.
 	ExpiresAt time.Time
 	Digest    string
+	// Identity is the stable digest over the producer-owned fact alone. It is
+	// what makes an append idempotent across replays that would otherwise be
+	// stored under a different sequence and recording time.
+	Identity string
 }
 
 // EvidenceRecorder appends one evidence fact, allocating the run's next
@@ -98,6 +106,19 @@ func BoundedEvidencePage(limit int) int {
 	return limit
 }
 
+// EvidenceLookup answers what is already recorded under one evidence
+// identity. It exists so a producer replaying a durable operation can
+// converge on the fact that was recorded instead of stamping a second account
+// of it: a fact happened once, so its occurrence time was decided once, and
+// the store is where that decision lives.
+//
+// It is not an evidence read: it discloses no payload to a caller that did
+// not produce the fact, only the identity, sequence, and times the producer
+// needs to converge.
+type EvidenceLookup interface {
+	RecordedEvidence(ctx context.Context, scope Scope, evidenceID string) (RecordedEvidence, bool, error)
+}
+
 // EvidenceReader reads a run's evidence in sequence order under one proven
 // accessor authority. There is no scope parameter by design: the tenant an
 // evidence read reaches is the tenant the accessor is authorized for, so a
@@ -107,15 +128,126 @@ type EvidenceReader interface {
 }
 
 // EvidenceAuthority is the proven authority behind one evidence read: the
-// accessor's own tenant scope, their identity, the purpose the read is
-// audited under, and the highest data classification they may see. Every
-// field is required — an anonymous, purposeless, unscoped, or unclassified
-// read is not a mode.
+// tenant scope the accessor is authorized for, their identity, the purpose
+// the read is audited under, and the highest data classification current
+// authority clears them for. Every field is unexported and every value comes
+// from MintEvidenceAuthority, so a caller cannot manufacture a clearance it
+// was never granted and the zero value authorizes nothing.
 type EvidenceAuthority struct {
-	Scope     Scope
-	Accessor  string
-	Purpose   string
-	Clearance string
+	scope     Scope
+	accessor  string
+	purpose   string
+	clearance string
+	// resolve re-reads the same authority from its live sources. A store
+	// calls it immediately before disclosing anything, so a subject, scope,
+	// role, clearance, or activation that changed after minting is observed
+	// on this read rather than the next one.
+	resolve func(context.Context) (EvidenceAuthority, error)
+}
+
+// Scope, Accessor, Purpose, and Clearance report the minted authority. They
+// are read-only projections: nothing outside this package can set them.
+func (a EvidenceAuthority) Scope() Scope      { return a.scope }
+func (a EvidenceAuthority) Accessor() string  { return a.accessor }
+func (a EvidenceAuthority) Purpose() string   { return a.purpose }
+func (a EvidenceAuthority) Clearance() string { return a.clearance }
+
+// EvidenceAccessAuthorizer verifies one caller's request authority for the
+// evidence-read operation and returns the tenant scope it is bound to. The
+// service's auth validator satisfies it; it is an interface here so this
+// package depends on the verification rather than on a construction path.
+type EvidenceAccessAuthorizer interface {
+	Authorize(context.Context, auth.Claims, auth.Operation) (runs.Scope, error)
+}
+
+// MintEvidenceAuthority resolves the authority behind one evidence read.
+//
+// Nothing about the read is asserted by the caller except the purpose it is
+// audited under: the tenant scope and the accessor identity come from the
+// verified request authority, and the clearance comes from the data
+// classifications the scope's current authority grants that actor. That is
+// what makes a forged clearance impossible rather than merely rejected — an
+// unminted authority carries no resolver and discloses nothing.
+func MintEvidenceAuthority(ctx context.Context, authorizer EvidenceAccessAuthorizer, source authority.Source, claims auth.Claims, purpose string) (EvidenceAuthority, error) {
+	return resolveEvidenceAuthority(ctx, authorizer, source, claims, purpose)
+}
+
+func resolveEvidenceAuthority(ctx context.Context, authorizer EvidenceAccessAuthorizer, source authority.Source, claims auth.Claims, purpose string) (EvidenceAuthority, error) {
+	if authorizer == nil || source == nil {
+		return EvidenceAuthority{}, fmt.Errorf("evidence access requires a request authorizer and the current-authority source")
+	}
+	if purpose == "" || len(purpose) > 256 {
+		return EvidenceAuthority{}, fmt.Errorf("evidence reads require a bounded declared purpose")
+	}
+	scope, err := authorizer.Authorize(ctx, claims, auth.OpReadEvidence)
+	if err != nil {
+		return EvidenceAuthority{}, err
+	}
+	current, err := source.Current(ctx, authority.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID, ActorID: scope.ActorID})
+	if err != nil {
+		return EvidenceAuthority{}, err
+	}
+	if !current.Active() {
+		return EvidenceAuthority{}, evidenceAccessDenied("current authority no longer permits evidence access")
+	}
+	if current.ActorRole == "" {
+		return EvidenceAuthority{}, evidenceAccessDenied("the scope admits no role for this actor")
+	}
+	clearance := grantedClearance(current.Grants.DataClasses)
+	if clearance == "" {
+		return EvidenceAuthority{}, evidenceAccessDenied("current authority grants no evidence data classification")
+	}
+	value := EvidenceAuthority{
+		scope:     Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID},
+		accessor:  scope.ActorID,
+		purpose:   purpose,
+		clearance: clearance,
+		resolve: func(ctx context.Context) (EvidenceAuthority, error) {
+			return resolveEvidenceAuthority(ctx, authorizer, source, claims, purpose)
+		},
+	}
+	if err := value.Validate(); err != nil {
+		return EvidenceAuthority{}, err
+	}
+	return value, nil
+}
+
+// Revalidated re-reads the authority from its live sources and returns the
+// authority in force now. A store calls it before disclosing any evidence
+// bytes, so a revoked subject, a deactivated scope, a withdrawn role, or a
+// reduced clearance takes effect on this read. An authority whose scope or
+// accessor identity moved underneath it is refused outright rather than
+// silently repointed at another tenant.
+func (a EvidenceAuthority) Revalidated(ctx context.Context) (EvidenceAuthority, error) {
+	if a.resolve == nil {
+		return EvidenceAuthority{}, evidenceAccessDenied("evidence reads require a minted access authority")
+	}
+	current, err := a.resolve(ctx)
+	if err != nil {
+		return EvidenceAuthority{}, err
+	}
+	if current.scope != a.scope || current.accessor != a.accessor {
+		return EvidenceAuthority{}, evidenceAccessDenied("the accessor's authority no longer covers the scope this read was minted for")
+	}
+	return current, nil
+}
+
+// grantedClearance is the highest registered data classification the scope's
+// current authority grants the actor. An unregistered value grants nothing.
+func grantedClearance(granted []string) string {
+	clearance, rank := "", 0
+	for _, class := range granted {
+		if candidate := classificationRank(class); candidate > rank {
+			clearance, rank = class, candidate
+		}
+	}
+	return clearance
+}
+
+func evidenceAccessDenied(detail string) problem.Details {
+	value := problem.New(problem.CodeAuthorizationDenied, "")
+	value.Detail = detail
+	return value
 }
 
 // classificationRank orders the registered data classifications, lowest
@@ -138,17 +270,17 @@ func classificationRank(classification string) int {
 }
 
 func (a EvidenceAuthority) Validate() error {
-	if err := a.Scope.Validate(); err != nil {
+	if err := a.scope.Validate(); err != nil {
 		return fmt.Errorf("evidence reads require the accessor's authorized tenant scope: %w", err)
 	}
-	if a.Accessor == "" || len(a.Accessor) > 128 {
+	if a.accessor == "" || len(a.accessor) > 128 {
 		return fmt.Errorf("evidence reads require a bounded accessor identity")
 	}
-	if a.Purpose == "" || len(a.Purpose) > 256 {
+	if a.purpose == "" || len(a.purpose) > 256 {
 		return fmt.Errorf("evidence reads require a bounded declared purpose")
 	}
-	if classificationRank(a.Clearance) == 0 {
-		return fmt.Errorf("evidence read clearance %q is not a registered data classification", a.Clearance)
+	if classificationRank(a.clearance) == 0 {
+		return fmt.Errorf("evidence read clearance %q is not a registered data classification", a.clearance)
 	}
 	return nil
 }
@@ -157,7 +289,7 @@ func (a EvidenceAuthority) Validate() error {
 // classification. An unregistered classification never passes.
 func (a EvidenceAuthority) Permits(classification string) bool {
 	recorded := classificationRank(classification)
-	return recorded != 0 && classificationRank(a.Clearance) >= recorded
+	return recorded != 0 && classificationRank(a.clearance) >= recorded
 }
 
 // PermittedClassifications lists every data classification this authority may
@@ -318,10 +450,11 @@ func ValidateEvidence(value Evidence) error {
 	return nil
 }
 
-// RenderEvidence renders the canonical AgentEvidence document for one stored
-// row. The sequence and recording time come from the store, never from the
-// producer.
-func RenderEvidence(value Evidence, sequence uint64, recordedAt time.Time) ([]byte, error) {
+// evidenceDocument renders the producer-owned part of one evidence fact:
+// everything the producer decided and nothing the store allocates. Both the
+// canonical document and the stable identity digest are built from it, so the
+// identity always covers exactly the content that is recorded.
+func evidenceDocument(value Evidence) map[string]any {
 	document := map[string]any{
 		"kind":               "AgentEvidence",
 		"evidenceId":         value.EvidenceID,
@@ -329,8 +462,6 @@ func RenderEvidence(value Evidence, sequence uint64, recordedAt time.Time) ([]by
 		"workspaceId":        value.WorkspaceID,
 		"projectId":          value.ProjectID,
 		"evidenceType":       value.Type,
-		"evidenceSequence":   sequence,
-		"recordedAt":         recordedAt.UTC().Format(evidenceTimeLayout),
 		"occurredAt":         value.OccurredAt.UTC().Format(evidenceTimeLayout),
 		"producer":           producerDocument(value.Producer),
 		"dataClassification": value.Classification,
@@ -349,11 +480,54 @@ func RenderEvidence(value Evidence, sequence uint64, recordedAt time.Time) ([]by
 	if len(value.Payload) != 0 {
 		document["payload"] = value.Payload
 	}
+	return document
+}
+
+// RenderEvidence renders the canonical AgentEvidence document for one stored
+// row. The sequence and recording time come from the store, never from the
+// producer.
+func RenderEvidence(value Evidence, sequence uint64, recordedAt time.Time) ([]byte, error) {
+	document := evidenceDocument(value)
+	document["evidenceSequence"] = sequence
+	document["recordedAt"] = recordedAt.UTC().Format(evidenceTimeLayout)
 	rendered, err := json.Marshal(document)
 	if err != nil {
 		return nil, fmt.Errorf("render evidence: %w", err)
 	}
 	return rendered, nil
+}
+
+// EvidenceIdentity is the stable digest that binds one evidence append to the
+// tenant, run, evidence identity, type, classification, retention, and
+// canonical content its producer decided — and to nothing the store allocates.
+//
+// That is what makes idempotency decidable: a durable-operation replay of the
+// same fact yields the same identity even though it would be stored under a
+// different sequence and recording time, while the same EvidenceID carrying
+// different content or naming a different run yields a different one and is
+// refused as a conflict instead of silently answering with someone else's
+// sequence.
+func EvidenceIdentity(value Evidence) (string, error) {
+	rendered, err := json.Marshal(evidenceDocument(value))
+	if err != nil {
+		return "", fmt.Errorf("render evidence identity: %w", err)
+	}
+	digest, err := canonical.Digest(rendered)
+	if err != nil {
+		return "", fmt.Errorf("digest evidence identity: %w", err)
+	}
+	return digest, nil
+}
+
+// EvidenceConflict is the typed conflict every store raises when an
+// EvidenceID is reused for a fact that is not byte-identical to the one
+// already recorded under it. Recorded evidence is immutable, so the only
+// correct answer is to refuse the second fact rather than to return the first
+// one's sequence for it.
+func EvidenceConflict(evidenceID string) problem.Details {
+	value := problem.New(problem.CodeIdempotencyConflict, "")
+	value.Detail = "evidence identity " + evidenceID + " is already recorded with different content"
+	return value
 }
 
 // EvidenceDigest is the integrity attestation over one rendered evidence
@@ -471,7 +645,7 @@ func ProhibitedContentCategories() []string {
 type MemoryEvidence struct {
 	lock      sync.Mutex
 	records   map[string][]RecordedEvidence
-	byID      map[string]uint64
+	byID      map[string]RecordedEvidence
 	validator ContractValidator
 	now       func() time.Time
 	Reads     []string
@@ -481,7 +655,7 @@ type MemoryEvidence struct {
 // skips contract proof for callers that only exercise sequencing; production
 // composition always uses the durable store.
 func NewMemoryEvidence(options ...func(*MemoryEvidence)) *MemoryEvidence {
-	store := &MemoryEvidence{records: map[string][]RecordedEvidence{}, byID: map[string]uint64{}, now: func() time.Time { return time.Now().UTC() }}
+	store := &MemoryEvidence{records: map[string][]RecordedEvidence{}, byID: map[string]RecordedEvidence{}, now: func() time.Time { return time.Now().UTC() }}
 	for _, option := range options {
 		option(store)
 	}
@@ -506,14 +680,24 @@ func (m *MemoryEvidence) AppendEvidence(ctx context.Context, value Evidence) (ui
 	if err := ValidateEvidence(value); err != nil {
 		return 0, err
 	}
+	identity, err := EvidenceIdentity(value)
+	if err != nil {
+		return 0, err
+	}
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	identity := value.WorkspaceID + "\x00" + value.ProjectID + "\x00" + value.EvidenceID
-	if sequence, recorded := m.byID[identity]; recorded {
-		return sequence, nil
+	key := value.WorkspaceID + "\x00" + value.ProjectID + "\x00" + value.EvidenceID
+	// Idempotency is decided on the stable identity, never on the identifier
+	// alone: an identical replay answers with the original sequence, and the
+	// same identifier carrying a different fact is a conflict.
+	if recorded, present := m.byID[key]; present {
+		if recorded.Identity != identity {
+			return 0, EvidenceConflict(value.EvidenceID)
+		}
+		return recorded.Sequence, nil
 	}
-	key := evidenceRunKey(value.WorkspaceID, value.ProjectID, value.RunID)
-	sequence := uint64(len(m.records[key]) + 1)
+	runKey := evidenceRunKey(value.WorkspaceID, value.ProjectID, value.RunID)
+	sequence := uint64(len(m.records[runKey]) + 1)
 	// Recorded at exactly the precision the canonical document attests, so
 	// the stored time and the attested time can never disagree.
 	recordedAt := m.now().UTC().Truncate(time.Millisecond)
@@ -534,13 +718,30 @@ func (m *MemoryEvidence) AppendEvidence(ctx context.Context, value Evidence) (ui
 	if err != nil {
 		return 0, err
 	}
-	m.records[key] = append(m.records[key], RecordedEvidence{Evidence: value, Sequence: sequence, RecordedAt: recordedAt, ExpiresAt: deadline, Digest: digest})
-	m.byID[identity] = sequence
+	record := RecordedEvidence{Evidence: value, Sequence: sequence, RecordedAt: recordedAt, ExpiresAt: deadline, Digest: digest, Identity: identity}
+	m.records[runKey] = append(m.records[runKey], record)
+	m.byID[key] = record
 	return sequence, nil
 }
 
-func (m *MemoryEvidence) ReadEvidence(_ context.Context, authority EvidenceAuthority, runID string, limit int) ([]RecordedEvidence, error) {
-	if err := authority.Validate(); err != nil {
+func (m *MemoryEvidence) RecordedEvidence(_ context.Context, scope Scope, evidenceID string) (RecordedEvidence, bool, error) {
+	if err := scope.Validate(); err != nil {
+		return RecordedEvidence{}, false, err
+	}
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	record, present := m.byID[scope.WorkspaceID+"\x00"+scope.ProjectID+"\x00"+evidenceID]
+	return record, present, nil
+}
+
+func (m *MemoryEvidence) ReadEvidence(ctx context.Context, accessor EvidenceAuthority, runID string, limit int) ([]RecordedEvidence, error) {
+	// The authority in force now is what decides the read: a clearance minted
+	// earlier is evidence of a past decision, never permission for this one.
+	current, err := accessor.Revalidated(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := current.Validate(); err != nil {
 		return nil, err
 	}
 	if err := ValidateEvidenceRun(runID); err != nil {
@@ -549,11 +750,13 @@ func (m *MemoryEvidence) ReadEvidence(_ context.Context, authority EvidenceAutho
 	limit = BoundedEvidencePage(limit)
 	m.lock.Lock()
 	defer m.lock.Unlock()
-	m.Reads = append(m.Reads, authority.Accessor+":"+authority.Purpose)
+	// The audit lands before any bytes are returned, exactly as it does in the
+	// durable store: an evidence read without its audit record is not a mode.
+	m.Reads = append(m.Reads, current.Accessor()+":"+current.Purpose())
 	now := m.now().UTC()
 	var disclosed []RecordedEvidence
-	for _, record := range m.records[evidenceRunKey(authority.Scope.WorkspaceID, authority.Scope.ProjectID, runID)] {
-		if !authority.Permits(record.Classification) || !now.Before(record.ExpiresAt) {
+	for _, record := range m.records[evidenceRunKey(current.Scope().WorkspaceID, current.Scope().ProjectID, runID)] {
+		if !current.Permits(record.Classification) || !now.Before(record.ExpiresAt) {
 			continue
 		}
 		if len(disclosed) == limit {
