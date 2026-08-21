@@ -27,6 +27,7 @@ import (
 	applyauthpg "github.com/ancyloce/anvilkit-agent-service/internal/applyauth/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/artifacts"
 	artifactspg "github.com/ancyloce/anvilkit-agent-service/internal/artifacts/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
 	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	authoritypg "github.com/ancyloce/anvilkit-agent-service/internal/authority/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/cancellation"
@@ -40,6 +41,7 @@ import (
 	commitpg "github.com/ancyloce/anvilkit-agent-service/internal/domaincommit/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	eventpg "github.com/ancyloce/anvilkit-agent-service/internal/events/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/events/spool"
 	"github.com/ancyloce/anvilkit-agent-service/internal/execution"
 	executionpg "github.com/ancyloce/anvilkit-agent-service/internal/execution/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/idempotency"
@@ -131,7 +133,7 @@ func TestPostgresFoundations(t *testing.T) {
 		t.Fatal("bounded pool maximum was not applied")
 	}
 	assertScopedRepository(t, ctx, controlPool)
-	assertAtomicEventsAndInbox(t, ctx, authorityPool)
+	assertProjectedEventsAndInbox(t, ctx, authorityPool)
 	assertIdempotency(t, ctx, authorityPool)
 	assertDurableRunCore(t, ctx, authorityPool)
 	assertDurableRunStoreAtomicity(t, ctx, authorityPool)
@@ -141,6 +143,8 @@ func TestPostgresFoundations(t *testing.T) {
 	assertCommitBoundaries(t, ctx, pool)
 	assertEvidenceStore(t, ctx, pool)
 	assertStreamCursorsAndSequenceSeparation(t, ctx, pool)
+	assertStreamCursorSpoolRecovery(t, ctx, pool)
+	assertPublicEventProvenance(t, ctx, pool)
 	assertArtifactLifecycle(t, ctx, pool)
 	assertSchedulerBoundaries(t, ctx, pool)
 	assertWorkflowLeaseCleanup(t, ctx, pool)
@@ -527,8 +531,27 @@ func assertEvidenceStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 	if _, err := pool.Exec(ctx, `DELETE FROM agent_evidence.records WHERE workspace_id='workspace-evidence'`); err == nil {
 		t.Fatal("recorded evidence was deletable")
 	}
-	authority := events.EvidenceAuthority{Scope: events.Scope{WorkspaceID: "workspace-evidence", ProjectID: "project-evidence"}, Accessor: "operator-1", Purpose: "integration-verification", Clearance: "restricted"}
-	records, err := store.ReadEvidence(ctx, authority, "run-evidence", 10)
+	// Reusing one identifier for a different fact is refused rather than
+	// answered with the first fact's sequence: recorded evidence is
+	// immutable, so the second fact has nowhere correct to go.
+	reused := fact
+	reused.Payload = map[string]string{"authorizationId": "authorization-different"}
+	if _, err := store.AppendEvidence(ctx, reused); err == nil {
+		t.Fatal("a reused evidence identity carrying different content was accepted")
+	} else {
+		assertProblemCode(t, err, problem.CodeIdempotencyConflict)
+	}
+	movedRun := fact
+	movedRun.RunID = "run-evidence-other"
+	if _, err := store.AppendEvidence(ctx, movedRun); err == nil {
+		t.Fatal("a reused evidence identity naming a different run was accepted")
+	} else {
+		assertProblemCode(t, err, problem.CodeIdempotencyConflict)
+	}
+
+	clearedSource := grantedEvidenceAuthority(authority.RoleOperator, "public", "internal", "confidential", "restricted")
+	readAuthority := mintedEvidenceAuthority(t, "workspace-evidence", "project-evidence", "operator-1", "integration-verification", clearedSource)
+	records, err := store.ReadEvidence(ctx, readAuthority, "run-evidence", 10)
 	if err != nil || len(records) != 2 || records[0].Sequence != 1 || records[1].Sequence != 2 {
 		t.Fatalf("evidence read records=%d err=%v", len(records), err)
 	}
@@ -546,8 +569,7 @@ func assertEvidenceStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 	// An accessor authorized for a different tenant reads nothing, and the
 	// denial is still audited under its own scope: the tenant an evidence
 	// read reaches is the accessor's own, never a caller-supplied filter.
-	neighbour := authority
-	neighbour.Scope.WorkspaceID = "workspace-evidence-neighbour"
+	neighbour := mintedEvidenceAuthority(t, "workspace-evidence-neighbour", "project-evidence", "operator-1", "integration-verification", grantedEvidenceAuthority(authority.RoleOperator, "restricted"))
 	if disclosed, err := store.ReadEvidence(ctx, neighbour, "run-evidence", 10); err != nil || len(disclosed) != 0 {
 		t.Fatalf("cross-tenant evidence read records=%d err=%v, want none", len(disclosed), err)
 	}
@@ -559,8 +581,7 @@ func assertEvidenceStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 	if _, err := store.AppendEvidence(ctx, confidential); err != nil {
 		t.Fatal(err)
 	}
-	limited := authority
-	limited.Clearance = "internal"
+	limited := mintedEvidenceAuthority(t, "workspace-evidence", "project-evidence", "operator-1", "integration-verification", grantedEvidenceAuthority(authority.RoleOperator, "public", "internal"))
 	disclosed, err := store.ReadEvidence(ctx, limited, "run-evidence", 10)
 	if err != nil || len(disclosed) != 2 {
 		t.Fatalf("clearance-bound read records=%d err=%v, want the two internal facts", len(disclosed), err)
@@ -570,16 +591,48 @@ func assertEvidenceStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 			t.Fatalf("a confidential fact was disclosed to an internal clearance: %+v", record)
 		}
 	}
-	// An unregistered clearance or an anonymous read fails closed.
-	for name, denied := range map[string]events.EvidenceAuthority{
-		"unregistered clearance": func() events.EvidenceAuthority { a := authority; a.Clearance = "unbounded"; return a }(),
-		"anonymous accessor":     func() events.EvidenceAuthority { a := authority; a.Accessor = ""; return a }(),
-		"purposeless read":       func() events.EvidenceAuthority { a := authority; a.Purpose = ""; return a }(),
-		"unscoped read":          func() events.EvidenceAuthority { a := authority; a.Scope.ProjectID = ""; return a }(),
+	// Authority that cannot be minted cannot read: an unregistered clearance,
+	// an anonymous accessor, a purposeless read, an unscoped read, and an
+	// actor the scope admits under no role all fail before any query runs.
+	for name, attempt := range map[string]func() (events.EvidenceAuthority, error){
+		"unregistered clearance": func() (events.EvidenceAuthority, error) {
+			return mintEvidenceAuthority("workspace-evidence", "project-evidence", "operator-1", "integration-verification", grantedEvidenceAuthority(authority.RoleOperator, "unbounded"))
+		},
+		"anonymous accessor": func() (events.EvidenceAuthority, error) {
+			return mintEvidenceAuthority("workspace-evidence", "project-evidence", "", "integration-verification", clearedSource)
+		},
+		"purposeless read": func() (events.EvidenceAuthority, error) {
+			return mintEvidenceAuthority("workspace-evidence", "project-evidence", "operator-1", "", clearedSource)
+		},
+		"unscoped read": func() (events.EvidenceAuthority, error) {
+			return mintEvidenceAuthority("workspace-evidence", "", "operator-1", "integration-verification", clearedSource)
+		},
+		"unadmitted actor": func() (events.EvidenceAuthority, error) {
+			return mintEvidenceAuthority("workspace-evidence", "project-evidence", "operator-1", "integration-verification", grantedEvidenceAuthority("", "restricted"))
+		},
 	} {
-		if _, err := store.ReadEvidence(ctx, denied, "run-evidence", 10); err == nil {
-			t.Fatalf("%s was allowed to read evidence", name)
+		if _, err := attempt(); err == nil {
+			t.Fatalf("%s was allowed to mint an evidence read authority", name)
 		}
+	}
+
+	// A clearance nobody granted cannot be presented: the only authority a
+	// caller can build without minting is the zero value, and it discloses
+	// nothing rather than defaulting to anything.
+	if _, err := store.ReadEvidence(ctx, events.EvidenceAuthority{}, "run-evidence", 10); err == nil {
+		t.Fatal("an unminted evidence authority was allowed to read")
+	}
+
+	// Authority is re-read at disclosure, not at minting: an accessor whose
+	// authority is revoked after minting reads nothing on the next attempt.
+	revocable := grantedEvidenceAuthority(authority.RoleOperator, "restricted")
+	revoked := mintedEvidenceAuthority(t, "workspace-evidence", "project-evidence", "operator-1", "integration-verification", revocable)
+	if _, err := store.ReadEvidence(ctx, revoked, "run-evidence", 10); err != nil {
+		t.Fatalf("an active authority failed to read: %v", err)
+	}
+	revocable.Revoke()
+	if _, err := store.ReadEvidence(ctx, revoked, "run-evidence", 10); err == nil {
+		t.Fatal("a revoked authority was still allowed to read evidence")
 	}
 
 	// Payload characters that the renderer escapes but RFC 8785 does not are
@@ -591,7 +644,7 @@ func assertEvidenceStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 	if _, err := store.AppendEvidence(ctx, escaped); err != nil {
 		t.Fatalf("append evidence carrying escaped characters: %v", err)
 	}
-	roundTripped, err := store.ReadEvidence(ctx, authority, "run-evidence", 10)
+	roundTripped, err := store.ReadEvidence(ctx, readAuthority, "run-evidence", 10)
 	if err != nil {
 		t.Fatalf("read evidence carrying escaped characters: %v", err)
 	}
@@ -620,7 +673,7 @@ func assertEvidenceStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if disclosed, err := expired.ReadEvidence(ctx, authority, "run-evidence", 10); err != nil || len(disclosed) != 0 {
+	if disclosed, err := expired.ReadEvidence(ctx, readAuthority, "run-evidence", 10); err != nil || len(disclosed) != 0 {
 		t.Fatalf("post-retention read records=%d err=%v, want none", len(disclosed), err)
 	}
 	var retained int
@@ -630,11 +683,14 @@ func assertEvidenceStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 
 	// Integrity is re-verified before disclosure: a record whose stored
 	// digest no longer attests its document is never returned as evidence.
+	tampered := fact
+	tampered.RunID = "run-tampered"
+	tampered.EvidenceID = "evidence-tampered-1"
 	if _, err := pool.Exec(ctx, `INSERT INTO agent_evidence.records(workspace_id,project_id,run_id,evidence_id,evidence_sequence,evidence_type,data_classification,retention_category,evidence_bytes,content_digest,recorded_at) VALUES('workspace-evidence','project-evidence','run-tampered','evidence-tampered-1',1,'commit.authorization-issued','internal','audit',$1,$2,$3)`,
-		mustRenderEvidence(t, fact, 1, now), "sha256:"+strings.Repeat("f", 64), now); err != nil {
+		mustRenderEvidence(t, tampered, 1, now), "sha256:"+strings.Repeat("f", 64), now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ReadEvidence(ctx, authority, "run-tampered", 10); err == nil {
+	if _, err := store.ReadEvidence(ctx, readAuthority, "run-tampered", 10); err == nil {
 		t.Fatal("a record whose digest does not attest its document was disclosed")
 	}
 
@@ -652,7 +708,7 @@ func assertEvidenceStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 	if _, err := precise.AppendEvidence(ctx, subMillisecond); err != nil {
 		t.Fatalf("append under a sub-millisecond clock: %v", err)
 	}
-	recordedPrecise, err := precise.ReadEvidence(ctx, authority, "run-precision", 10)
+	recordedPrecise, err := precise.ReadEvidence(ctx, readAuthority, "run-precision", 10)
 	if err != nil || len(recordedPrecise) != 1 {
 		t.Fatalf("sub-millisecond read records=%d err=%v", len(recordedPrecise), err)
 	}
@@ -671,13 +727,63 @@ func assertEvidenceStore(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The document attests "restricted" while the row column claims
+	// "internal". The database constraint binds the two, so this write is
+	// refused before it can widen anyone's read.
 	if _, err := pool.Exec(ctx, `INSERT INTO agent_evidence.records(workspace_id,project_id,run_id,evidence_id,evidence_sequence,evidence_type,data_classification,retention_category,evidence_bytes,content_digest,recorded_at) VALUES('workspace-evidence','project-evidence','run-relabelled','evidence-relabelled-1',1,'commit.authorization-issued','internal','audit',$1,$2,$3)`,
-		rendered, digest, now); err != nil {
-		t.Fatal(err)
+		rendered, digest, now); err == nil {
+		t.Fatal("a row whose column relabels the attested classification was stored")
 	}
-	if _, err := store.ReadEvidence(ctx, limited, "run-relabelled", 10); err == nil {
-		t.Fatal("a restricted document relabelled internal in its column was disclosed to an internal clearance")
+	if disclosed, err := store.ReadEvidence(ctx, limited, "run-relabelled", 10); err != nil || len(disclosed) != 0 {
+		t.Fatalf("a refused relabelling left %d disclosable records err=%v", len(disclosed), err)
 	}
+}
+
+// verifiedEvidenceRequest stands in for the service's request-authority
+// verification: it returns the tenant scope a caller proved and nothing else.
+// Clearance is deliberately not expressible here — it comes from current
+// authority, which is what makes a forged clearance impossible rather than
+// merely rejected.
+type verifiedEvidenceRequest struct{ scope runs.Scope }
+
+func (v verifiedEvidenceRequest) Authorize(context.Context, auth.Claims, auth.Operation) (runs.Scope, error) {
+	return v.scope, nil
+}
+
+// grantedEvidenceAuthority is a current-authority source that admits the actor
+// under a role and grants the named data classes.
+func grantedEvidenceAuthority(role string, classes ...string) *authority.Static {
+	return authority.NewStatic(authority.Current{
+		Definition:       json.RawMessage(`{"definitionId":"definition.1"}`),
+		ContractBOM:      json.RawMessage(`{"bomDigest":"sha256:1"}`),
+		Policy:           json.RawMessage(`{"policyId":"policy.1"}`),
+		Budget:           json.RawMessage(`{"kind":"AgentBudget"}`),
+		WorkspaceActive:  true,
+		ActorActive:      true,
+		PermissionActive: true,
+		PolicyActive:     true,
+		ActorRole:        role,
+		Grants:           authority.Grants{DataClasses: classes},
+	})
+}
+
+func mintEvidenceAuthority(workspaceID, projectID, actorID, purpose string, source *authority.Static) (events.EvidenceAuthority, error) {
+	return events.MintEvidenceAuthority(
+		context.Background(),
+		verifiedEvidenceRequest{scope: runs.Scope{WorkspaceID: workspaceID, ProjectID: projectID, ActorID: actorID}},
+		source,
+		auth.Claims{},
+		purpose,
+	)
+}
+
+func mintedEvidenceAuthority(t *testing.T, workspaceID, projectID, actorID, purpose string, source *authority.Static) events.EvidenceAuthority {
+	t.Helper()
+	value, err := mintEvidenceAuthority(workspaceID, projectID, actorID, purpose, source)
+	if err != nil {
+		t.Fatalf("mint evidence authority: %v", err)
+	}
+	return value
 }
 
 // mustRenderEvidence renders one canonical evidence document for a durable
@@ -689,6 +795,268 @@ func mustRenderEvidence(t *testing.T, value events.Evidence, sequence uint64, re
 		t.Fatal(err)
 	}
 	return rendered
+}
+
+// projectedFact is one public projection together with the producing
+// component's attributable material — the only shape a durable public event
+// can be written from. The evidence identity and the projector digest are
+// deliberately absent: they are derived by the projector, never supplied here.
+func projectedFact(t *testing.T, runID, eventID string, sequence uint64, occurredAt time.Time) eventpg.Fact {
+	t.Helper()
+	contractBOM := json.RawMessage(`{"repository":"anvilkit/contracts","bomDigest":"sha256:` + strings.Repeat("a", 64) + `","ociManifestDigest":"sha256:` + strings.Repeat("b", 64) + `","evidenceManifestDigest":"sha256:` + strings.Repeat("c", 64) + `"}`)
+	producer, err := events.ProjectionProducer("agent-runs", nil, contractBOM, json.RawMessage(`{"policyId":"policy.1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return eventpg.Fact{
+		Projection: events.Projection{
+			WorkspaceID: "w",
+			ProjectID:   "p",
+			RunID:       runID,
+			Sequence:    sequence,
+			EventID:     eventID,
+			Type:        events.TypeStateChanged,
+			OccurredAt:  occurredAt,
+			Subject:     events.SystemSubject(),
+			Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+			ContractBOM: contractBOM,
+			Payload:     events.StateChangedPayload("created", "preparing"),
+		},
+		Producer:    producer,
+		Correlation: events.ProjectionCorrelation{WorkflowID: runID + ":g1"},
+	}
+}
+
+// writeProjectedFact commits one fact through the repository-owned projector,
+// which is the only durable public-event write path there is.
+func writeProjectedFact(t *testing.T, ctx context.Context, pool *pgxpool.Pool, scope events.Scope, fact eventpg.Fact) events.Projected {
+	t.Helper()
+	projected, err := attemptProjectedFact(ctx, pool, scope, fact, pinnedGuard(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return projected
+}
+
+func attemptProjectedFact(ctx context.Context, pool *pgxpool.Pool, scope events.Scope, fact eventpg.Fact, guard *contractguard.Guard) (events.Projected, error) {
+	writer, err := eventpg.NewProjectionWriter(guard, events.DefaultBounds(), func() time.Time { return fact.Projection.OccurredAt })
+	if err != nil {
+		return events.Projected{}, err
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return events.Projected{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	projected, err := writer.Write(ctx, tx, scope, fact)
+	if err != nil {
+		return events.Projected{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return events.Projected{}, err
+	}
+	return projected, nil
+}
+
+// withoutConstraint drops one constraint for the duration of the body and
+// restores it afterwards. It exists so a test can put a row into the store
+// that the database would otherwise refuse — which is the only way to prove
+// that replay reports store corruption as corruption rather than trusting the
+// constraint to be the sole line of defence.
+func withoutConstraint(t *testing.T, ctx context.Context, pool *pgxpool.Pool, table, constraint string, body func()) {
+	t.Helper()
+	definition := ""
+	if err := pool.QueryRow(ctx, `SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid JOIN pg_namespace n ON n.oid=r.relnamespace WHERE n.nspname||'.'||r.relname=$1 AND c.conname=$2`, table, constraint).Scan(&definition); err != nil {
+		t.Fatalf("read %s on %s: %v", constraint, table, err)
+	}
+	if _, err := pool.Exec(ctx, `ALTER TABLE `+table+` DROP CONSTRAINT `+constraint); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if _, err := pool.Exec(ctx, `ALTER TABLE `+table+` ADD CONSTRAINT `+constraint+` `+definition); err != nil {
+			t.Fatalf("restore %s on %s: %v", constraint, table, err)
+		}
+	}()
+	body()
+}
+
+// assertPublicEventProvenance proves the public projection is traceable on
+// real storage (ADR-020 §2). Every durable public event is written by the
+// repository-owned projector from evidence recorded in the same transaction;
+// the database refuses provenance that names absent evidence, evidence from
+// another run, or an event from another run; recorded provenance cannot be
+// rewritten; and replay proves the whole account again from the stored rows,
+// reporting anything that does not hold as store corruption rather than
+// replaying it as an ordinary public fact.
+func assertPublicEventProvenance(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	guard := pinnedGuard(t)
+	reader := eventpg.NewReader(pool, guard)
+	scope := events.Scope{WorkspaceID: "w", ProjectID: "p"}
+	const runID = "run-provenance"
+	const otherRunID = "run-provenance-other"
+	now := time.Unix(1200, 0).UTC()
+
+	first := writeProjectedFact(t, ctx, pool, scope, projectedFact(t, runID, runID+":1", 1, now))
+	derived, err := events.ProjectionEvidenceID(runID + ":1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.EvidenceID != derived {
+		t.Fatalf("recorded provenance names evidence %q, want the identity the projector derives (%q)", first.EvidenceID, derived)
+	}
+	digest, err := events.ProjectorDigest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ProjectorDigest != digest {
+		t.Fatalf("recorded projector digest=%q, want the live ruleset identity", first.ProjectorDigest)
+	}
+
+	// A second event under one identity is not a shape this store holds: the
+	// durable public event is written once, so nothing can append a second
+	// account of the same fact.
+	if _, err := attemptProjectedFact(ctx, pool, scope, projectedFact(t, runID, runID+":1", 1, now), guard); err == nil {
+		t.Fatal("a repeated public event identity was written a second time")
+	}
+
+	page, err := reader.Replay(ctx, events.ReplayRequest{Scope: scope, RunID: runID, Limit: 100})
+	if err != nil || len(page.Events) != 1 {
+		t.Fatalf("replay events=%d err=%v, want exactly the one recorded event", len(page.Events), err)
+	}
+	if page.Events[0].EvidenceID != first.EvidenceID || page.Events[0].ProjectorDigest != first.ProjectorDigest {
+		t.Fatalf("replayed provenance=%+v, want the recorded reference and projector digest", page.Events[0])
+	}
+
+	// Provenance is history: it cannot be rewritten to point somewhere else.
+	if _, err := pool.Exec(ctx, `UPDATE agent_events.event_provenance SET evidence_id='projection.forged' WHERE workspace_id='w' AND project_id='p' AND event_id=$1`, runID+":1"); err == nil {
+		t.Fatal("recorded event provenance was mutable")
+	}
+
+	// A second run, so the cross-run cases below have real evidence to point
+	// at rather than an absence that would prove less.
+	foreign := writeProjectedFact(t, ctx, pool, scope, projectedFact(t, otherRunID, otherRunID+":1", 1, now))
+
+	// A public event with no provenance at all: the only way to create one is
+	// to write the event row directly, which is exactly the bypass the store
+	// must not serve.
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES('w','p',$1,2,$2,$3,$4)`, runID, runID+":2", validEventBytes(runID+":2", runID, 2, "run.state-changed"), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reader.Replay(ctx, events.ReplayRequest{Scope: scope, RunID: runID, Limit: 100}); err == nil {
+		t.Fatal("an event with no recorded provenance was replayed onto the public wire")
+	}
+
+	// Provenance naming evidence that does not exist is refused by the store.
+	absent := `INSERT INTO agent_events.event_provenance(workspace_id,project_id,run_id,event_id,evidence_id,projector_digest) VALUES('w','p',$1,$2,$3,$4)`
+	if _, err := pool.Exec(ctx, absent, runID, runID+":2", "projection.nothing-recorded-this", digest); err == nil {
+		t.Fatal("provenance naming evidence that does not exist was recorded")
+	}
+	// Provenance naming evidence recorded under another run is refused too:
+	// the reference carries the run, so correlation is the reference.
+	if _, err := pool.Exec(ctx, absent, runID, runID+":2", foreign.EvidenceID, digest); err == nil {
+		t.Fatal("provenance naming another run's evidence was recorded")
+	}
+	// Provenance correlated to a run its event does not belong to is refused
+	// by the reference to the event itself.
+	if _, err := pool.Exec(ctx, absent, otherRunID, runID+":2", first.EvidenceID, digest); err == nil {
+		t.Fatal("provenance correlated to another run's event was recorded")
+	}
+
+	// With the store's own refusal removed, replay is what stands between a
+	// corrupt row and a consumer. Each case is reported as corruption.
+	for _, corruption := range []struct {
+		name       string
+		constraint string
+		runID      string
+		evidenceID string
+	}{
+		{name: "evidence that does not exist", constraint: "event_provenance_names_source_evidence", runID: runID, evidenceID: "projection.nothing-recorded-this"},
+		{name: "evidence recorded under another run", constraint: "event_provenance_names_source_evidence", runID: runID, evidenceID: foreign.EvidenceID},
+		{name: "provenance correlated to another run", constraint: "event_provenance_explains_its_event", runID: otherRunID, evidenceID: foreign.EvidenceID},
+	} {
+		withoutConstraint(t, ctx, pool, "agent_events.event_provenance", corruption.constraint, func() {
+			if _, err := pool.Exec(ctx, absent, corruption.runID, runID+":2", corruption.evidenceID, digest); err != nil {
+				t.Fatalf("%s: %v", corruption.name, err)
+			}
+			if _, err := reader.Replay(ctx, events.ReplayRequest{Scope: scope, RunID: runID, Limit: 100}); err == nil {
+				t.Fatalf("%s: a corrupt public event was replayed onto the public wire", corruption.name)
+			}
+			if _, err := pool.Exec(ctx, `DELETE FROM agent_events.event_provenance WHERE workspace_id='w' AND project_id='p' AND event_id=$1`, runID+":2"); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	// The bypassing event row is removed, and the run replays cleanly again.
+	if _, err := pool.Exec(ctx, `DELETE FROM agent_events.agent_events WHERE workspace_id='w' AND project_id='p' AND event_id=$1`, runID+":2"); err != nil {
+		t.Fatal(err)
+	}
+	page, err = reader.Replay(ctx, events.ReplayRequest{Scope: scope, RunID: runID, Limit: 100})
+	if err != nil || len(page.Events) != 1 {
+		t.Fatalf("replay events=%d err=%v, want the run traceable again", len(page.Events), err)
+	}
+}
+
+// assertStreamCursorSpoolRecovery proves the disconnect record survives a
+// cursor-store outage on real storage: a record the store refused is held on
+// the instance's durable volume, a successor process finds it there, and the
+// reconciler places it in the authoritative store once the store is reachable
+// again. The record is the only account of what a disconnected client
+// received, so an outage must delay it, never lose it.
+func assertStreamCursorSpoolRecovery(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	scope := events.Scope{WorkspaceID: "w", ProjectID: "p"}
+	const runID = "run-cursor-recovery"
+	const connectionID = "stream.recovery-1"
+	directory := t.TempDir()
+
+	// The process that served the stream: its store write failed, so the
+	// record went to the durable spool instead.
+	serving, err := spool.NewStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serving.SpoolCursor(ctx, events.RecordedCursor{Scope: scope, RunID: runID, ConnectionID: connectionID, LastEventID: runID + ":4", Reason: "slow-consumer"}); err != nil {
+		t.Fatal(err)
+	}
+	var present int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.stream_cursors WHERE workspace_id=$1 AND project_id=$2 AND connection_id=$3`, scope.WorkspaceID, scope.ProjectID, connectionID).Scan(&present); err != nil || present != 0 {
+		t.Fatalf("stream cursors=%d err=%v, want the record still only held", present, err)
+	}
+
+	// A successor process over the same durable volume, with the store
+	// reachable again.
+	successor, err := spool.NewStore(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursors, err := eventpg.NewStreamCursors(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciler, err := spool.NewReconciler(successor, cursors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	placed, err := reconciler.ReconcileOnce(ctx)
+	if err != nil || placed != 1 {
+		t.Fatalf("placed=%d err=%v, want the held record placed", placed, err)
+	}
+	var lastEventID, reason, recordedRun string
+	if err := pool.QueryRow(ctx, `SELECT run_id,last_event_id,reason FROM agent_events.stream_cursors WHERE workspace_id=$1 AND project_id=$2 AND connection_id=$3`, scope.WorkspaceID, scope.ProjectID, connectionID).Scan(&recordedRun, &lastEventID, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if recordedRun != runID || lastEventID != runID+":4" || reason != "slow-consumer" {
+		t.Fatalf("placed cursor=(%q,%q,%q), want the record exactly as it was held", recordedRun, lastEventID, reason)
+	}
+	if held, err := successor.Held(); err != nil || held != 0 {
+		t.Fatalf("held records=%d err=%v after placement, want none", held, err)
+	}
+	// A second sweep places nothing: the record was moved, not copied.
+	if placed, err := reconciler.ReconcileOnce(ctx); err != nil || placed != 0 {
+		t.Fatalf("placed=%d err=%v on a second sweep, want nothing left to place", placed, err)
+	}
 }
 
 // assertStreamCursorsAndSequenceSeparation proves the two ADR-020 sequence
@@ -719,7 +1087,10 @@ func assertStreamCursorsAndSequenceSeparation(t *testing.T, ctx context.Context,
 		Traceparent:    "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
 	}
 	// Public events and hidden evidence interleave for the same run: four
-	// internal facts around three public ones.
+	// internal facts that produce nothing public, around three public events
+	// each of which is projected from its own source evidence. Seven internal
+	// facts, three public ones — which is exactly the relationship ADR-020 §2
+	// says consumers must not assume anything about.
 	for sequence := uint64(1); sequence <= 3; sequence++ {
 		fact := hidden
 		fact.EvidenceID = fmt.Sprintf("evidence-separation-before-%d", sequence)
@@ -727,9 +1098,7 @@ func assertStreamCursorsAndSequenceSeparation(t *testing.T, ctx context.Context,
 			t.Fatal(err)
 		}
 		eventID := fmt.Sprintf("%s:%d", runID, sequence)
-		if err := reader.Append(ctx, scope, events.Event{ID: eventID, RunID: runID, Sequence: sequence, Bytes: validEventBytes(eventID, runID, sequence, "run.state-changed"), CreatedAt: now}); err != nil {
-			t.Fatal(err)
-		}
+		writeProjectedFact(t, ctx, pool, scope, projectedFact(t, runID, eventID, sequence, now))
 	}
 	trailing := hidden
 	trailing.EvidenceID = "evidence-separation-after"
@@ -743,15 +1112,39 @@ func assertStreamCursorsAndSequenceSeparation(t *testing.T, ctx context.Context,
 	if err := events.ValidateContiguous(page.Events, 0); err != nil {
 		t.Fatalf("hidden evidence opened a gap in the public sequence: %v", err)
 	}
-	authority := events.EvidenceAuthority{Scope: scope, Accessor: "operator-separation", Purpose: "sequence-separation-verification", Clearance: "restricted"}
-	records, err := evidenceStore.ReadEvidence(ctx, authority, runID, 100)
-	if err != nil || len(records) != 4 {
-		t.Fatalf("evidence records=%d err=%v, want the four internal facts", len(records), err)
+	separationAuthority := mintedEvidenceAuthority(t, scope.WorkspaceID, scope.ProjectID, "operator-separation", "sequence-separation-verification", grantedEvidenceAuthority(authority.RoleOperator, "restricted"))
+	records, err := evidenceStore.ReadEvidence(ctx, separationAuthority, runID, 100)
+	if err != nil || len(records) != 7 {
+		t.Fatalf("evidence records=%d err=%v, want the four hidden facts and the three projections' source evidence", len(records), err)
 	}
+	hiddenFacts, projected := 0, 0
 	for index, record := range records {
 		if record.Sequence != uint64(index+1) {
 			t.Fatalf("evidence sequence %d at index %d is not independently continuous", record.Sequence, index)
 		}
+		if events.PublicEventType(record.Type) {
+			t.Fatalf("a public event type was recorded as internal evidence: %q", record.Type)
+		}
+		if record.PublicEventID == "" {
+			hiddenFacts++
+			continue
+		}
+		projected++
+		// A projection's source evidence names the public event it produced,
+		// and that event is one of the three the run actually published.
+		found := false
+		for _, event := range page.Events {
+			if event.ID == record.PublicEventID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("evidence %q names public event %q, which this run never published", record.EvidenceID, record.PublicEventID)
+		}
+	}
+	if hiddenFacts != 4 || projected != 3 {
+		t.Fatalf("hidden facts=%d projected facts=%d, want four hidden and three that produced a public event", hiddenFacts, projected)
 	}
 
 	cursors, err := eventpg.NewStreamCursors(pool)
@@ -1688,6 +2081,20 @@ func assertDurableRunCore(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	if findings := guard.Validate(ctx, contractguard.APIIn, "anvilkit://schema/agent-run?digest=sha256:e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564", projection.Run); len(findings) != 0 {
 		t.Fatalf("snapshot run is not contract-valid: %#v raw=%s", findings, projection.Run)
 	}
+	// The snapshot is the documented recovery path for an expired cursor, so
+	// the whole rendered document — not only the run inside it — has to
+	// satisfy the governed contract that recovery is described by.
+	rendered, err := json.Marshal(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.Require(ctx, contractguard.SnapshotOut, events.AgentRunSnapshotSchemaURI, rendered); err != nil {
+		t.Fatalf("snapshot recovery document is not contract-valid: %v raw=%s", err, rendered)
+	}
+	var recovered events.SnapshotProjection
+	if err := json.Unmarshal(rendered, &recovered); err != nil || recovered.Cursor != projection.Cursor {
+		t.Fatalf("snapshot recovery document did not round-trip: %#v err=%v", recovered, err)
+	}
 	afterSnapshot, err := reader.Replay(ctx, events.ReplayRequest{Scope: eventScope, RunID: "durable-run", AfterEventID: projection.Cursor, Limit: 100})
 	if err != nil || len(afterSnapshot.Events) != 0 {
 		t.Fatalf("snapshot resume duplicated or lost: %#v %v", afterSnapshot, err)
@@ -1718,13 +2125,18 @@ func assertDurableRunCore(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	if _, err := fresh.Replay(ctx, events.ReplayRequest{Scope: eventScope, RunID: "durable-run", AfterEventID: "durable-run:1", Limit: 100}); err != nil {
 		t.Fatalf("a cursor inside the retention window must replay: %v", err)
 	}
-	duplicate := replay.Events[0]
-	if err := reader.Append(ctx, eventScope, duplicate); err != nil {
-		t.Fatalf("identical event replay rejected: %v", err)
+	// Eight concurrent creates and every later replay produced one durable
+	// event per identity. The store below has no append a caller could use to
+	// add a second account of one, so the count is decided by the projector
+	// alone: each stored event has exactly one provenance record, and each of
+	// those names evidence recorded in the same run.
+	var duplicated int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM (SELECT event_id FROM agent_events.agent_events WHERE workspace_id=$1 AND project_id=$2 AND run_id='durable-run' GROUP BY event_id HAVING count(*)>1) repeated`, eventScope.WorkspaceID, eventScope.ProjectID).Scan(&duplicated); err != nil || duplicated != 0 {
+		t.Fatalf("event identities stored more than once=%d err=%v", duplicated, err)
 	}
-	duplicate.Bytes = []byte(`{"different":true}`)
-	if err := reader.Append(ctx, eventScope, duplicate); err == nil {
-		t.Fatal("duplicate event ID with different bytes accepted")
+	var unexplained int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events e LEFT JOIN agent_events.event_provenance p ON p.workspace_id=e.workspace_id AND p.project_id=e.project_id AND p.event_id=e.event_id LEFT JOIN agent_evidence.records d ON d.workspace_id=p.workspace_id AND d.project_id=p.project_id AND d.evidence_id=p.evidence_id AND d.run_id=p.run_id WHERE e.workspace_id=$1 AND e.project_id=$2 AND e.run_id='durable-run' AND (p.event_id IS NULL OR d.evidence_id IS NULL OR p.run_id<>e.run_id)`, eventScope.WorkspaceID, eventScope.ProjectID).Scan(&unexplained); err != nil || unexplained != 0 {
+		t.Fatalf("durable events without correlated provenance and source evidence=%d err=%v", unexplained, err)
 	}
 }
 
@@ -1876,60 +2288,82 @@ func assertScopedRepository(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 	}
 }
 
-func assertAtomicEventsAndInbox(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+// assertProjectedEventsAndInbox proves the two durable boundaries the event
+// schema owns. The public one has a single write path — the repository-owned
+// projector — and it is atomic: the evidence, the event, its provenance, and
+// the outbox hand-off land together or not at all, and a projection outside
+// the registry never reaches the store. The consumer inbox is the other, and
+// it writes no public event at all.
+func assertProjectedEventsAndInbox(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	guard, err := contractguard.NewGuard("../..")
 	if err != nil {
 		t.Fatal(err)
 	}
 	scope := events.Scope{WorkspaceID: "w", ProjectID: "p"}
-	eventBytes := validEventBytes("event-1", "scoped", 1, "run.state-changed")
-	change := events.Transition{Scope: scope, RunID: "scoped", ExpectedVersion: 1, NextState: "preparing", Snapshot: []byte(`{"state":"preparing"}`), EventID: "event-1", EventBytes: eventBytes, OutboxID: "outbox-1", Topic: "agent.events", OutboxBytes: eventBytes, WorkflowID: "scoped:v1", WorkflowVersion: 1, Checkpoint: "preparing", CheckpointBytes: []byte(`{"state":"preparing"}`)}
-	invalid := change
-	invalid.EventBytes = []byte(`{"apiVersion":"attacker"}`)
-	if _, err := eventpg.New(pool, nil, guard).Commit(ctx, invalid); err == nil {
-		t.Fatal("invalid event crossed the durable event boundary")
+	const runID = "run-projected"
+	now := time.Unix(1300, 0).UTC()
+
+	// A type outside the closed public registry is not projectable, so it
+	// never reaches the store.
+	unregistered := projectedFact(t, runID, runID+":1", 1, now)
+	unregistered.Projection.Type = "model.call-completed"
+	if _, err := attemptProjectedFact(ctx, pool, scope, unregistered, guard); err == nil {
+		t.Fatal("an internal step name was projected onto the public wire")
 	}
-	prohibited := change
-	prohibited.EventBytes = bytes.Replace(change.EventBytes, []byte(`"state":"preparing"`), []byte(`"state":"secret"`), 1)
-	if _, err := eventpg.New(pool, nil, guard).Commit(ctx, prohibited); err == nil {
-		t.Fatal("prohibited event content crossed the durable event boundary")
+	// Neither is a payload whose field set the registry does not declare.
+	widened := projectedFact(t, runID, runID+":1", 1, now)
+	widened.Projection.Payload = map[string]string{"previousState": "created", "state": "preparing", "providerRequestId": "req-1"}
+	if _, err := attemptProjectedFact(ctx, pool, scope, widened, guard); err == nil {
+		t.Fatal("an unregistered payload field was projected onto the public wire")
 	}
-	mismatched := change
-	mismatched.EventBytes = validEventBytes("different-event", "scoped", 1, "run.state-changed")
-	if _, err := eventpg.New(pool, nil, guard).Commit(ctx, mismatched); err == nil {
-		t.Fatal("event body/envelope identity mismatch crossed the durable boundary")
+	// Nor is prohibited content, whatever registered field carries it.
+	prohibited := projectedFact(t, runID, runID+":1", 1, now)
+	prohibited.Projection.Payload = events.StateChangedPayload("created", "secret")
+	if _, err := attemptProjectedFact(ctx, pool, scope, prohibited, guard); err == nil {
+		t.Fatal("prohibited content was projected onto the public wire")
 	}
-	var unchanged int
-	if err := pool.QueryRow(ctx, `SELECT version FROM agent_control.agent_runs WHERE workspace_id='w' AND project_id='p' AND run_id='scoped'`).Scan(&unchanged); err != nil || unchanged != 1 {
-		t.Fatalf("invalid event mutated run version=%d err=%v", unchanged, err)
+	assertNoProjectedResidue(t, ctx, pool, runID)
+
+	// A transaction that does not commit leaves nothing behind: the evidence,
+	// the event, its provenance, and the outbox hand-off are one write.
+	writer, err := eventpg.NewProjectionWriter(guard, events.DefaultBounds(), func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, point := range []eventpg.FailurePoint{eventpg.AfterRunUpdate, eventpg.AfterEventInsert, eventpg.AfterOutboxInsert, eventpg.AfterCheckpointInsert} {
-		repository := eventpg.New(pool, func(actual eventpg.FailurePoint) error {
-			if actual == point {
-				return errors.New("fault")
-			}
-			return nil
-		}, guard)
-		if _, err := repository.Commit(ctx, change); err == nil {
-			t.Fatalf("failure %s did not abort", point)
-		}
-		var version, eventCount, outboxCount, checkpointCount int
-		if err := pool.QueryRow(ctx, `SELECT version FROM agent_control.agent_runs WHERE workspace_id='w' AND project_id='p' AND run_id='scoped'`).Scan(&version); err != nil {
-			t.Fatal(err)
-		}
-		_ = pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events WHERE run_id='scoped'`).Scan(&eventCount)
-		_ = pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.outbox WHERE run_id='scoped'`).Scan(&outboxCount)
-		_ = pool.QueryRow(ctx, `SELECT count(*) FROM agent_workflow.checkpoints WHERE workflow_id='scoped:v1'`).Scan(&checkpointCount)
-		if version != 1 || eventCount != 0 || outboxCount != 0 || checkpointCount != 0 {
-			t.Fatalf("partial state after %s: version=%d event=%d outbox=%d checkpoint=%d", point, version, eventCount, outboxCount, checkpointCount)
-		}
+	abandoned, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	committed, err := eventpg.New(pool, nil, guard).Commit(ctx, change)
-	if err != nil || committed.Version != 2 || committed.Sequence != 1 {
-		t.Fatalf("commit=%#v err=%v", committed, err)
+	if _, err := writer.Write(ctx, abandoned, scope, projectedFact(t, runID, runID+":1", 1, now)); err != nil {
+		t.Fatal(err)
 	}
-	inbox := eventpg.New(pool, nil, guard)
+	if err := abandoned.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertNoProjectedResidue(t, ctx, pool, runID)
+
+	// Committed, all four land together.
+	projected := writeProjectedFact(t, ctx, pool, scope, projectedFact(t, runID, runID+":1", 1, now))
+	var eventCount, provenanceCount, evidenceCount, outboxCount int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM agent_events.agent_events WHERE run_id=$1),(SELECT count(*) FROM agent_events.event_provenance WHERE run_id=$1),(SELECT count(*) FROM agent_evidence.records WHERE run_id=$1),(SELECT count(*) FROM agent_events.outbox WHERE run_id=$1)`, runID).Scan(&eventCount, &provenanceCount, &evidenceCount, &outboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 1 || provenanceCount != 1 || evidenceCount != 1 || outboxCount != 1 {
+		t.Fatalf("event=%d provenance=%d evidence=%d outbox=%d, want one of each", eventCount, provenanceCount, evidenceCount, outboxCount)
+	}
+	var recordedEvidence, recordedDigest string
+	if err := pool.QueryRow(ctx, `SELECT evidence_id,projector_digest FROM agent_events.event_provenance WHERE run_id=$1`, runID).Scan(&recordedEvidence, &recordedDigest); err != nil {
+		t.Fatal(err)
+	}
+	if recordedEvidence != projected.EvidenceID || recordedDigest != projected.ProjectorDigest {
+		t.Fatalf("recorded provenance=(%q,%q), want the projector's own (%q,%q)", recordedEvidence, recordedDigest, projected.EvidenceID, projected.ProjectorDigest)
+	}
+
+	inbox, err := eventpg.NewInbox(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
 	message := events.InboxMessage{Scope: scope, Consumer: "consumer", MessageID: "message", Digest: []byte("digest")}
 	if got, err := inbox.Accept(ctx, message); err != nil || got != events.InboxAccepted {
 		t.Fatalf("first inbox=%s %v", got, err)
@@ -1940,6 +2374,24 @@ func assertAtomicEventsAndInbox(t *testing.T, ctx context.Context, pool *pgxpool
 	message.Digest = []byte("different")
 	if _, err := inbox.Accept(ctx, message); err == nil {
 		t.Fatal("duplicate message with different bytes accepted")
+	}
+	// Accepting a message is a delivery fact, not a public event: nothing the
+	// inbox did added to the run's public history.
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_events.agent_events WHERE run_id=$1`, runID).Scan(&eventCount); err != nil || eventCount != 1 {
+		t.Fatalf("public events after inbox activity=%d err=%v, want the one projected event", eventCount, err)
+	}
+}
+
+// assertNoProjectedResidue proves a refused or abandoned projection left
+// nothing durable behind — no event, no provenance, no evidence, no hand-off.
+func assertNoProjectedResidue(t *testing.T, ctx context.Context, pool *pgxpool.Pool, runID string) {
+	t.Helper()
+	var eventCount, provenanceCount, evidenceCount, outboxCount int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM agent_events.agent_events WHERE run_id=$1),(SELECT count(*) FROM agent_events.event_provenance WHERE run_id=$1),(SELECT count(*) FROM agent_evidence.records WHERE run_id=$1),(SELECT count(*) FROM agent_events.outbox WHERE run_id=$1)`, runID).Scan(&eventCount, &provenanceCount, &evidenceCount, &outboxCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 0 || provenanceCount != 0 || evidenceCount != 0 || outboxCount != 0 {
+		t.Fatalf("residue after a refused projection: event=%d provenance=%d evidence=%d outbox=%d", eventCount, provenanceCount, evidenceCount, outboxCount)
 	}
 }
 
