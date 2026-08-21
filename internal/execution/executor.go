@@ -224,7 +224,7 @@ type CommitAuthority interface {
 // DeltaPublisher fans provisional stream deltas to live subscribers. Deltas
 // are droppable by contract; publishing never blocks the workflow.
 type DeltaPublisher interface {
-	Publish(events.Delta) error
+	Publish(context.Context, events.Delta) error
 }
 
 // EvidenceRecorder appends internal AgentEvidence facts. The events evidence
@@ -628,7 +628,7 @@ func (e *Executor) ExecuteTurn(ctx context.Context, op workflow.OpID, input work
 	// A completed turn is live progress for connected consumers. The delta is
 	// provisional by contract — dropping it changes nothing durable, so a
 	// publish failure is never allowed to fail the turn.
-	_ = e.cfg.Deltas.Publish(events.Delta{
+	_ = e.cfg.Deltas.Publish(ctx, events.Delta{
 		WorkspaceID: snapshot.WorkspaceID,
 		RunID:       string(snapshot.RunID),
 		Channel:     "progress",

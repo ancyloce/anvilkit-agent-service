@@ -544,10 +544,21 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		toolMaterial = options.toolMaterial
 	}
 	h.material = toolMaterial
-	h.evidence = events.NewMemoryEvidence()
+	// The controlled stores prove the same canonical contracts the durable
+	// ones do, so a document the contract rejects fails here rather than
+	// first failing against a database.
+	documentGuard, err := contracts.NewGuard("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.evidence = events.NewMemoryEvidence(events.WithEvidenceContracts(documentGuard.At(contracts.EvidenceIn)))
 	var evidenceRecorder execution.EvidenceRecorder = h.evidence
 	if options.evidence != nil {
 		evidenceRecorder = options.evidence(h.evidence)
+	}
+	deltaBroker, err := events.NewDeltaBroker(documentGuard.At(contracts.DeltaOut))
+	if err != nil {
+		t.Fatal(err)
 	}
 	h.authoritySource = authority.NewStatic(h.currentAuthority(h.authority(options)))
 	dispatchEffects := &scheduler.MemoryEffects{}
@@ -594,7 +605,7 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		CommitAuthority:   h.commitAuthority,
 		Contracts:         contractValidator,
 		Evidence:          evidenceRecorder,
-		Deltas:            events.NewDeltaBroker(),
+		Deltas:            deltaBroker,
 		Decisions:         h.journal,
 		Budget:            budgetController,
 		Clock:             clock,
