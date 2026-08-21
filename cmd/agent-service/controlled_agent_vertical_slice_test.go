@@ -28,6 +28,8 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
 	"github.com/ancyloce/anvilkit-agent-service/internal/config"
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
+	"github.com/ancyloce/anvilkit-agent-service/internal/events"
+	eventpg "github.com/ancyloce/anvilkit-agent-service/internal/events/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/persistence"
 	"github.com/ancyloce/anvilkit-agent-service/internal/telemetry"
@@ -410,16 +412,25 @@ func TestControlledAgentVerticalSlice(t *testing.T) {
 	// The public stream carries the complete lifecycle through exactly the
 	// six-event registry: five types appear on the happy path, and nothing
 	// outside the registry is ever observable.
-	eventRows, err := observe.Query(ctx, `SELECT event_bytes FROM agent_events.agent_events WHERE workspace_id='workspace' AND project_id='project' AND run_id=$1 ORDER BY sequence`, runID)
+	eventRows, err := observe.Query(ctx, `SELECT event_bytes,sequence FROM agent_events.agent_events WHERE workspace_id='workspace' AND project_id='project' AND run_id=$1 ORDER BY sequence`, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	observedTypes := map[string]bool{}
+	expectedSequence := uint64(1)
 	for eventRows.Next() {
 		var raw []byte
-		if err := eventRows.Scan(&raw); err != nil {
+		var sequence uint64
+		if err := eventRows.Scan(&raw, &sequence); err != nil {
 			t.Fatal(err)
 		}
+		// The public sequence is continuous even though the same run recorded
+		// hidden internal evidence throughout: hidden facts never open a gap
+		// a consumer would have to reason about (ADR-020 §3).
+		if sequence != expectedSequence {
+			t.Fatalf("public sequence gap: got %d want %d", sequence, expectedSequence)
+		}
+		expectedSequence++
 		var event struct {
 			EventType string `json:"eventType"`
 		}
@@ -429,6 +440,45 @@ func TestControlledAgentVerticalSlice(t *testing.T) {
 		observedTypes[event.EventType] = true
 	}
 	eventRows.Close()
+
+	// The same run's internal evidence is durable, independently sequenced,
+	// integrity-verified, and reachable only under a proven accessor
+	// authority. A read from a neighbouring tenant reaches none of it.
+	evidenceStore, err := eventpg.NewEvidenceStore(observe, guard.At(contractguard.EvidenceIn), func() time.Time { return time.Now().UTC() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	slice := events.Scope{WorkspaceID: "workspace", ProjectID: "project"}
+	authority := events.EvidenceAuthority{Scope: slice, Accessor: "slice-verifier", Purpose: "vertical-slice-verification", Clearance: "restricted"}
+	recorded, err := evidenceStore.ReadEvidence(ctx, authority, runID, 1000)
+	if err != nil || len(recorded) == 0 {
+		t.Fatalf("durable evidence read records=%d err=%v, want the run's recorded facts", len(recorded), err)
+	}
+	for index, record := range recorded {
+		if record.Sequence != uint64(index+1) {
+			t.Fatalf("evidence sequence %d at index %d is not independently continuous", record.Sequence, index)
+		}
+		if record.RunID != runID || record.Traceparent == "" || record.Producer.Component == "" {
+			t.Fatalf("durable evidence lost its run correlation: %+v", record)
+		}
+		if events.PublicEventType(record.Type) {
+			t.Fatalf("a public event type reached the internal evidence store: %q", record.Type)
+		}
+	}
+	neighbour := authority
+	neighbour.Scope.ProjectID = "project-neighbour"
+	if disclosed, err := evidenceStore.ReadEvidence(ctx, neighbour, runID, 1000); err != nil || len(disclosed) != 0 {
+		t.Fatalf("a neighbouring tenant read %d evidence records err=%v, want none", len(disclosed), err)
+	}
+	// Both reads are audited under their own authority: the authorized one
+	// and the one that reached nothing. An evidence access attempt without an
+	// audit row is not a mode, whatever it was allowed to see.
+	for project, want := range map[string]int{"project": 1, "project-neighbour": 1} {
+		var audited int
+		if err := observe.QueryRow(ctx, `SELECT count(*) FROM agent_evidence.access_audit WHERE workspace_id='workspace' AND project_id=$1 AND accessor='slice-verifier' AND purpose='vertical-slice-verification' AND clearance='restricted'`, project).Scan(&audited); err != nil || audited != want {
+			t.Fatalf("evidence access audit rows for %s=%d err=%v, want %d", project, audited, err, want)
+		}
+	}
 	registry := map[string]bool{"run.created": true, "run.state-changed": true, "run.input-requested": true, "run.approval-requested": true, "run.artifact-available": true, "run.problem-recorded": true}
 	for observed := range observedTypes {
 		if !registry[observed] {

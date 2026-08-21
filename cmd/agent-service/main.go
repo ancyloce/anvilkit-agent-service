@@ -542,11 +542,14 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
-	evidenceStore, err := eventpg.NewEvidenceStore(pools.Authority, clockOf{clock}.Now)
+	evidenceStore, err := eventpg.NewEvidenceStore(pools.Authority, guard.At(contractguard.EvidenceIn), clockOf{clock}.Now)
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
-	deltaBroker := events.NewDeltaBroker()
+	deltaBroker, err := events.NewDeltaBroker(guard.At(contractguard.DeltaOut))
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
 
 	toolArguments, err := execution.NewPinnedToolArgumentValidator()
 	if err != nil {
