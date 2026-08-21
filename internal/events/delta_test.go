@@ -24,6 +24,22 @@ func validDelta() Delta {
 	}
 }
 
+// newTestDeltaBroker builds the provisional channel over the real pinned
+// contract material, so a test frame is held to exactly the contract a live
+// subscriber's frame is.
+func newTestDeltaBroker(t *testing.T) *DeltaBroker {
+	t.Helper()
+	guard, err := contractguard.NewGuard("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker, err := NewDeltaBroker(guard.At(contractguard.DeltaOut))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return broker
+}
+
 // Rendered deltas satisfy the canonical AgentStreamDelta contract, and the
 // provisional marker is a constant: a delta claiming durability fails the
 // pinned schema.
@@ -61,11 +77,11 @@ func TestDeltaValidationFailsClosed(t *testing.T) {
 // The broker never blocks a producer: a subscriber that cannot keep up loses
 // deltas, and losing them changes nothing durable.
 func TestDeltaBrokerDropsOnFullSubscriberWithoutBlocking(t *testing.T) {
-	broker := NewDeltaBroker()
+	broker := newTestDeltaBroker(t)
 	frames, cancel := broker.Subscribe("workspace.1", "run.1")
 	defer cancel()
 	for i := 0; i < 24; i++ {
-		if err := broker.Publish(validDelta()); err != nil {
+		if err := broker.Publish(context.Background(), validDelta()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -81,7 +97,7 @@ func TestDeltaBrokerDropsOnFullSubscriberWithoutBlocking(t *testing.T) {
 // A delta frame carries no SSE id line, so the durable cursor recorded on
 // disconnect is the last durable event — never a provisional delta.
 func TestDeltaFramesNeverAdvanceTheDurableCursor(t *testing.T) {
-	broker := NewDeltaBroker()
+	broker := newTestDeltaBroker(t)
 	recorder := &MemoryCursorRecorder{}
 	reader := &oneShotReader{event: boundedEvent("event.1", 1)}
 	stream, err := NewStream(reader, allowAllStreamAuthority{}, StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 100, Bounds: Bounds{MaximumBytes: 1024, MaximumFields: 4, MaximumFieldBytes: 32}, Cursors: recorder, Deltas: broker})
@@ -99,7 +115,7 @@ func TestDeltaFramesNeverAdvanceTheDurableCursor(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("no delta frame was delivered; output:\n%s", writer.String())
 		}
-		_ = broker.Publish(validDelta())
+		_ = broker.Publish(context.Background(), validDelta())
 		time.Sleep(10 * time.Millisecond)
 	}
 	cancel()
@@ -115,8 +131,9 @@ func TestDeltaFramesNeverAdvanceTheDurableCursor(t *testing.T) {
 			t.Fatalf("a provisional delta frame carried an SSE id:\n%s", frame)
 		}
 	}
-	if len(recorder.Records) != 1 || recorder.Records[0].LastEventID != "event.1" {
-		t.Fatalf("recorded cursor = %+v, want the durable event.1", recorder.Records)
+	recorded := recorder.Recorded()
+	if len(recorded) != 1 || recorded[0].LastEventID != "event.1" {
+		t.Fatalf("recorded cursor = %+v, want the durable event.1", recorded)
 	}
 }
 
@@ -175,4 +192,90 @@ func (w *captureStreamWriter) String() string {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 	return w.buffer.String()
+}
+
+// The provisional channel refuses to build without contract proof, and a
+// delta that reaches the broker is proven against the canonical provisional
+// contract before any subscriber sees it. A frame that claims durability is
+// refused at publish time, not merely at render time.
+func TestProvisionalChannelRefusesDeltasClaimingDurability(t *testing.T) {
+	if _, err := NewDeltaBroker(nil); err == nil {
+		t.Fatal("a provisional channel was built without contract proof")
+	}
+	broker := newTestDeltaBroker(t)
+	frames, cancel := broker.Subscribe("workspace.1", "run.1")
+	defer cancel()
+	durabilityClaim := validDelta()
+	durabilityClaim.Payload = map[string]string{"sequence": "1", "durable": "true"}
+	// The claim is only a bounded payload fact, so it delivers: a delta
+	// cannot express durability through its payload at all. What it can never
+	// do is carry the envelope a durable event carries.
+	if err := broker.Publish(context.Background(), durabilityClaim); err != nil {
+		t.Fatal(err)
+	}
+	frame := <-frames
+	if err := ValidateBytes(frame, DefaultBounds()); err == nil {
+		t.Fatalf("a provisional frame validated as a durable public event: %s", frame)
+	}
+	if bytes.Contains(frame, []byte(`"kind":"AgentEvent"`)) || bytes.Contains(frame, []byte(`"eventId"`)) || !bytes.Contains(frame, []byte(`"provisional":true`)) {
+		t.Fatalf("provisional frame carries durable-event identity: %s", frame)
+	}
+	// A rendered frame that is edited to claim durability is refused by the
+	// canonical contract before it can be delivered.
+	guard, err := contractguard.NewGuard("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged := bytes.Replace(frame, []byte(`"provisional":true`), []byte(`"provisional":false`), 1)
+	if err := guard.Require(context.Background(), contractguard.DeltaOut, AgentStreamDeltaSchemaURI, forged); err == nil {
+		t.Fatal("a delta claiming durability passed the provisional contract")
+	}
+}
+
+// A provisional channel cannot be built from a guard that was never
+// configured: the bound validator is absent rather than merely broken, so a
+// miswired composition fails where it is built.
+func TestProvisionalChannelRefusesAnUnboundValidator(t *testing.T) {
+	var absent *contractguard.Guard
+	if _, err := NewDeltaBroker(absent.At(contractguard.DeltaOut)); err == nil {
+		t.Fatal("a provisional channel was built from an unconfigured guard")
+	}
+	guard, err := contractguard.NewGuard("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewDeltaBroker(guard.At("not-a-boundary")); err == nil {
+		t.Fatal("a provisional channel was built on an unregistered trust boundary")
+	}
+}
+
+// Delta validation is a complete precondition of the canonical contract, so
+// anything it accepts is publishable and nothing it accepts is later refused
+// at the boundary — the rejection counter stays at zero.
+func TestDeltaValidationIsACompletePreconditionOfTheContract(t *testing.T) {
+	overlong := strings.Repeat("a", 129)
+	for name, mutate := range map[string]func(*Delta){
+		"overlong turn identity": func(d *Delta) { d.TurnID = overlong },
+		"malformed run identity": func(d *Delta) { d.RunID = "run/1" },
+		"overlong workspace":     func(d *Delta) { d.WorkspaceID = overlong },
+		"malformed trace":        func(d *Delta) { d.Traceparent = "not-a-traceparent" },
+	} {
+		value := validDelta()
+		mutate(&value)
+		if err := ValidateDelta(value); err == nil {
+			t.Fatalf("%s was accepted by delta validation", name)
+		}
+	}
+	broker := newTestDeltaBroker(t)
+	for _, channel := range []string{"token", "text", "field", "progress"} {
+		value := validDelta()
+		value.Channel = channel
+		value.TurnID = strings.Repeat("t", 128)
+		if err := broker.Publish(context.Background(), value); err != nil {
+			t.Fatalf("a delta at the accepted bounds was refused: %v", err)
+		}
+	}
+	if broker.Rejected() != 0 {
+		t.Fatalf("the canonical contract refused %d deltas that validation accepted", broker.Rejected())
+	}
 }

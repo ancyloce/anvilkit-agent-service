@@ -67,10 +67,8 @@ func ValidateBytes(raw []byte, bounds Bounds) error {
 	if _, err := contractvalidator.Admit(raw); err != nil {
 		return eventProblem("event violates strict JSON admission")
 	}
-	for _, prohibited := range []string{"prompt", "puckData", "canvas", "pageIR", "componentSource", "imageBytes", "signedURL", "continuation", "secret"} {
-		if strings.Contains(strings.ToLower(string(raw)), strings.ToLower(prohibited)) {
-			return eventProblem("event carries prohibited content")
-		}
+	if prohibitedContent(string(raw)) {
+		return eventProblem("event carries prohibited content")
 	}
 	var event struct {
 		Kind                 string            `json:"kind"`

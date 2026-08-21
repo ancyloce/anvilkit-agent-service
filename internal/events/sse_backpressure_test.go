@@ -60,8 +60,9 @@ func TestSlowConsumerDisconnectRecordsLastSentCursor(t *testing.T) {
 	if err == nil {
 		t.Fatal("a stalled consumer must disconnect the stream")
 	}
-	if len(recorder.Records) != 1 || recorder.Records[0].Reason != "slow-consumer" || recorder.Records[0].LastEventID != "event.1" {
-		t.Fatalf("recorded cursor = %+v, want slow-consumer at event.1", recorder.Records)
+	recorded := recorder.Recorded()
+	if len(recorded) != 1 || recorded[0].Reason != "slow-consumer" || recorded[0].LastEventID != "event.1" {
+		t.Fatalf("recorded cursor = %+v, want slow-consumer at event.1", recorded)
 	}
 }
 
@@ -83,8 +84,9 @@ func TestClientDisconnectRecordsDeliveredCursor(t *testing.T) {
 	if err := stream.Serve(ctx, writer, Scope{WorkspaceID: "workspace.1", ProjectID: "project.1"}, "run.1", ""); err == nil {
 		t.Fatal("a cancelled stream must return the cancellation")
 	}
-	if len(recorder.Records) != 1 || recorder.Records[0].Reason != "client-closed" || recorder.Records[0].LastEventID != "event.1" {
-		t.Fatalf("recorded cursor = %+v, want client-closed at event.1", recorder.Records)
+	recorded := recorder.Recorded()
+	if len(recorded) != 1 || recorded[0].Reason != "client-closed" || recorded[0].LastEventID != "event.1" {
+		t.Fatalf("recorded cursor = %+v, want client-closed at event.1", recorded)
 	}
 }
 

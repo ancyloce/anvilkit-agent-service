@@ -1,9 +1,9 @@
 package events
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 )
@@ -26,11 +26,24 @@ type Delta struct {
 }
 
 // ValidateDelta enforces the provisional contract before anything reaches a
-// subscriber: a registered channel, bounded payload facts, and the same
-// prohibited-content denylist as every other outward shape.
+// subscriber: identities the canonical contract accepts, a registered
+// channel, bounded payload facts, and the same prohibited-content denylist as
+// every other outward shape.
+//
+// It is deliberately a complete precondition of the pinned AgentStreamDelta
+// contract, not a looser sketch of it. A producer publishes a delta on a path
+// that cannot fail the turn, so a delta that satisfies this and is then
+// refused at the contract boundary would go missing in silence; keeping the
+// two in step is what stops that from being possible.
 func ValidateDelta(value Delta) error {
-	if value.WorkspaceID == "" || value.RunID == "" {
-		return fmt.Errorf("stream delta requires workspace and run identities")
+	if !opaqueIdentity(value.WorkspaceID) || !opaqueIdentity(value.RunID) {
+		return fmt.Errorf("stream delta requires bounded workspace and run identities")
+	}
+	if value.TurnID != "" && !opaqueIdentity(value.TurnID) {
+		return fmt.Errorf("stream delta turn identity is not a bounded opaque identifier")
+	}
+	if value.Traceparent != "" && !matches(traceparentPattern, value.Traceparent) {
+		return fmt.Errorf("stream delta trace context is malformed")
 	}
 	switch value.Channel {
 	case "token", "text", "field", "progress":
@@ -47,11 +60,8 @@ func ValidateDelta(value Delta) error {
 		if key == "" || len(key) > 64 || len(field) > 1024 {
 			return fmt.Errorf("stream delta payload facts must be bounded strings")
 		}
-		lowered := strings.ToLower(key + " " + field)
-		for _, prohibited := range []string{"prompt", "puckdata", "canvas", "pageir", "componentsource", "imagebytes", "signedurl", "continuation", "secret"} {
-			if strings.Contains(lowered, prohibited) {
-				return fmt.Errorf("stream delta carries prohibited content")
-			}
+		if prohibitedContent(key + " " + field) {
+			return fmt.Errorf("stream delta carries prohibited content")
 		}
 	}
 	return nil
@@ -69,7 +79,7 @@ func RenderDelta(value Delta) ([]byte, error) {
 		"workspaceId": value.WorkspaceID,
 		"channel":     value.Channel,
 		"provisional": true,
-		"emittedAt":   value.EmittedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
+		"emittedAt":   value.EmittedAt.UTC().Format(evidenceTimeLayout),
 		"payload":     value.Payload,
 	}
 	if value.TurnID != "" {
@@ -93,10 +103,19 @@ type DeltaBroker struct {
 	subscribers map[string]map[int]chan []byte
 	next        int
 	dropped     int
+	rejected    int
+	validator   ContractValidator
 }
 
-func NewDeltaBroker() *DeltaBroker {
-	return &DeltaBroker{subscribers: make(map[string]map[int]chan []byte)}
+// NewDeltaBroker builds the provisional channel. The contract validator is
+// required: a delta reaches a live subscriber only after proving the
+// canonical provisional contract, so a frame that claims durability cannot
+// leave the service even if a producer renders one.
+func NewDeltaBroker(validator ContractValidator) (*DeltaBroker, error) {
+	if validator == nil {
+		return nil, fmt.Errorf("stream delta broker: a contract validator is required")
+	}
+	return &DeltaBroker{subscribers: make(map[string]map[int]chan []byte), validator: validator}, nil
 }
 
 func deltaKey(workspaceID, runID string) string { return workspaceID + "\x00" + runID }
@@ -104,10 +123,20 @@ func deltaKey(workspaceID, runID string) string { return workspaceID + "\x00" + 
 // Publish validates, renders, and delivers one delta to every live subscriber
 // without ever blocking the producer: a full subscriber buffer drops the
 // delta for that subscriber.
-func (b *DeltaBroker) Publish(value Delta) error {
+func (b *DeltaBroker) Publish(ctx context.Context, value Delta) error {
 	rendered, err := RenderDelta(value)
 	if err != nil {
 		return err
+	}
+	if err := b.validator.Require(ctx, AgentStreamDeltaSchemaURI, rendered); err != nil {
+		// A producer publishes on a path that must not fail the turn, so a
+		// rejection here would otherwise be invisible. ValidateDelta is a
+		// complete precondition of this contract, so reaching this is a
+		// defect: count it so a silent streaming outage is diagnosable.
+		b.lock.Lock()
+		b.rejected++
+		b.lock.Unlock()
+		return fmt.Errorf("validate stream delta against its canonical contract: %w", err)
 	}
 	b.lock.Lock()
 	defer b.lock.Unlock()
@@ -122,10 +151,18 @@ func (b *DeltaBroker) Publish(value Delta) error {
 }
 
 // Dropped reports how many deltas were dropped on full subscriber buffers.
+// Rejected reports how many were refused by the canonical contract; it is
+// zero unless ValidateDelta and the contract have drifted apart.
 func (b *DeltaBroker) Dropped() int {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	return b.dropped
+}
+
+func (b *DeltaBroker) Rejected() int {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	return b.rejected
 }
 
 // Subscribe attaches a live consumer to one run's provisional channel. The

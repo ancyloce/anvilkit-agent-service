@@ -3,8 +3,11 @@ package events
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"time"
+
+	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
 )
 
 // AgentEventSchemaURI pins the canonical AgentEvent contract every projected
@@ -122,6 +125,13 @@ func Project(projection Projection, bounds Bounds) ([]byte, error) {
 	if (projection.Payload != nil) == (projection.Artifact != nil) {
 		return nil, fmt.Errorf("public event projection: exactly one of payload or artifact reference is required")
 	}
+	// The payload's field set must be one the registry declares for this
+	// event type. Without this the projector would accept any bounded map,
+	// and a new field could reach the public wire without touching the
+	// registry the projector's pinned identity is computed from.
+	if projection.Payload != nil && !registeredPayload(projection.Type, projection.Payload) {
+		return nil, fmt.Errorf("public event projection: %q has no registered payload vocabulary matching the projected fields", projection.Type)
+	}
 	envelope := map[string]any{
 		"kind":                 "AgentEvent",
 		"eventId":              projection.EventID,
@@ -154,4 +164,88 @@ func Project(projection Projection, bounds Bounds) ([]byte, error) {
 		return nil, fmt.Errorf("validate projected public event: %w", err)
 	}
 	return rendered, nil
+}
+
+// PublicEventTypes lists the closed public registry in registry order. It is
+// the projector's allowlist, readable by anything that has to prove nothing
+// outside it is externally observable.
+func PublicEventTypes() []string {
+	return []string{TypeRunCreated, TypeStateChanged, TypeInputRequested, TypeApprovalRequested, TypeArtifactAvailable, TypeProblemRecorded}
+}
+
+// PublicSubjectTypes lists the registered subject kinds a public event may
+// be attributed to.
+func PublicSubjectTypes() []string { return []string{"system", "user"} }
+
+// PublicPayloadVocabularies reports, per public event type, every field set a
+// payload of that type may carry on the public wire. It is derived from the
+// payload constructors themselves rather than restated beside them, so the
+// reported vocabulary cannot drift away from the one the projector emits —
+// and Project enforces it, so the vocabulary is a rule rather than a
+// description. run.artifact-available carries no payload at all: it is
+// projected through its bounded artifact reference.
+func PublicPayloadVocabularies() map[string][][]string {
+	return map[string][][]string{
+		TypeRunCreated:        {payloadFields(CreatedPayload("")), payloadFields(ChildCreatedPayload("", "", ""))},
+		TypeStateChanged:      {payloadFields(StateChangedPayload("", ""))},
+		TypeInputRequested:    {payloadFields(InputRequestedPayload("", 0, ""))},
+		TypeApprovalRequested: {payloadFields(ApprovalRequestedPayload("", "", 0, ""))},
+		TypeProblemRecorded:   {payloadFields(ProblemPayload("", ""))},
+		TypeArtifactAvailable: nil,
+	}
+}
+
+func payloadFields(payload map[string]string) []string {
+	fields := make([]string, 0, len(payload))
+	for field := range payload {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	return fields
+}
+
+// registeredPayload reports whether a payload's field set is one of the
+// vocabularies registered for its event type.
+func registeredPayload(eventType string, payload map[string]string) bool {
+	for _, vocabulary := range PublicPayloadVocabularies()[eventType] {
+		if len(vocabulary) != len(payload) {
+			continue
+		}
+		matched := true
+		for _, field := range vocabulary {
+			if _, present := payload[field]; !present {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			return true
+		}
+	}
+	return false
+}
+
+// ProjectorDigest is the identity of the repository-owned projection ruleset
+// (ADR-020 §2): the closed event registry, the registered subject kinds, the
+// complete public payload vocabularies, the prohibited-content categories,
+// and the pinned AgentEvent contract that fixes the envelope itself. It is
+// computed from the live rules, so widening what the projector can put on the
+// public wire always changes it — and a pinned digest turns that into a
+// reviewed change rather than a silent one.
+func ProjectorDigest() (string, error) {
+	ruleset, err := json.Marshal(map[string]any{
+		"eventTypes":          PublicEventTypes(),
+		"subjectTypes":        PublicSubjectTypes(),
+		"payloadVocabularies": PublicPayloadVocabularies(),
+		"prohibitedContent":   ProhibitedContentCategories(),
+		"envelopeContract":    AgentEventSchemaURI,
+	})
+	if err != nil {
+		return "", fmt.Errorf("render projector ruleset: %w", err)
+	}
+	digest, err := canonical.Digest(ruleset)
+	if err != nil {
+		return "", fmt.Errorf("digest projector ruleset: %w", err)
+	}
+	return digest, nil
 }

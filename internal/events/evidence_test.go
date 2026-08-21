@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -52,6 +53,17 @@ func TestEvidenceSequencesAreIndependentAndIdempotent(t *testing.T) {
 	}
 }
 
+// readAuthority is the complete accessor authority the controlled store
+// requires, so a test that needs a permitted read states one explicitly.
+func readAuthority() EvidenceAuthority {
+	return EvidenceAuthority{
+		Scope:     Scope{WorkspaceID: "workspace.1", ProjectID: "project.1"},
+		Accessor:  "operator",
+		Purpose:   "incident-debug",
+		Clearance: "restricted",
+	}
+}
+
 // Evidence reads are access-audited: an anonymous or purposeless read is not
 // a mode.
 func TestEvidenceReadsRequireAccessorAndPurpose(t *testing.T) {
@@ -59,18 +71,91 @@ func TestEvidenceReadsRequireAccessorAndPurpose(t *testing.T) {
 	if _, err := store.AppendEvidence(context.Background(), validEvidence("evidence.1")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.ReadEvidence(context.Background(), Scope{WorkspaceID: "workspace.1", ProjectID: "project.1"}, "run.1", "", "debug", 10); err == nil {
+	anonymous := readAuthority()
+	anonymous.Accessor = ""
+	if _, err := store.ReadEvidence(context.Background(), anonymous, "run.1", 10); err == nil {
 		t.Fatal("an anonymous evidence read was allowed")
 	}
-	if _, err := store.ReadEvidence(context.Background(), Scope{WorkspaceID: "workspace.1", ProjectID: "project.1"}, "run.1", "operator", "", 10); err == nil {
+	purposeless := readAuthority()
+	purposeless.Purpose = ""
+	if _, err := store.ReadEvidence(context.Background(), purposeless, "run.1", 10); err == nil {
 		t.Fatal("a purposeless evidence read was allowed")
 	}
-	records, err := store.ReadEvidence(context.Background(), Scope{WorkspaceID: "workspace.1", ProjectID: "project.1"}, "run.1", "operator", "incident-debug", 10)
+	records, err := store.ReadEvidence(context.Background(), readAuthority(), "run.1", 10)
 	if err != nil || len(records) != 1 {
 		t.Fatalf("audited read records=%d err=%v", len(records), err)
 	}
 	if len(store.Reads) != 1 || store.Reads[0] != "operator:incident-debug" {
 		t.Fatalf("access audit=%v", store.Reads)
+	}
+}
+
+// An evidence read reaches exactly the tenant the accessor is authorized for,
+// never a neighbouring one, and never a classification above the accessor's
+// clearance. Both denials are silent by design: an unauthorized reader learns
+// nothing about what exists.
+func TestEvidenceReadsAreTenantScopedAndClearanceBound(t *testing.T) {
+	store := NewMemoryEvidence()
+	restricted := validEvidence("evidence.restricted")
+	restricted.Classification = "restricted"
+	for _, fact := range []Evidence{validEvidence("evidence.1"), restricted} {
+		if _, err := store.AppendEvidence(context.Background(), fact); err != nil {
+			t.Fatal(err)
+		}
+	}
+	neighbour := readAuthority()
+	neighbour.Scope.WorkspaceID = "workspace.2"
+	if records, err := store.ReadEvidence(context.Background(), neighbour, "run.1", 10); err != nil || len(records) != 0 {
+		t.Fatalf("a neighbouring workspace read records=%d err=%v, want none", len(records), err)
+	}
+	sibling := readAuthority()
+	sibling.Scope.ProjectID = "project.2"
+	if records, err := store.ReadEvidence(context.Background(), sibling, "run.1", 10); err != nil || len(records) != 0 {
+		t.Fatalf("a sibling project read records=%d err=%v, want none", len(records), err)
+	}
+	limited := readAuthority()
+	limited.Clearance = "internal"
+	records, err := store.ReadEvidence(context.Background(), limited, "run.1", 10)
+	if err != nil || len(records) != 1 || records[0].EvidenceID != "evidence.1" {
+		t.Fatalf("clearance-bound read records=%d err=%v, want only the internal fact", len(records), err)
+	}
+	unregistered := readAuthority()
+	unregistered.Clearance = "unbounded"
+	if _, err := store.ReadEvidence(context.Background(), unregistered, "run.1", 10); err == nil {
+		t.Fatal("an unregistered clearance was accepted")
+	}
+}
+
+// Retention bounds disclosure: evidence past its governed window is no longer
+// returned, while the record itself stays immutable so its integrity digest
+// keeps attesting the document it was computed over.
+func TestEvidencePastItsRetentionWindowIsNoLongerDisclosed(t *testing.T) {
+	recorded := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	now := recorded
+	store := NewMemoryEvidence(WithEvidenceClock(func() time.Time { return now }))
+	operational := validEvidence("evidence.operational")
+	operational.Retention = "operational"
+	for _, fact := range []Evidence{operational, validEvidence("evidence.audit")} {
+		if _, err := store.AppendEvidence(context.Background(), fact); err != nil {
+			t.Fatal(err)
+		}
+	}
+	operationalWindow, err := RetentionWindow("operational")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = recorded.Add(operationalWindow).Add(time.Second)
+	records, err := store.ReadEvidence(context.Background(), readAuthority(), "run.1", 10)
+	if err != nil || len(records) != 1 || records[0].EvidenceID != "evidence.audit" {
+		t.Fatalf("post-window read records=%d err=%v, want only the audit-retained fact", len(records), err)
+	}
+	auditWindow, err := RetentionWindow("audit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = recorded.Add(auditWindow).Add(time.Second)
+	if records, err := store.ReadEvidence(context.Background(), readAuthority(), "run.1", 10); err != nil || len(records) != 0 {
+		t.Fatalf("expired read records=%d err=%v, want none", len(records), err)
 	}
 }
 
@@ -112,5 +197,105 @@ func TestEvidenceAndPublicEventsAreDisjointShapes(t *testing.T) {
 	}
 	if !strings.Contains(string(rendered), `"kind":"AgentEvidence"`) || !strings.Contains(string(rendered), `"evidenceSequence":1`) {
 		t.Fatalf("rendered evidence lacks its kind or sequence: %s", rendered)
+	}
+}
+
+// A public event type is refused as an evidence namespace by the registry
+// check itself, not incidentally by the namespace pattern: the two lists stay
+// independently enforced.
+func TestPublicEventTypesAreRefusedAsEvidenceNamespaces(t *testing.T) {
+	for _, public := range PublicEventTypes() {
+		value := validEvidence("evidence.public-type")
+		value.Type = public
+		err := ValidateEvidence(value)
+		if err == nil {
+			t.Fatalf("%q was accepted as an evidence namespace", public)
+		}
+		if !strings.Contains(err.Error(), "public event type") {
+			t.Fatalf("%q was refused for the wrong reason: %v", public, err)
+		}
+	}
+}
+
+// Evidence identities and correlation references must be identifiers the
+// canonical contract accepts, so validation is a complete precondition of the
+// contract rather than a looser sketch of it.
+func TestEvidenceIdentitiesMustSatisfyTheCanonicalBounds(t *testing.T) {
+	overlong := strings.Repeat("a", 129)
+	cases := map[string]func(*Evidence){
+		"overlong evidence identity": func(e *Evidence) { e.EvidenceID = overlong },
+		"malformed run identity":     func(e *Evidence) { e.RunID = "run/1" },
+		"overlong turn correlation":  func(e *Evidence) { e.TurnID = overlong },
+		"malformed workflow":         func(e *Evidence) { e.WorkflowID = "workflow 1" },
+		"malformed trace context":    func(e *Evidence) { e.Traceparent = "not-a-traceparent" },
+		"missing policy digest":      func(e *Evidence) { e.Producer.PolicyDigest = "" },
+	}
+	for name, mutate := range cases {
+		value := validEvidence("evidence.bounds")
+		mutate(&value)
+		if err := ValidateEvidence(value); err == nil {
+			t.Fatalf("%s was accepted", name)
+		}
+	}
+}
+
+// Both stores bound a page identically, so a caller cannot get an unbounded
+// read from one and a silently truncated page from the other.
+func TestEvidencePagesAreBoundedIdentically(t *testing.T) {
+	if BoundedEvidencePage(0) != MaximumEvidencePage || BoundedEvidencePage(-1) != MaximumEvidencePage {
+		t.Fatal("a non-positive page request must resolve to the bounded maximum")
+	}
+	if BoundedEvidencePage(MaximumEvidencePage+1) != MaximumEvidencePage {
+		t.Fatal("an oversized page request must resolve to the bounded maximum")
+	}
+	if BoundedEvidencePage(7) != 7 {
+		t.Fatal("a bounded page request must be honoured")
+	}
+	store := NewMemoryEvidence()
+	for index := 0; index < 5; index++ {
+		if _, err := store.AppendEvidence(context.Background(), validEvidence("evidence."+strconv.Itoa(index))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	full, err := store.ReadEvidence(context.Background(), readAuthority(), "run.1", 0)
+	if err != nil || len(full) != 5 {
+		t.Fatalf("unbounded request records=%d err=%v", len(full), err)
+	}
+	page, err := store.ReadEvidence(context.Background(), readAuthority(), "run.1", 2)
+	if err != nil || len(page) != 2 {
+		t.Fatalf("bounded request records=%d err=%v", len(page), err)
+	}
+	if err := ValidateEvidenceRun("run/1"); err == nil {
+		t.Fatal("a malformed run identity was accepted by an evidence read")
+	}
+}
+
+// The governed retention categories and the deadline derived from them are
+// one authority: a store that filters per category reads the same list.
+func TestRetentionCategoriesAndDerivedDeadlinesAreOneAuthority(t *testing.T) {
+	categories := RetentionCategories()
+	if len(categories) != 3 {
+		t.Fatalf("registered retention categories=%v", categories)
+	}
+	recorded := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	cutoffs, err := RetentionCutoffs(recorded)
+	if err != nil || len(cutoffs) != len(categories) {
+		t.Fatalf("cutoffs=%v err=%v", cutoffs, err)
+	}
+	for _, category := range categories {
+		window, err := RetentionWindow(category)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline, err := DisclosureDeadline(recorded, category)
+		if err != nil || !deadline.Equal(recorded.Add(window)) {
+			t.Fatalf("%s deadline=%v err=%v", category, deadline, err)
+		}
+		if !cutoffs[category].Equal(recorded.Add(-window)) {
+			t.Fatalf("%s cutoff=%v", category, cutoffs[category])
+		}
+	}
+	if _, err := DisclosureDeadline(recorded, "forever"); err == nil {
+		t.Fatal("an unregistered retention category yielded a deadline")
 	}
 }

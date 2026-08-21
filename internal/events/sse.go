@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
@@ -199,9 +200,12 @@ func streamConnectionID() (string, error) {
 	return "stream." + hex.EncodeToString(raw), nil
 }
 
-// MemoryCursorRecorder records stream cursors in memory for tests.
+// MemoryCursorRecorder records stream cursors in memory for tests. Concurrent
+// connections to one run record through the same recorder, so it is safe for
+// concurrent use exactly as the durable recorder is.
 type MemoryCursorRecorder struct {
-	Records []RecordedCursor
+	lock    sync.Mutex
+	records []RecordedCursor
 }
 
 type RecordedCursor struct {
@@ -213,8 +217,17 @@ type RecordedCursor struct {
 }
 
 func (r *MemoryCursorRecorder) RecordCursor(_ context.Context, scope Scope, runID, connectionID, lastEventID, reason string) error {
-	r.Records = append(r.Records, RecordedCursor{Scope: scope, RunID: runID, ConnectionID: connectionID, LastEventID: lastEventID, Reason: reason})
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	r.records = append(r.records, RecordedCursor{Scope: scope, RunID: runID, ConnectionID: connectionID, LastEventID: lastEventID, Reason: reason})
 	return nil
+}
+
+// Recorded returns a copy of everything recorded so far.
+func (r *MemoryCursorRecorder) Recorded() []RecordedCursor {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	return append([]RecordedCursor(nil), r.records...)
 }
 
 func WriteProblem(response http.ResponseWriter, err error) {
