@@ -249,6 +249,7 @@ type BudgetController interface {
 	Reservation(context.Context, budget.Scope, budget.ReservationID) (budget.Reservation, error)
 	Reconcile(ctx context.Context, scope budget.Scope, id budget.ReservationID, generation budget.Generation, finalCost *int64, release bool, actor string) (budget.Reservation, error)
 	ReconcileSuperseded(ctx context.Context, scope budget.Scope, rootRunID string, current budget.Generation, actor string) ([]budget.Reservation, error)
+	RecoverSupersededFinality(ctx context.Context, scope budget.Scope, rootRunID string, actor string) ([]budget.Reservation, error)
 }
 
 // Config wires the executor. Every dependency is required; the executor
@@ -2441,7 +2442,7 @@ func (e *Executor) settleRunBudget(ctx context.Context, snapshot runs.Snapshot, 
 		return fmt.Errorf("read run budget reservation for settlement: %w", err)
 	}
 	if reservation.Released {
-		return nil
+		return e.recoverSupersededBudget(ctx, snapshot)
 	}
 	if err := e.cfg.Budget.Observe(ctx, budget.Observation{
 		ID:                  "budget:final:" + string(snapshot.RunID) + ":g" + strconv.FormatUint(snapshot.ExecutionGeneration, 10),
@@ -2461,8 +2462,34 @@ func (e *Executor) settleRunBudget(ctx context.Context, snapshot runs.Snapshot, 
 		return fmt.Errorf("re-read run budget reservation for settlement: %w", err)
 	}
 	observed := reservation.ObservedMicros
+	// The reservation may have been superseded between its finality being
+	// recorded and this settlement — an explicit retry can advance the root
+	// aggregate's generation while this attempt is still finishing. The
+	// controller completes that settlement on superseded terms rather than
+	// refusing it, so a late final no longer waits for another retry to run
+	// the superseded sweep.
 	if _, err := e.cfg.Budget.Reconcile(ctx, scope, id, generation, &observed, release, budget.SettlementActor); err != nil {
 		return fmt.Errorf("settle run budget reservation: %w", err)
+	}
+	return e.recoverSupersededBudget(ctx, snapshot)
+}
+
+// recoverSupersededBudget converges the root aggregate's superseded holds that
+// a crash left authoritatively final but unreconciled. The window it closes is
+// the one between recording an attempt's finality and settling against it:
+// nothing re-drives a hold whose generation is already gone, because that
+// generation's workflow will not replay and the ordinary settlement path is
+// fenced on a generation that can never be current again.
+//
+// It runs from every terminal budget settlement, so recovery no longer waits
+// for the next explicit retry to happen to reserve. It is derived entirely
+// from durable ledger state and settles only downward to reported usage, so
+// running it on every settlement — and again after a crash — converges instead
+// of accumulating. A failure is returned rather than swallowed: the settlement
+// above is already durable, so replay re-drives this and converges.
+func (e *Executor) recoverSupersededBudget(ctx context.Context, snapshot runs.Snapshot) error {
+	if _, err := e.cfg.Budget.RecoverSupersededFinality(ctx, budgetScopeOf(snapshot), string(snapshot.RootRunID), budget.SettlementActor); err != nil {
+		return fmt.Errorf("recover superseded budget reservations: %w", err)
 	}
 	return nil
 }

@@ -126,7 +126,7 @@ func TestReplayedReservationConvergesWithoutDoubleHold(t *testing.T) {
 	}
 }
 
-func TestGenerationFencingDeniesSupersededReserveDispatchAndSettle(t *testing.T) {
+func TestGenerationFencingDeniesSupersededReserveAndDispatch(t *testing.T) {
 	controller, _, generations, _, generation := controller(t)
 	reservation, err := controller.ReserveInitial(context.Background(), estimate("reservation-1", "run", 100), generation)
 	if err != nil {
@@ -144,8 +144,19 @@ func TestGenerationFencingDeniesSupersededReserveDispatchAndSettle(t *testing.T)
 	if err := controller.Observe(context.Background(), observation("observation", reservation.ID, 10, true)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controller.Reconcile(context.Background(), testScope, reservation.ID, generation, ptr(int64(10)), true, SettlementActor); err == nil {
-		t.Fatal("superseded generation settled")
+	// Late finality on a superseded generation reconciles rather than
+	// stranding the hold at a worst case nothing spent — but it settles on
+	// superseded terms: reduced to the usage actually reported, never
+	// released however the caller asked, and never dispatchable again.
+	settled, err := controller.Reconcile(context.Background(), testScope, reservation.ID, generation, ptr(int64(10)), true, SettlementActor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.Released || settled.UpperBoundMicros != 10 || settled.ObservedMicros != 10 || settled.Generation != generation {
+		t.Fatalf("settled = %+v, want a non-releasing reduction to reported usage on its own generation", settled)
+	}
+	if err := controller.Dispatch(context.Background(), testScope, reservation.ID, generation, func(context.Context, Reservation) error { return nil }); err == nil {
+		t.Fatal("a settled superseded reservation regained dispatch authority")
 	}
 	// The replacement generation reserves against the still-open prior hold.
 	replacement := estimate("reservation-2", "run", 200)

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	sdk "github.com/dbos-inc/dbos-transact-golang/dbos"
-	_ "github.com/dbos-inc/dbos-transact-golang/dbos/driver/sqlite"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
 )

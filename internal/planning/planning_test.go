@@ -81,12 +81,12 @@ func (b requestBudget) Authorize(int, Usage) (AttemptLimits, error) {
 
 func request(scenario string) modelgateway.InvokeRequest {
 	registry, _ := modelgateway.NewRegistry(modelgateway.Snapshot{Version: "fake-v1", Providers: []modelgateway.Provider{{ID: modelgateway.FakeProviderID, ModelVersion: "fake-v1", Regions: []string{"test"}, DataClasses: []modelgateway.DataClass{modelgateway.Internal}, Capabilities: []string{"plan"}, SafetyLevel: 3, MaximumCostMicros: 600, Priority: 1, Enabled: true}}})
-	selection, _ := registry.Select("workspace", modelgateway.Policy{Version: "p1", AllowedProviders: []modelgateway.ProviderID{modelgateway.FakeProviderID}, AllowedRegions: []string{"test"}, DataClasses: []modelgateway.DataClass{modelgateway.Internal}, Capability: "plan", MinimumSafety: 2, MaximumCostMicros: 1000})
+	selection, _ := registry.Select("workspace", modelgateway.Policy{Version: "policy-v1", AllowedProviders: []modelgateway.ProviderID{modelgateway.FakeProviderID}, AllowedRegions: []string{"test"}, DataClasses: []modelgateway.DataClass{modelgateway.Internal}, Capability: "plan", MinimumSafety: 2, MaximumCostMicros: 1000})
 	return modelgateway.InvokeRequest{RunID: "run-" + scenario, WorkspaceID: "workspace", ProjectID: "project", IdempotencyKey: "run-" + scenario + ":g1:turn-0000", Selection: selection, Context: []byte("minimal synthetic context"), DataClasses: []modelgateway.DataClass{modelgateway.Internal}, MaximumOutputBytes: 4096, MaximumInputTokens: 256, MaximumOutputTokens: 2000, MaximumTotalTokens: 2256, MaximumCostMicros: 1000, Timeout: time.Second, MaximumAttempts: 1, RetryBudget: 0, Scenario: scenario}
 }
 func corpusGuard(t *testing.T) (*toolpolicy.Guard, toolpolicy.Intent, toolpolicy.CurrentAuthority) {
 	t.Helper()
-	policy := toolpolicy.PolicyReference{PolicyID: "policy", Version: "p1", Digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+	policy := toolpolicy.PolicyReference{PolicyID: "policy", Version: "policy-v1", Digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
 	schema := toolpolicy.SchemaReference{ComponentName: "anvilkit.contract.schema.synthetic", Digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
 	definition := func(id, capability string) toolpolicy.Definition {
 		return toolpolicy.Definition{Kind: "ToolDefinition", Capability: capability, InputSchema: schema, OutputSchema: schema, SideEffectClass: "none", RiskClass: "low", ApprovalPolicy: policy, TimeoutPolicy: toolpolicy.TimeoutPolicy{TimeoutMilliseconds: 1000}, RetryPolicy: toolpolicy.RetryPolicy{MaximumAttempts: 1, Retryability: []string{}}, AcceptedDataClasses: []string{"internal"}, ToolID: id}

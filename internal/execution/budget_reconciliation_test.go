@@ -80,8 +80,16 @@ func TestReplacementReconcilesSupersededHoldsBeforeReserving(t *testing.T) {
 	if _, err := h.service.Retry(ctx, interrupts.Write{Scope: testScope(), RunID: testRunID, ExpectedVersion: snapshot.Version, IdempotencyKey: "retry-superseded", Traceparent: traceparent}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.budgetController.Reconcile(ctx, testBudgetScope, sibling.ID, 1, nil, false, budget.SettlementActor); err == nil {
-		t.Fatal("the ordinary settlement path still reached a superseded hold; the fixture proves nothing")
+	// Nothing has reconciled the sibling hold yet: the retry only advanced the
+	// aggregate's generation, so the unspent worst case is still held against
+	// the root. What reconciles it below is the replacement generation's own
+	// reservation, which is the production path under test.
+	stranded, err := h.budgetLedger.Reservation(ctx, testBudgetScope, sibling.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stranded.UpperBoundMicros != siblingWorstCase {
+		t.Fatalf("sibling hold after the retry = %+v, want its worst case still held until the replacement reserves", stranded)
 	}
 
 	request := h.openInputRequest()

@@ -1,6 +1,13 @@
 package dbos
 
+// The SQLite system database is a test affordance only: production runs on
+// Postgres, and the SDK registers a driver solely for the packages that import
+// it. Registering it here keeps the pure-Go SQLite engine — and the megabytes
+// of C-translated runtime behind it — out of the release binary, which the
+// approved resource budget measures.
 import (
+	_ "github.com/dbos-inc/dbos-transact-golang/dbos/driver/sqlite"
+
 	"context"
 	"encoding/json"
 	"fmt"

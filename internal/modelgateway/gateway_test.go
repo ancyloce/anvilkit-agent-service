@@ -16,7 +16,7 @@ func providers() Snapshot {
 	return Snapshot{Version: "v1", Providers: []Provider{{ID: "preferred", ModelVersion: "preferred-v1", Regions: []string{"us"}, DataClasses: []DataClass{Public, Internal}, Capabilities: []string{"plan"}, SafetyLevel: 3, MaximumCostMicros: 100, Priority: 1, Enabled: true}, {ID: "backup", ModelVersion: "backup-v1", Regions: []string{"eu"}, DataClasses: []DataClass{Public}, Capabilities: []string{"plan"}, Retention: true, Training: true, SafetyLevel: 1, MaximumCostMicros: 1000, Priority: 2, Enabled: true}}}
 }
 func policy() Policy {
-	return Policy{Version: "p1", AllowedProviders: []ProviderID{"preferred", "backup"}, AllowedRegions: []string{"us"}, DataClasses: []DataClass{Internal}, Capability: "plan", MinimumSafety: 2, MaximumCostMicros: 200}
+	return Policy{Version: "policy-v1", AllowedProviders: []ProviderID{"preferred", "backup"}, AllowedRegions: []string{"us"}, DataClasses: []DataClass{Internal}, Capability: "plan", MinimumSafety: 2, MaximumCostMicros: 200}
 }
 func TestEligibilityReasonsRefusalBeforeDisclosureAndHistoricalReplay(t *testing.T) {
 	registry, err := NewRegistry(providers())
@@ -261,7 +261,7 @@ func TestInvocationRecordsIdentityBeforeDisclosureAndEnforcesBounds(t *testing.T
 	provider := &adapter{retry: 1, response: AdapterResponse{Output: []byte(`{"ok":true}`), InputTokens: 2, OutputTokens: 2, CostMicros: 3}}
 	gateway, _ := NewGateway(map[ProviderID]Adapter{"preferred": provider}, recording, clock{time.Unix(1, 0)}, sleeper{})
 	response, record, err := gateway.Invoke(context.Background(), InvokeRequest{RunID: "run", WorkspaceID: "workspace", ProjectID: "project", IdempotencyKey: "run:g1:turn-0000", Selection: selection, Context: []byte("minimal"), DataClasses: []DataClass{Internal}, MaximumOutputBytes: 100, MaximumInputTokens: 10, MaximumOutputTokens: 10, MaximumTotalTokens: 20, MaximumCostMicros: 10, Timeout: time.Second, MaximumAttempts: 2, RetryBudget: time.Second, Budget: requestLimitsBudget{inputTokens: 10, outputTokens: 10, costMicros: 10}})
-	if err != nil || string(response.Output) != `{"ok":true}` || len(record.PhysicalAttempts) != 2 || record.RegistrySnapshotDigest != selection.SnapshotDigest || record.PolicyVersion != "p1" || record.PolicyDigest != selection.PolicyDigest || !reflect.DeepEqual(record.PolicySnapshot, selection.PolicySnapshot) || record.Provider != "preferred" || record.ModelVersion != "preferred-v1" || record.Region != "us" || recording.before != 1 {
+	if err != nil || string(response.Output) != `{"ok":true}` || len(record.PhysicalAttempts) != 2 || record.RegistrySnapshotDigest != selection.SnapshotDigest || record.PolicyVersion != "policy-v1" || record.PolicyDigest != selection.PolicyDigest || !reflect.DeepEqual(record.PolicySnapshot, selection.PolicySnapshot) || record.Provider != "preferred" || record.ModelVersion != "preferred-v1" || record.Region != "us" || recording.before != 1 {
 		t.Fatalf("record=%#v response=%#v err=%v", record, response, err)
 	}
 	provider.response.Output = make([]byte, 101)

@@ -209,8 +209,15 @@ func assertBudgetControllerLedger(t *testing.T, ctx context.Context, pool *pgxpo
 	if err := controller.Observe(ctx, final); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controller.Reconcile(ctx, budgetScope, reserved.ID, 1, ptrMicros(300), false, budget.SettlementActor); err == nil {
-		t.Fatal("a superseded generation settled")
+	// Late finality on a superseded generation settles against the durable
+	// ledger rather than stranding the hold — but on superseded terms only:
+	// reduced to reported usage, never released, generation untouched.
+	late, err := controller.Reconcile(ctx, budgetScope, reserved.ID, 1, ptrMicros(300), false, budget.SettlementActor)
+	if err != nil {
+		t.Fatalf("late finality on a superseded generation was refused: %v", err)
+	}
+	if late.Released || late.UpperBoundMicros != 300 || late.ObservedMicros != 300 || late.Generation != 1 {
+		t.Fatalf("late settlement = %+v, want a non-releasing reduction on the generation that made the hold", late)
 	}
 	// The replacement generation reserves against the still-open prior hold —
 	// in a fresh controller, as a restarted process would.
@@ -231,6 +238,145 @@ func assertBudgetControllerLedger(t *testing.T, ctx context.Context, pool *pgxpo
 	}
 	if _, err := pool.Exec(ctx, `UPDATE agent_control.budget_reservations SET released=false WHERE workspace_id='workspace-budget' AND reservation_id='budget:run-budget-root:g2'`); err == nil {
 		t.Fatal("a released reservation was revivable")
+	}
+}
+
+// assertLateSupersededFinalityRecovers proves the durable behaviour of the
+// window between an attempt's finality being recorded and its hold being
+// settled against it.
+//
+// The window is real: a replacement generation can start while the attempt it
+// replaces is still running, so finality arrives for a generation that is
+// already superseded. Settlement has to complete when that happens, and a
+// crash inside the window has to converge afterwards without any journal of
+// its own — nothing re-drives a hold whose generation is gone.
+func assertLateSupersededFinalityRecovers(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	const workspace = "workspace-late-final"
+	const project = "project-late-final"
+	const root = "run-late-final-root"
+	const worstCase = int64(400_000)
+	const actual = int64(3_000)
+	for _, tenant := range []string{workspace, "workspace-late-final-foreign"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO agent_control.agent_runs(workspace_id,project_id,run_id,state,version,execution_generation,next_event_sequence,snapshot) VALUES($1,$2,$3,'created',1,1,2,'{}')`, tenant, project, root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	newController := func() *budget.Controller {
+		t.Helper()
+		ledger, err := budgetpg.NewLedger(pool, func() time.Time { return time.Now().UTC() })
+		if err != nil {
+			t.Fatal(err)
+		}
+		generations, err := budgetpg.NewRunGenerations(pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		controller, err := budget.New(ledger, generations, discardExposure{}, realClock{}, budget.HeadroomPolicy{MaximumReservedMicros: 1_000_000, ReviewAtBasisPoints: 8000})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return controller
+	}
+	scope := budget.Scope{WorkspaceID: workspace, ProjectID: project}
+	controller := newController()
+	estimate := budget.Estimate{
+		ReservationID:     "budget:" + root + ":g1",
+		RootRunID:         root,
+		RunID:             root,
+		WorkspaceID:       workspace,
+		ProjectID:         project,
+		PolicyVersion:     "policy-v1",
+		BudgetVersion:     "budget-v1",
+		MaximumCostMicros: worstCase,
+		ExpiresAt:         time.Now().Add(time.Hour).UTC(),
+	}
+	prior, err := controller.ReserveInitial(ctx, estimate, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The aggregate retries while the first attempt is still running, and the
+	// replacement reserves against the still-open prior hold.
+	if _, err := pool.Exec(ctx, `UPDATE agent_control.agent_runs SET execution_generation=2,version=version+1 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3`, workspace, project, root); err != nil {
+		t.Fatal(err)
+	}
+	replacement := estimate
+	replacement.ReservationID = "budget:" + root + ":g2"
+	replacement.MaximumCostMicros = 500
+	if _, err := controller.ReserveReplacement(ctx, replacement, 2, prior.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Finality for the superseded attempt is recorded durably, and the process
+	// dies before settling against it.
+	if err := controller.Observe(ctx, budget.Observation{ID: "late-final-observation", Scope: scope, ReservationID: prior.ID, RootRunID: root, RunID: root, TaskID: "settlement", AttemptID: "attempt-late-final", ExecutionGeneration: 1, CostMicros: actual, Final: true}); err != nil {
+		t.Fatal(err)
+	}
+	var stranded int64
+	var strandedFinal bool
+	if err := pool.QueryRow(ctx, `SELECT upper_bound_micros,attempt_final FROM agent_control.budget_reservations WHERE workspace_id=$1 AND project_id=$2 AND reservation_id=$3`, workspace, project, prior.ID).Scan(&stranded, &strandedFinal); err != nil {
+		t.Fatal(err)
+	}
+	if stranded != worstCase || !strandedFinal {
+		t.Fatalf("crash window row = bound %d final %t, want a final hold still carrying its worst case", stranded, strandedFinal)
+	}
+
+	// A foreign tenant owning a root run of the very same identity, and itself
+	// a legitimate settlement authority, reaches nothing here.
+	foreign := budget.Scope{WorkspaceID: "workspace-late-final-foreign", ProjectID: project}
+	if swept, err := newController().RecoverSupersededFinality(ctx, foreign, root, budget.SettlementActor); err != nil || len(swept) != 0 {
+		t.Fatalf("foreign tenant sweep = %+v err=%v, want no reach across the tenant boundary", swept, err)
+	}
+	// Neither may an unauthorized actor, nor a caller whose view of the
+	// current generation is not the authority's own.
+	if _, err := newController().RecoverSupersededFinality(ctx, scope, root, "operator"); err == nil {
+		t.Fatal("an unauthorized actor ran the durable recovery sweep")
+	}
+	if _, err := newController().ReconcileSuperseded(ctx, scope, root, 1, budget.SettlementActor); err == nil {
+		t.Fatal("a stale view of the current generation settled superseded holds")
+	}
+
+	// A successor process recovers from durable state alone.
+	recovered, err := newController().RecoverSupersededFinality(ctx, scope, root, budget.SettlementActor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recovered) != 1 || recovered[0].ID != prior.ID || recovered[0].UpperBoundMicros != actual || recovered[0].Released {
+		t.Fatalf("recovered = %+v, want a single non-releasing reduction to reported usage", recovered)
+	}
+	// Recovery is idempotent, and replay of the interrupted settlement step
+	// converges on the same answer rather than failing on the settled hold.
+	if again, err := newController().RecoverSupersededFinality(ctx, scope, root, budget.SettlementActor); err != nil || len(again) != 0 {
+		t.Fatalf("repeat recovery = %+v err=%v, want a no-op", again, err)
+	}
+	replayed := newController()
+	if err := replayed.Observe(ctx, budget.Observation{ID: "late-final-observation", Scope: scope, ReservationID: prior.ID, RootRunID: root, RunID: root, TaskID: "settlement", AttemptID: "attempt-late-final", ExecutionGeneration: 1, CostMicros: actual, Final: true}); err != nil {
+		t.Fatalf("replayed final observation was refused: %v", err)
+	}
+	converged, err := replayed.Reconcile(ctx, scope, prior.ID, 1, ptrMicros(actual), true, budget.SettlementActor)
+	if err != nil || converged.UpperBoundMicros != actual || converged.Released {
+		t.Fatalf("replayed settlement = %+v err=%v, want convergence with no release", converged, err)
+	}
+
+	// The durable row proves what the recovery did and did not do: the unspent
+	// worst case is back, the attempt's real cost is still counted, the hold
+	// still belongs to the generation that made it, and it is not released.
+	var bound, observed int64
+	var generation uint64
+	var released bool
+	if err := pool.QueryRow(ctx, `SELECT upper_bound_micros,observed_micros,controller_generation,released FROM agent_control.budget_reservations WHERE workspace_id=$1 AND project_id=$2 AND reservation_id=$3`, workspace, project, prior.ID).Scan(&bound, &observed, &generation, &released); err != nil {
+		t.Fatal(err)
+	}
+	if bound != actual || observed != actual || generation != 1 || released {
+		t.Fatalf("recovered row = bound %d observed %d generation %d released %t", bound, observed, generation, released)
+	}
+	// And the hold has no authority to dispatch under any generation.
+	for name, attempt := range map[string]budget.Generation{"own-generation": 1, "current-generation": 2} {
+		if err := controller.Dispatch(ctx, scope, prior.ID, attempt, func(context.Context, budget.Reservation) error {
+			t.Fatalf("%s dispatched a recovered superseded reservation", name)
+			return nil
+		}); err == nil {
+			t.Fatalf("%s dispatch was permitted", name)
+		}
 	}
 }
 

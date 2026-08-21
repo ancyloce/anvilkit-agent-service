@@ -309,11 +309,34 @@ func (c *Controller) Reconcile(ctx context.Context, scope Scope, id ReservationI
 	if err != nil {
 		return Reservation{}, err
 	}
-	if actor != SettlementActor || generation == 0 || generation != reservation.Generation || generation != current {
+	if actor != SettlementActor || generation == 0 || generation != reservation.Generation || generation > current {
+		// A settling generation ahead of the durable authority is a stale or
+		// forged view of which generation is current, never a late one.
 		return Reservation{}, budgetProblem("stale or unauthorized reservation settlement")
 	}
 	if !reservation.AttemptFinal {
 		return Reservation{}, budgetProblem("reservation cannot reconcile before attempt finality")
+	}
+	if generation < current {
+		// Finality arrived for an attempt whose generation the aggregate has
+		// already superseded — the replacement started before this attempt's
+		// true cost was known. Refusing here is what used to strand the hold
+		// at its worst-case bound until some later retry happened to run the
+		// superseded sweep, so the settlement is completed now instead.
+		//
+		// It is completed on the superseded terms and no others: the hold is
+		// reduced to the usage its attempt actually reported, it is never
+		// released, and neither its expiry fence nor its generation moves. A
+		// superseded hold gains no authority to dispatch from being settled.
+		if finalCost != nil && *finalCost != reservation.ObservedMicros {
+			return Reservation{}, budgetProblem("a superseded generation settles only at its observed usage")
+		}
+		settled, _, err := c.settleSuperseded(ctx, scope, reservation, actor)
+		if err != nil {
+			return Reservation{}, err
+		}
+		c.reportExposure(ctx, scope, reservation.RootRunID)
+		return settled, nil
 	}
 	cost := reservation.UpperBoundMicros
 	if finalCost != nil {
@@ -372,33 +395,99 @@ func (c *Controller) ReconcileSuperseded(ctx context.Context, scope Scope, rootR
 		// exactly the mistake this path exists to avoid.
 		return nil, budgetProblem("stale or unauthorized reservation settlement")
 	}
+	return c.sweepSuperseded(ctx, scope, rootRunID, active, actor)
+}
+
+// RecoverSupersededFinality is the durable recovery path for the window
+// between recording a superseded attempt's finality and reconciling its hold.
+// A crash inside that window leaves a hold that is authoritatively final and
+// still carrying its full worst-case bound, and nothing re-drives it: the
+// generation that owned it is gone, so its workflow will not replay, and the
+// ordinary settlement path is fenced on a generation that can never be current
+// again.
+//
+// It needs no journal of its own to be replay-safe, because the work it has to
+// do is derivable from the durable ledger: a hold is outstanding exactly when
+// its attempt is final, it is unreleased, and its bound still exceeds the usage
+// that attempt reported. Settling it makes that predicate false, so running
+// this a second time — after a crash, on the next restart, from an operator
+// path — reports nothing further and changes nothing.
+//
+// Unlike ReconcileSuperseded it takes no caller view of which generation is
+// current, because a recovery sweep is not acting for one. It reads the
+// aggregate's generation authority directly, which is strictly stronger than
+// trusting a caller's view, and settles only generations that authority has
+// already superseded. Tenant scope is still required and still enforced: the
+// sweep only ever reaches reservations of one workspace, project, and root run.
+func (c *Controller) RecoverSupersededFinality(ctx context.Context, scope Scope, rootRunID string, actor string) ([]Reservation, error) {
+	if !scope.Valid() || rootRunID == "" {
+		return nil, budgetProblem("superseded settlement requires a scoped root run")
+	}
+	if actor != SettlementActor {
+		return nil, budgetProblem("stale or unauthorized reservation settlement")
+	}
+	active, err := c.current(ctx, scope, rootRunID)
+	if err != nil {
+		return nil, err
+	}
+	if active == 0 {
+		return nil, budgetProblem("stale or unauthorized reservation settlement")
+	}
+	return c.sweepSuperseded(ctx, scope, rootRunID, active, actor)
+}
+
+// sweepSuperseded settles every finalized hold of one root aggregate whose
+// generation the active one has superseded. Callers are responsible for
+// proving their authority to run it; what it guarantees is that only
+// superseded, authoritatively final holds are touched, and only ever downward
+// to reported usage.
+func (c *Controller) sweepSuperseded(ctx context.Context, scope Scope, rootRunID string, active Generation, actor string) ([]Reservation, error) {
 	held, err := c.ledger.RootReservations(ctx, scope, rootRunID)
 	if err != nil {
 		return nil, err
 	}
 	var settled []Reservation
 	for _, reservation := range held {
-		if reservation.Generation >= active || reservation.Released || !reservation.AttemptFinal {
+		if reservation.Generation >= active {
 			continue
 		}
-		if reservation.UpperBoundMicros == reservation.ObservedMicros {
-			// Already reconciled to its authoritative usage; there is no
-			// worst-case headroom left to give back.
-			continue
-		}
-		// The settlement is fenced on the reservation's own generation, which
-		// is what the ledger's monotonic guard checks. Authorization to make
-		// it at all came from the current-authority proof above.
-		value, err := c.ledger.Settle(ctx, Settlement{Scope: scope, ReservationID: reservation.ID, Generation: reservation.Generation, FinalCost: reservation.ObservedMicros, Release: false, Actor: actor})
+		value, changed, err := c.settleSuperseded(ctx, scope, reservation, actor)
 		if err != nil {
-			return nil, fmt.Errorf("settle superseded reservation %s: %w", reservation.ID, err)
+			return nil, err
 		}
-		settled = append(settled, value)
+		if changed {
+			settled = append(settled, value)
+		}
 	}
 	if len(settled) > 0 {
 		c.reportExposure(ctx, scope, rootRunID)
 	}
 	return settled, nil
+}
+
+// settleSuperseded reduces one superseded hold to the usage its physical
+// attempt authoritatively reported, and reports whether anything changed.
+//
+// It settles nothing whose finality is unknown — a hold whose attempt may
+// still be running keeps its full worst-case bound, because a superseded
+// generation is not evidence of what an attempt spent. It never releases: the
+// actual cost of every attempt stays counted against the root, which is what
+// all-attempt accounting means. It never clears the expiry fence and never
+// moves the generation, so a settled hold gains no authority to dispatch. And
+// a hold already at its reported usage is left alone, which is what makes
+// repetition a no-op.
+func (c *Controller) settleSuperseded(ctx context.Context, scope Scope, reservation Reservation, actor string) (Reservation, bool, error) {
+	if reservation.Released || !reservation.AttemptFinal || reservation.UpperBoundMicros == reservation.ObservedMicros {
+		return reservation, false, nil
+	}
+	// The settlement is fenced on the reservation's own generation, which is
+	// what the ledger's monotonic guard checks. Authorization to make it at
+	// all is the caller's to establish.
+	settled, err := c.ledger.Settle(ctx, Settlement{Scope: scope, ReservationID: reservation.ID, Generation: reservation.Generation, FinalCost: reservation.ObservedMicros, Release: false, Actor: actor})
+	if err != nil {
+		return Reservation{}, false, fmt.Errorf("settle superseded reservation %s: %w", reservation.ID, err)
+	}
+	return settled, true, nil
 }
 
 // SettlementActor names the one authority permitted to reduce or release a
