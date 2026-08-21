@@ -42,6 +42,8 @@ type scriptOps struct {
 	read           func() (InputRead, error)
 	openDelegation func(DelegationInput) (DelegationOpened, error)
 	delegateTurn   func(DelegateTurnInput) (DelegateTurnResult, error)
+	commit         func(int) (CommitResult, error)
+	review         func() (ReviewResult, error)
 	calls          map[string]int
 }
 
@@ -103,6 +105,9 @@ func (o *scriptOps) FinalizeCandidate(context.Context, OpID, FinalizeInput) (Fin
 }
 func (o *scriptOps) ResolveReview(context.Context, OpID, ReviewInput) (ReviewResult, error) {
 	o.note("review")
+	if o.review != nil {
+		return o.review()
+	}
 	return ReviewResult{Accepted: true, Version: 6}, nil
 }
 func (o *scriptOps) ReadApproval(context.Context, OpID, InterruptRef) (ApprovalRead, error) {
@@ -115,6 +120,9 @@ func (o *scriptOps) Revise(context.Context, OpID, ReviseInput) (Ack, error) {
 }
 func (o *scriptOps) Commit(context.Context, OpID, CommitInput) (CommitResult, error) {
 	o.note("commit")
+	if o.commit != nil {
+		return o.commit(o.calls["commit"])
+	}
 	return CommitResult{Outcome: CommitCompleted, Version: 9}, nil
 }
 func (o *scriptOps) Terminalize(context.Context, OpID, TerminalInput) (Ack, error) {
@@ -454,5 +462,103 @@ func TestDelegationRejectsUnboundedTurnLimit(t *testing.T) {
 		if ops.calls["delegate-turn"] != 0 {
 			t.Fatalf("turn limit %d opened %d specialist turns", limit, ops.calls["delegate-turn"])
 		}
+	}
+}
+
+// approvalRequiredReview routes the run through the approval boundary so it
+// reaches the governed commit.
+func approvalRequiredReview() (ReviewResult, error) {
+	return ReviewResult{Accepted: false, RequestID: "request.approval", TimeoutMillis: 1, Version: 6}, nil
+}
+
+// A run holding at the submit boundary is released as unresolved only after
+// its governed effect is durably escalated. The wake count is not the release
+// boundary: an operation that keeps answering "unsettled, not escalated" holds
+// the run for ever rather than handing back an unresolved run nobody was paged
+// for, and the workflow errors at its spin guard instead of releasing.
+func TestUnresolvedReleaseRequiresDurableEscalation(t *testing.T) {
+	ops := newScriptOps()
+	ops.turn = func(TurnInput) (TurnResult, error) {
+		return TurnResult{Decision: finalDecision()}, nil
+	}
+	ops.review = approvalRequiredReview
+	ops.commit = func(int) (CommitResult, error) {
+		return CommitResult{Unsettled: true, RetryAfterMillis: 1, Version: 9}, nil
+	}
+	outcome, err := AgentRunWorkflow(&scriptHost{}, ops, unitInput())
+	if err == nil {
+		t.Fatalf("an unescalated hold was released as %+v", outcome)
+	}
+	if ops.calls["commit"] != MaximumCommitWakes {
+		t.Fatalf("commit calls=%d, want the spin guard to bound the hold", ops.calls["commit"])
+	}
+	if ops.calls["terminalize"] != 0 {
+		t.Fatal("an unescalated hold terminalized the run")
+	}
+}
+
+// A reconciliation window larger than the workflow's own hold window still
+// reaches its escalation: the loop keeps reconciling until the operation
+// reports the durable escalation, whatever wake that lands on.
+func TestReconciliationWindowBeyondTheHoldWindowStillEscalatesBeforeRelease(t *testing.T) {
+	for _, escalateAt := range []int{1, commitHoldWakes, commitHoldWakes + 1, commitHoldWakes * 3} {
+		ops := newScriptOps()
+		ops.turn = func(TurnInput) (TurnResult, error) {
+			return TurnResult{Decision: finalDecision()}, nil
+		}
+		ops.review = approvalRequiredReview
+		ops.commit = func(call int) (CommitResult, error) {
+			return CommitResult{Unsettled: true, RetryAfterMillis: 1, Version: 9, Escalated: call >= escalateAt}, nil
+		}
+		outcome, err := AgentRunWorkflow(&scriptHost{}, ops, unitInput())
+		if err != nil || outcome.Terminal != TerminalUnresolved {
+			t.Fatalf("escalateAt=%d outcome=%+v err=%v", escalateAt, outcome, err)
+		}
+		// Release happens on the first wake that is both escalated and past
+		// the hold window — never before the escalation.
+		wantCalls := escalateAt
+		if wantCalls < commitHoldWakes {
+			wantCalls = commitHoldWakes
+		}
+		if ops.calls["commit"] != wantCalls {
+			t.Fatalf("escalateAt=%d commit calls=%d, want %d", escalateAt, ops.calls["commit"], wantCalls)
+		}
+		if outcome.Problem == nil || outcome.Problem.Retryability != "operator-action" {
+			t.Fatalf("escalateAt=%d unresolved problem=%+v, want an operator-action refusal", escalateAt, outcome.Problem)
+		}
+	}
+}
+
+// A settled answer at any point ends the hold immediately, escalated or not.
+func TestSettledAnswerEndsTheHoldWithoutRelease(t *testing.T) {
+	ops := newScriptOps()
+	ops.turn = func(TurnInput) (TurnResult, error) {
+		return TurnResult{Decision: finalDecision()}, nil
+	}
+	ops.review = approvalRequiredReview
+	ops.commit = func(call int) (CommitResult, error) {
+		if call < 3 {
+			return CommitResult{Unsettled: true, RetryAfterMillis: 1, Version: 9, Escalated: call >= 2}, nil
+		}
+		return CommitResult{Outcome: CommitCompleted, Version: 9}, nil
+	}
+	outcome, err := AgentRunWorkflow(&scriptHost{}, ops, unitInput())
+	if err != nil || outcome.Terminal != TerminalCompleted {
+		t.Fatalf("outcome=%+v err=%v", outcome, err)
+	}
+	if ops.calls["commit"] != 3 {
+		t.Fatalf("commit calls=%d, want the settled answer to end the hold", ops.calls["commit"])
+	}
+}
+
+// The configurable reconciliation window can never be set past the point the
+// commit loop can reach, which is what once let a run be released before its
+// effect was escalated.
+func TestConfigurableReconciliationWindowStaysWithinTheCommitLoop(t *testing.T) {
+	if MaximumDomainReconciliations >= MaximumCommitWakes {
+		t.Fatalf("configurable window %d is not bounded by the commit spin guard %d", MaximumDomainReconciliations, MaximumCommitWakes)
+	}
+	if commitHoldWakes > MaximumCommitWakes {
+		t.Fatalf("hold window %d exceeds the spin guard %d", commitHoldWakes, MaximumCommitWakes)
 	}
 }

@@ -248,6 +248,7 @@ type BudgetController interface {
 	Observe(context.Context, budget.Observation) error
 	Reservation(context.Context, budget.Scope, budget.ReservationID) (budget.Reservation, error)
 	Reconcile(ctx context.Context, scope budget.Scope, id budget.ReservationID, generation budget.Generation, finalCost *int64, release bool, actor string) (budget.Reservation, error)
+	ReconcileSuperseded(ctx context.Context, scope budget.Scope, rootRunID string, current budget.Generation, actor string) ([]budget.Reservation, error)
 }
 
 // Config wires the executor. Every dependency is required; the executor
@@ -422,16 +423,31 @@ func haltOnStale(details *problem.Details) *workflow.Halt {
 // The identity derives from the operation key and type, so a replay records
 // nothing new; a failed append fails the operation so evidence is never
 // silently dropped.
-func (e *Executor) recordEvidence(ctx context.Context, op workflow.OpID, input workflow.RunInput, snapshot runs.Snapshot, evidenceType, retention string, payload map[string]string) error {
+// evidenceContractError marks a record the internal evidence contract itself
+// refuses — a prohibited or unbounded payload fact. It is distinguishable from
+// an infrastructure fault so a caller can refuse the command that produced it
+// instead of reporting an internal error or, worse, writing something durable
+// that can never be completed.
+type evidenceContractError struct{ err error }
+
+func (e evidenceContractError) Error() string { return e.err.Error() }
+func (e evidenceContractError) Unwrap() error { return e.err }
+
+// buildEvidence renders the immutable internal evidence record one durable
+// operation leaves behind and proves the internal evidence contract accepts
+// it. It is the single construction path: what a caller proves valid before
+// writing anything durable is exactly what is recorded afterwards, so a
+// pre-write proof can never diverge from the write it authorizes.
+func (e *Executor) buildEvidence(op workflow.OpID, input workflow.RunInput, snapshot runs.Snapshot, evidenceType, retention string, payload map[string]string) (events.Evidence, error) {
 	identity := "evidence." + strings.TrimPrefix(mustDeterministicDigest(struct {
 		Key  string `json:"key"`
 		Type string `json:"type"`
 	}{op.Key(), evidenceType}), "sha256:")[:32]
 	definitionDigest, bomDigest, policyDigest, err := materialDigests(snapshot.Definition, snapshot.ContractBOM, snapshot.Policy)
 	if err != nil {
-		return fmt.Errorf("digest evidence producer material: %w", err)
+		return events.Evidence{}, fmt.Errorf("digest evidence producer material: %w", err)
 	}
-	if _, err := e.cfg.Evidence.AppendEvidence(ctx, events.Evidence{
+	value := events.Evidence{
 		WorkspaceID: snapshot.WorkspaceID,
 		ProjectID:   snapshot.Target.ProjectID,
 		RunID:       string(snapshot.RunID),
@@ -450,7 +466,19 @@ func (e *Executor) recordEvidence(ctx context.Context, op workflow.OpID, input w
 		WorkflowID:     input.Key.WorkflowID(),
 		Traceparent:    traceparentOf(input),
 		Payload:        payload,
-	}); err != nil {
+	}
+	if err := events.ValidateEvidence(value); err != nil {
+		return events.Evidence{}, evidenceContractError{err: fmt.Errorf("validate %s evidence: %w", evidenceType, err)}
+	}
+	return value, nil
+}
+
+func (e *Executor) recordEvidence(ctx context.Context, op workflow.OpID, input workflow.RunInput, snapshot runs.Snapshot, evidenceType, retention string, payload map[string]string) error {
+	value, err := e.buildEvidence(op, input, snapshot, evidenceType, retention, payload)
+	if err != nil {
+		return err
+	}
+	if _, err := e.cfg.Evidence.AppendEvidence(ctx, value); err != nil {
 		return fmt.Errorf("record %s evidence: %w", evidenceType, err)
 	}
 	return nil
@@ -878,8 +906,12 @@ func (e *Executor) OpenInput(ctx context.Context, op workflow.OpID, input workfl
 		CanonicalDigest: digest,
 		Traceparent:     traceparentOf(input.Run),
 	}, interrupts.OpenInput{
-		Question:         input.Question,
-		ResponseSchema:   json.RawMessage(`{"type":"object","required":["answer"],"properties":{"answer":{"type":"string","maxLength":4096}},"additionalProperties":false}`),
+		Question: input.Question,
+		// The recorded response schema is applied on top of the canonical
+		// SubmitInputResponseRequest contract, so it may narrow that contract
+		// but never widen it: the canonical payload is a bounded string map
+		// whose values stop at 1024 characters.
+		ResponseSchema:   json.RawMessage(`{"type":"object","required":["answer"],"properties":{"answer":{"type":"string","maxLength":1024}},"additionalProperties":false}`),
 		ExpiresAt:        now.Add(e.cfg.InputTTL),
 		ResumeCheckpoint: op.Step,
 	})
@@ -942,7 +974,7 @@ func (e *Executor) ReadApproval(ctx context.Context, op workflow.OpID, ref workf
 	if request.Decision != nil {
 		read.Decided = true
 		read.Kind = string(request.Decision.Kind)
-		read.Reason = request.Decision.Reason
+		read.Reason = request.Decision.Comment
 		return read, nil
 	}
 	if !now.Before(request.ExpiresAt) {
@@ -1644,7 +1676,9 @@ func (e *Executor) recordUncertainty(ctx context.Context, input workflow.CommitI
 // operator reviewed, so a decision can never land on a different operation
 // than the one the evidence was read from. OperatorID is derived from the
 // verified request authority by the caller, never from the request body.
-// Basis is the reference to the authoritative evidence the decision rests on.
+// Basis is a bounded reference to the authoritative evidence the decision
+// rests on — never operator-authored prose, which would carry unbounded
+// content of unknown sensitivity into an immutable audit record.
 type OperatorResolution struct {
 	OperationID string
 	Outcome     string
@@ -1667,10 +1701,51 @@ func (r OperatorResolution) Validate() error {
 	if r.OperatorID == "" || len(r.OperatorID) > 128 {
 		return stableProblem(problem.CodeRequestInvalid, "the resolving operator identity is required")
 	}
-	if strings.TrimSpace(r.Basis) == "" || len(r.Basis) > 1024 {
-		return stableProblem(problem.CodeRequestInvalid, "an evidence basis between 1 and 1024 characters is required")
+	if !validEvidenceReference(r.Basis) {
+		return stableProblem(problem.CodeRequestInvalid, "the resolution basis must be a bounded anvilkit://evidence/<authority>/<record> reference")
 	}
 	return nil
+}
+
+// validEvidenceReference reports whether the basis is the bounded evidence
+// reference the canonical ResolveDomainOperationRequest contract defines:
+// anvilkit://evidence/<authority>/<record>. The executor proves it again
+// rather than trusting that transport validated the wire shape, because this
+// value becomes an immutable audit fact and the bound is what keeps
+// operator-supplied bytes from carrying anything but a retrievable identity.
+func validEvidenceReference(value string) bool {
+	const prefix = "anvilkit://evidence/"
+	if len(value) < 24 || len(value) > 256 || !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	rest := value[len(prefix):]
+	separator := strings.IndexByte(rest, '/')
+	if separator < 2 || separator > 32 {
+		return false
+	}
+	authority, record := rest[:separator], rest[separator+1:]
+	if record == "" || len(record) > 128 {
+		return false
+	}
+	for index := 0; index < len(authority); index++ {
+		character := authority[index]
+		if character >= 'a' && character <= 'z' || character >= '0' && character <= '9' {
+			continue
+		}
+		if index == 0 || character != '-' {
+			return false
+		}
+	}
+	for index := 0; index < len(record); index++ {
+		character := record[index]
+		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' {
+			continue
+		}
+		if index == 0 || character != '.' && character != '_' && character != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func stableProblem(code problem.Code, detail string) problem.Details {
@@ -1725,7 +1800,7 @@ func (e *Executor) ResolveEscalation(ctx context.Context, scope runs.Scope, id r
 		// different basis, or an outcome the owner decided itself — is a
 		// conflict, never an override.
 		if recorded == command.Outcome && operation.ResolvedBy == command.OperatorID && operation.ResolutionBasis == command.Basis {
-			return e.settleResolvedRun(ctx, scope, snapshot, id, operation, command)
+			return e.settleResolvedRun(ctx, scope, snapshot, id, operation)
 		}
 		decided := problem.New(problem.CodeIdempotencyConflict, "")
 		decided.Detail = "the governed effect is already decided"
@@ -1748,6 +1823,17 @@ func (e *Executor) ResolveEscalation(ctx context.Context, scope runs.Scope, id r
 	if !ok {
 		return runs.Snapshot{}, stableProblem(problem.CodeRequestInvalid, "the resolution outcome is not an authoritative domain outcome")
 	}
+	// The immutable audit record this decision will leave behind is proved
+	// acceptable before anything durable is written. The order is the whole
+	// point: the journal resolution is immutable, so recording it first and
+	// only then discovering that its evidence cannot be stored would leave a
+	// decided submission on a run that can never settle — every retry would
+	// re-read the same recorded decision and fail on the same evidence.
+	// Proving first means a basis that cannot be audited is refused as an
+	// invalid command, with nothing persisted and the run still recoverable.
+	if err := e.proveOperatorResolutionEvidence(scope, snapshot, id, operation.ID, command.Outcome, command.OperatorID, command.Basis); err != nil {
+		return runs.Snapshot{}, err
+	}
 	// The audited resolution is durable before anything settles: the journal
 	// row records who decided, on what basis, and to what outcome, under a
 	// compare-and-set on the escalated state that only one racer can win.
@@ -1755,7 +1841,67 @@ func (e *Executor) ResolveEscalation(ctx context.Context, scope runs.Scope, id r
 	if err != nil {
 		return runs.Snapshot{}, err
 	}
-	return e.settleResolvedRun(ctx, scope, snapshot, id, resolved, command)
+	return e.settleResolvedRun(ctx, scope, snapshot, id, resolved)
+}
+
+// AuthorizeOperatorRecovery proves current authority admits this actor as an
+// operator for this run right now, without deciding anything. It exists for
+// the boundary that answers a recorded operator-recovery receipt: that path
+// returns a privileged response without running the command, so it needs the
+// same current-authority proof the command path gets — activation, complete
+// governance material, the operator role, and revocation of authority over the
+// run's target — resolved against the run this request addresses. The run read
+// is scoped, so a caller reaching outside its workspace or project is refused
+// here exactly as it would be by the command.
+func (e *Executor) AuthorizeOperatorRecovery(ctx context.Context, scope runs.Scope, id runs.ID) error {
+	snapshot, err := e.cfg.Runs.Get(ctx, scope, id)
+	if err != nil {
+		return err
+	}
+	if _, denial := e.operatorAuthority(ctx, scope, snapshot); denial != nil {
+		return *denial
+	}
+	return nil
+}
+
+// operatorResolutionEvidenceType names the immutable audit record an operator
+// recovery leaves behind.
+const operatorResolutionEvidenceType = "domain.submission-operator-resolved"
+
+// operatorResolutionEvidence renders the durable operation identity, run
+// input, and bounded payload of one operator recovery. The pre-write proof and
+// the post-write record are both built here, so the record that is authorized
+// and the record that is stored can never diverge.
+func operatorResolutionEvidence(scope runs.Scope, snapshot runs.Snapshot, id runs.ID, operationID, outcome, operatorID, basis string) (workflow.OpID, workflow.RunInput, map[string]string) {
+	input := workflow.RunInput{
+		Key:   workflow.RunKey{RunID: string(id), Generation: snapshot.ExecutionGeneration},
+		Scope: workflow.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID, ActorID: scope.ActorID},
+	}
+	return workflow.OpID{WorkflowID: input.Key.WorkflowID(), Step: "domain-operator-resolved:" + operationID}, input, map[string]string{
+		"operationId": operationID,
+		"outcome":     outcome,
+		"resolvedBy":  operatorID,
+		"basis":       basis,
+	}
+}
+
+// proveOperatorResolutionEvidence proves the internal evidence contract
+// accepts the operator-recovery record this decision will produce. A basis the
+// contract refuses is an invalid command, not an internal fault: it is
+// reported as such and nothing durable is written.
+func (e *Executor) proveOperatorResolutionEvidence(scope runs.Scope, snapshot runs.Snapshot, id runs.ID, operationID, outcome, operatorID, basis string) error {
+	op, input, payload := operatorResolutionEvidence(scope, snapshot, id, operationID, outcome, operatorID, basis)
+	_, err := e.buildEvidence(op, input, snapshot, operatorResolutionEvidenceType, "audit", payload)
+	if err == nil {
+		return nil
+	}
+	var contract evidenceContractError
+	if errors.As(err, &contract) {
+		refused := problem.New(problem.CodeRequestInvalid, "")
+		refused.Detail = "the resolution basis cannot be recorded as immutable operator-recovery evidence"
+		return refused
+	}
+	return fmt.Errorf("prove operator recovery evidence: %w", err)
 }
 
 // operatorAuthority re-reads the one current-authority source and proves it
@@ -1788,26 +1934,26 @@ func (e *Executor) operatorAuthority(ctx context.Context, scope runs.Scope, snap
 }
 
 // settleResolvedRun drives the run to the outcome its decided submission
-// record carries and records the immutable operator-recovery evidence. It
-// converges: a run already settled to the recorded outcome is returned as it
-// stands.
-func (e *Executor) settleResolvedRun(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot, id runs.ID, operation domaincommit.Operation, command OperatorResolution) (runs.Snapshot, error) {
-	input := workflow.CommitInput{
-		Run: workflow.RunInput{
-			Key:   workflow.RunKey{RunID: string(id), Generation: snapshot.ExecutionGeneration},
-			Scope: workflow.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID, ActorID: scope.ActorID},
-		},
-		ArtifactDigest: operation.ArtifactDigest,
+// record carries and records the immutable operator-recovery evidence. Every
+// audited fact comes from the durable journal record rather than from the
+// command that produced it: the journal write is the compare-and-set that
+// picks the single winner among racing operators, so reading the decision back
+// is what keeps the audit record and the decision in agreement. It converges:
+// evidence is idempotent by its derived identity, settlement is idempotent by
+// the operation, and a run already settled to the recorded outcome is returned
+// as it stands — so a crash anywhere in this sequence is repaired by repeating
+// it.
+func (e *Executor) settleResolvedRun(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot, id runs.ID, operation domaincommit.Operation) (runs.Snapshot, error) {
+	outcome, terminal := domainOutcomeOf(operation.Status)
+	if !terminal {
+		return runs.Snapshot{}, stableProblem(problem.CodeDomainOutcomeUncertain, "the submission record is not decided")
 	}
-	if err := e.recordEvidence(ctx, workflow.OpID{WorkflowID: input.Run.Key.WorkflowID(), Step: "domain-operator-resolved:" + operation.ID}, input.Run, snapshot, "domain.submission-operator-resolved", "audit", map[string]string{
-		"operationId": operation.ID,
-		"outcome":     command.Outcome,
-		"resolvedBy":  command.OperatorID,
-		"basis":       command.Basis,
-	}); err != nil {
+	op, runInput, payload := operatorResolutionEvidence(scope, snapshot, id, operation.ID, outcome, operation.ResolvedBy, operation.ResolutionBasis)
+	if err := e.recordEvidence(ctx, op, runInput, snapshot, operatorResolutionEvidenceType, "audit", payload); err != nil {
 		return runs.Snapshot{}, err
 	}
-	if _, err := e.settleDomain(ctx, scope, snapshot, id, operation.ID, input, DomainOutcome{Status: command.Outcome}); err != nil {
+	input := workflow.CommitInput{Run: runInput, ArtifactDigest: operation.ArtifactDigest}
+	if _, err := e.settleDomain(ctx, scope, snapshot, id, operation.ID, input, DomainOutcome{Status: outcome}); err != nil {
 		return runs.Snapshot{}, err
 	}
 	return e.cfg.Runs.Get(ctx, scope, id)
@@ -2234,6 +2380,23 @@ func (e *Executor) ensureRunReservation(ctx context.Context, snapshot runs.Snaps
 	generation := budget.Generation(snapshot.ExecutionGeneration)
 	var reserveErr error
 	if snapshot.ExecutionGeneration > 1 {
+		// Replacement work reconciles the root aggregate's superseded holds
+		// before it asks for headroom of its own. Without this, every
+		// generation whose attempt was fenced or abandoned would keep its full
+		// worst-case bound for ever — the ordinary settlement path can no
+		// longer reach a generation that is no longer current — and enough
+		// retries would exhaust the root's headroom permanently on budget
+		// nothing ever spent. Only holds whose usage is authoritatively final
+		// are reduced, and none of them regains authority to dispatch.
+		if _, err := e.cfg.Budget.ReconcileSuperseded(ctx, budgetScopeOf(snapshot), string(snapshot.RootRunID), generation, budget.SettlementActor); err != nil {
+			var details problem.Details
+			if errors.As(err, &details) {
+				return &details
+			}
+			refusal := problem.New(problem.CodeBudgetDenied, "")
+			refusal.Detail = "superseded budget reservations could not be reconciled"
+			return &refusal
+		}
 		prior := budgetReservationID(string(snapshot.RunID), snapshot.ExecutionGeneration-1)
 		if _, err := e.cfg.Budget.Reservation(ctx, budgetScopeOf(snapshot), prior); err == nil {
 			// The prior generation holds budget: this generation is

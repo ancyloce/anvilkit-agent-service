@@ -62,7 +62,7 @@ func TestIssueDerivesCanonicalFullBindingAndAuditsBeforeReturn(t *testing.T) {
 		t.Fatal(err)
 	}
 	audit := &MemoryAudit{}
-	issued, err := issuer(t, authority, audit, ring).Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01"})
+	issued, err := issuer(t, authority, audit, ring).Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01", OperationKey: "op-01"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestIssuanceFailsClosedWithoutAuthoritativeTime(t *testing.T) {
 	ring, _ := NewMemoryKeyRing("urn:anvilkit:key:apply-time")
 	guard, _ := contractguard.NewGuard("../..")
 	service, _ := New(authority, fixedIDs{"authorization-time"}, ring, &MemoryAudit{}, journal.NewMemoryStore(), guard, fixedClock{}, time.Minute)
-	if _, err := service.Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01"}); err == nil {
+	if _, err := service.Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01", OperationKey: "op-01"}); err == nil {
 		t.Fatal("authorization issued without authoritative time")
 	}
 }
@@ -119,7 +119,7 @@ func TestIssueFailsClosedOnEveryBindingDrift(t *testing.T) {
 			mutate(&current)
 			authority := &fixedAuthority{proof: Proof{Approved: base, Current: current, ApprovalCurrent: true, ArtifactEligible: true}}
 			ring, _ := NewMemoryKeyRing("urn:anvilkit:key:apply-2026-08-a")
-			_, err := issuer(t, authority, &MemoryAudit{}, ring).Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01"})
+			_, err := issuer(t, authority, &MemoryAudit{}, ring).Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01", OperationKey: "op-01"})
 			var details problem.Details
 			if !errors.As(err, &details) || details.Code != string(problem.CodeApplyAuthorizationDenied) {
 				t.Fatalf("drift was not denied: %v", err)
@@ -132,7 +132,7 @@ func TestRotationOverlapRevocationExpiryAndSubstitution(t *testing.T) {
 	value := binding()
 	authority := &fixedAuthority{proof: Proof{Approved: value, Current: value, ApprovalCurrent: true, ArtifactEligible: true}}
 	ring, _ := NewMemoryKeyRing("urn:anvilkit:key:apply-2026-08-a")
-	first, err := issuer(t, authority, &MemoryAudit{}, ring).Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01"})
+	first, err := issuer(t, authority, &MemoryAudit{}, ring).Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01", OperationKey: "op-01"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestRotationOverlapRevocationExpiryAndSubstitution(t *testing.T) {
 		t.Fatal("revoked key accepted")
 	}
 	ring2, _ := NewMemoryKeyRing("urn:anvilkit:key:apply-2026-08-c")
-	second, _ := issuer(t, authority, &MemoryAudit{}, ring2).Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01"})
+	second, _ := issuer(t, authority, &MemoryAudit{}, ring2).Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01", OperationKey: "op-01"})
 	if _, err := Verify(context.Background(), second.Compact, ring2, authNow.Add(3*time.Minute)); err == nil {
 		t.Fatal("expired authorization accepted")
 	}
@@ -170,7 +170,7 @@ func TestAuditFailureAndCallerAuthoredPayloadCannotEscape(t *testing.T) {
 	if marshalErr != nil || strings.Contains(string(serializedRing), "private") || len(serializedRing) > 2 {
 		t.Fatalf("private signing state escaped serialization: %s %v", serializedRing, marshalErr)
 	}
-	_, err := issuer(t, authority, failingAudit{}, ring).Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01"})
+	_, err := issuer(t, authority, failingAudit{}, ring).Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01", OperationKey: "op-01"})
 	if err == nil {
 		t.Fatal("authorization escaped without durable audit")
 	}
@@ -193,7 +193,7 @@ func TestIssuanceCannotAcknowledgeWithoutReceiptJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01"}); err == nil {
+	if _, err := service.Issue(context.Background(), Command{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ApprovalRequestID: "approval-01", ArtifactID: "artifact-01", OperationKey: "op-01"}); err == nil {
 		t.Fatal("authorization acknowledged without receipt journal")
 	}
 }

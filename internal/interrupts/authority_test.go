@@ -127,7 +127,7 @@ func TestSelfApprovalIsDeniedBeforeDecisionMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewService(repository, BoundSchemaValidator{}, authority, &testRuntime{}, &testLeases{}, &testReconciler{clear: true}, &testReservation{}, journal.NewMemoryStore(), &testClock{now: testNow}, &testIDs{}, Limits{ChildDepth: 2, ChildFanout: 2})
+	service, err := NewService(repository, BoundSchemaValidator{}, authority, &testRuntime{}, &testLeases{}, &testReconciler{clear: true}, &testReservation{}, &testTerminalBudget{}, journal.NewMemoryStore(), &testClock{now: testNow}, &testIDs{}, Limits{ChildDepth: 2, ChildFanout: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestSelfApprovalIsDeniedBeforeDecisionMutation(t *testing.T) {
 	}
 	decisionWrite := write("run", opened.Snapshot.Version, "decide")
 	decisionWrite.Scope = runScope
-	_, err = service.DecideApproval(context.Background(), decisionWrite, ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: request.Version, Decision: DecisionApprove})
+	_, err = service.DecideApproval(context.Background(), decisionWrite, ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: request.Version, Decision: DecisionApprove, ActionDigest: request.ActionDigest})
 	var details problem.Details
 	if !errors.As(err, &details) || details.Code != string(problem.CodeAuthorizationDenied) {
 		t.Fatalf("self-approval error = %v", err)

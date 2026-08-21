@@ -127,6 +127,7 @@ type Service struct {
 	inject        FailureInjector
 	tasks         map[string]Task
 	attempts      map[AttemptID]attemptReference
+	outputs       map[string][]byte
 	diagnostics   []Diagnostic
 	dlq           []DLQEntry
 }
@@ -150,13 +151,20 @@ func New(ids IDs, clock Clock, prerequisites Prerequisites, ttl time.Duration, p
 	if _, ok := release.(stateful); !ok {
 		return nil, fmt.Errorf("scheduler release must support atomic rollback")
 	}
-	return &Service{ids: ids, clock: clock, prerequisites: prerequisites, ttl: ttl, promotion: promotion, advancement: advancement, release: release, inject: inject, tasks: map[string]Task{}, attempts: map[AttemptID]attemptReference{}}, nil
+	return &Service{ids: ids, clock: clock, prerequisites: prerequisites, ttl: ttl, promotion: promotion, advancement: advancement, release: release, inject: inject, tasks: map[string]Task{}, attempts: map[AttemptID]attemptReference{}, outputs: map[string][]byte{}}, nil
 }
 func key(scope Scope, id TaskID) string {
 	return scope.WorkspaceID + "\x00" + scope.ProjectID + "\x00" + string(id)
 }
+
+// Validate checks the bounded task-creation identity every scheduler
+// implementation shares.
+func (c Create) Validate() bool {
+	return opaque(c.Scope.WorkspaceID) && opaque(c.Scope.ProjectID) && opaque(string(c.TaskID)) && opaque(c.RunID) && opaque(c.RootRunID) && c.ExecutionGeneration != 0 && opaque(c.Capability) && opaque(c.ReservationID) && digest(c.InputDigest) && safeObjectKey(c.InputObjectKey) && !c.CreatedAt.IsZero()
+}
+
 func (s *Service) Create(ctx context.Context, input Create) (Task, error) {
-	if !opaque(input.Scope.WorkspaceID) || !opaque(input.Scope.ProjectID) || !opaque(string(input.TaskID)) || !opaque(input.RunID) || !opaque(input.RootRunID) || input.ExecutionGeneration == 0 || !opaque(input.Capability) || !opaque(input.ReservationID) || !digest(input.InputDigest) || !safeObjectKey(input.InputObjectKey) || input.CreatedAt.IsZero() {
+	if !input.Validate() {
 		return Task{}, problem.New(problem.CodeTaskDispatchDenied, "")
 	}
 	if err := s.prerequisites.AuthorizeTask(ctx, input); err != nil {
@@ -166,7 +174,10 @@ func (s *Service) Create(ctx context.Context, input Create) (Task, error) {
 	defer s.lock.Unlock()
 	identity := key(input.Scope, input.TaskID)
 	if prior, ok := s.tasks[identity]; ok {
-		if prior.Create != input {
+		// Convergence matches the durable scheduler's contract: the recorded
+		// task identity fields must match; the creation instant is not
+		// identity, so a replay at a later time converges.
+		if prior.RunID != input.RunID || prior.RootRunID != input.RootRunID || prior.ExecutionGeneration != input.ExecutionGeneration || prior.Capability != input.Capability || prior.ReservationID != input.ReservationID || prior.InputDigest != input.InputDigest || prior.InputObjectKey != input.InputObjectKey {
 			return Task{}, problem.New(problem.CodeIdempotencyConflict, "")
 		}
 		return cloneTask(prior), nil
@@ -257,7 +268,7 @@ func (s *Service) ReclaimExpired(_ context.Context, scope Scope, id TaskID) (boo
 	s.tasks[identity] = task
 	return true, nil
 }
-func (s *Service) AcceptResult(ctx context.Context, scope Scope, result Result) (Acceptance, error) {
+func (s *Service) AcceptResult(ctx context.Context, scope Scope, result Result, output []byte) (Acceptance, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	now := s.clock.Now().UTC()
@@ -276,6 +287,12 @@ func (s *Service) AcceptResult(ctx context.Context, scope Scope, result Result) 
 	}
 	if task.Result != nil && sameResult(*task.Result, result) {
 		return Acceptance{Duplicate: true, Task: cloneTask(task)}, nil
+	}
+	// The replayable output is part of the accepted result: it must attest the
+	// result's digest before anything is recorded.
+	if OutputDigest(output) != result.ArtifactDigest {
+		s.diagnostics = append(s.diagnostics, Diagnostic{result.TaskID, task.RunID, result.PhysicalAttemptID, string(problem.CodeArtifactInvalid), "output-digest", now})
+		return Acceptance{Task: cloneTask(task)}, problem.New(problem.CodeArtifactInvalid, "")
 	}
 	reason := fenceReason(task, result, now)
 	if reason != "" {
@@ -328,7 +345,25 @@ func (s *Service) AcceptResult(ctx context.Context, scope Scope, result Result) 
 	copyResult := result
 	task.Result = &copyResult
 	s.tasks[identity] = task
+	s.outputs[identity] = append([]byte(nil), output...)
 	return Acceptance{Accepted: true, Task: cloneTask(task)}, nil
+}
+
+// AcceptedOutput answers the accepted result and its recorded replayable
+// output. A task that has not completed has no output to replay.
+func (s *Service) AcceptedOutput(_ context.Context, scope Scope, id TaskID) ([]byte, Result, error) {
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	identity := key(scope, id)
+	task, ok := s.tasks[identity]
+	if !ok || task.State != Completed || task.Result == nil {
+		return nil, Result{}, problem.New(problem.CodeResourceNotFound, "")
+	}
+	output, recorded := s.outputs[identity]
+	if !recorded {
+		return nil, Result{}, problem.New(problem.CodeResourceNotFound, "")
+	}
+	return append([]byte(nil), output...), *task.Result, nil
 }
 func (s *Service) DeadLetter(_ context.Context, scope Scope, id TaskID, code, stage, detail string) (DLQEntry, error) {
 	if !opaque(code) || !opaque(stage) || len(detail) > 2048 {

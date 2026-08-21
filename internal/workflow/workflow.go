@@ -94,6 +94,12 @@ const (
 	TerminalCancelled  TerminalState = "cancelled"
 	TerminalRefused    TerminalState = "refused"
 	TerminalSuperseded TerminalState = "superseded"
+	// TerminalUnresolved reports that the workflow released a run whose
+	// governed effect stayed unsettled through the bounded reconciliation
+	// window. The run aggregate keeps its submit-boundary state — nothing was
+	// failed, nothing was resent — and the audited operator-resolution path
+	// settles it from the durable submission record.
+	TerminalUnresolved TerminalState = "unresolved"
 )
 
 type RunOutcome struct {
@@ -341,6 +347,20 @@ type CommitResult struct {
 	Problem    *problem.Details `json:"problem,omitempty"`
 	Version    uint64           `json:"version"`
 	Halt       *Halt            `json:"halt,omitempty"`
+	// Unsettled reports that the governed effect reached the submit boundary
+	// but no authoritative record decides it yet. The workflow holds at the
+	// boundary — waiting RetryAfterMillis or an explicit domain signal — and
+	// reconciles again under a fresh durable step. It never fails the run and
+	// never resends the command.
+	Unsettled        bool  `json:"unsettled,omitempty"`
+	RetryAfterMillis int64 `json:"retryAfterMillis,omitempty"`
+	// Escalated reports that the unsettled governed effect is durably
+	// escalated for operator resolution. It is the only thing that permits the
+	// workflow to release a run at the submit boundary: the durable
+	// escalation, not a wake count, is what makes releasing safe. An operation
+	// sets it from the submission journal's recorded state, never from its own
+	// bookkeeping.
+	Escalated bool `json:"escalated,omitempty"`
 }
 
 type ReviseInput struct {
@@ -406,9 +426,34 @@ type Runtime interface {
 func InputTopic(requestID string) string    { return "input:" + requestID }
 func ApprovalTopic(requestID string) string { return "approval:" + requestID }
 
+// DomainTopic is the signal topic a run's commit wait listens on. Signaling
+// it wakes an unsettled commit immediately — after an operator resolution or
+// a late authoritative answer — instead of waiting out the bounded backoff.
+func DomainTopic(runID string) string { return "domain:" + runID }
+
 // maximumWakes bounds spurious wake handling per interrupt so a broken signal
 // source cannot spin the workflow.
 const maximumWakes = 64
+
+// commitHoldWakes is how long the workflow keeps reconciling a governed effect
+// that is already durably escalated. Escalation does not end the hold: the
+// owner's late answer still settles the run without any operator action, and
+// this window is how long the workflow stays available to observe it.
+const commitHoldWakes = 64
+
+// MaximumCommitWakes is the commit loop's spin guard. It is deliberately not a
+// release boundary: a run holding at the submit boundary is released only once
+// the commit operation reports a durable escalation, so this bound exists
+// solely to stop a broken signal source or a submission journal that never
+// counts from looping for ever. Reaching it is a defect, and the workflow
+// errors rather than releasing an unescalated run.
+const MaximumCommitWakes = 4096
+
+// MaximumDomainReconciliations is the largest reconciliation window a
+// deployment may configure. Bounding configuration by the same constant the
+// commit loop spins on is what keeps the two from drifting into the state
+// where the loop gives up before the operation has escalated anything.
+const MaximumDomainReconciliations = MaximumCommitWakes / 2
 
 // maximumDelegateTurns bounds the durable Specialist turn boundaries one
 // delegation may open, independently of the definition's own turn limit.
@@ -625,17 +670,12 @@ func AgentRunWorkflow(host Host, ops Operations, input RunInput) (RunOutcome, er
 			}
 			carry.Version = approval.Version
 			if approval.Kind == "approve" {
-				committed, err := step(host, name("commit", turn), func(ctx context.Context) (CommitResult, error) {
-					return ops.Commit(ctx, run.op(name("commit", turn)), CommitInput{Run: input, Turn: turn, RequestID: review.RequestID, ArtifactDigest: finalized.ArtifactDigest, Version: carry.Version})
-				})
+				committed, outcome, err := run.commit(turn, review.RequestID, finalized.ArtifactDigest, carry.Version)
 				if err != nil {
-					return run.fail(turn, problemOf(err))
+					return RunOutcome{}, err
 				}
-				if committed.Superseded {
-					return run.superseded()
-				}
-				if committed.Halt != nil {
-					return run.halt(turn, *committed.Halt)
+				if outcome != nil {
+					return *outcome, nil
 				}
 				carry.Version = committed.Version
 				switch committed.Outcome {
@@ -727,6 +767,72 @@ func (r runContext) halt(turn int, halt Halt) (RunOutcome, error) {
 		behavior = TerminalFailed
 	}
 	return r.terminal(turn, behavior, &halt.Problem)
+}
+
+// commit drives the governed effect across the submit boundary. An unsettled
+// answer holds the run at the boundary: the workflow waits durably — for the
+// bounded backoff the operation chose, or for an explicit domain signal — and
+// reconciles again under a fresh durable step. The loop never resends the
+// command; only the operation's own durable write-ahead record decides
+// whether submitting is safe.
+//
+// The run is released at the boundary as unresolved on exactly one condition:
+// the operation reported that the governed effect is durably escalated. Until
+// then the workflow keeps holding, however many wakes that takes. Releasing on
+// a wake count instead would let a deployment whose reconciliation window
+// exceeded the loop's bound hand back an unresolved run whose effect was never
+// escalated — a run nobody is paged for and no audited operator-resolution
+// path can find.
+func (r runContext) commit(turn int, requestID, artifactDigest string, version uint64) (CommitResult, *RunOutcome, error) {
+	for wake := 0; wake < MaximumCommitWakes; wake++ {
+		// The first execution keeps the historical commit step identity; each
+		// later reconciliation wake is its own durable step.
+		stepName := name("commit", turn)
+		if wake > 0 {
+			stepName = name(fmt.Sprintf("commit-%02d", wake), turn)
+		}
+		committed, err := step(r.host, stepName, func(ctx context.Context) (CommitResult, error) {
+			return r.ops.Commit(ctx, r.op(stepName), CommitInput{Run: r.input, Turn: turn, RequestID: requestID, ArtifactDigest: artifactDigest, Version: version})
+		})
+		if err != nil {
+			outcome, failErr := r.fail(turn, problemOf(err))
+			return CommitResult{}, &outcome, failErr
+		}
+		if committed.Superseded {
+			outcome, err := r.superseded()
+			return CommitResult{}, &outcome, err
+		}
+		if committed.Halt != nil {
+			outcome, err := r.halt(turn, *committed.Halt)
+			return CommitResult{}, &outcome, err
+		}
+		if !committed.Unsettled {
+			return committed, nil, nil
+		}
+		if committed.Escalated && wake+1 >= commitHoldWakes {
+			// The durable escalation exists and the hold window elapsed. The
+			// run aggregate keeps its submit-boundary state, the submission
+			// journal carries the escalation, and the audited
+			// operator-resolution path settles it.
+			unresolved := problem.New(problem.CodeDomainOutcomeUncertain, "")
+			unresolved.Retryability = "operator-action"
+			unresolved.Detail = "the governed effect is durably escalated; the run holds at the submit boundary for operator resolution"
+			return CommitResult{}, &RunOutcome{Key: r.input.Key, Terminal: TerminalUnresolved, Problem: &unresolved}, nil
+		}
+		version = committed.Version
+		timeout := time.Duration(committed.RetryAfterMillis) * time.Millisecond
+		if timeout < time.Millisecond {
+			timeout = time.Millisecond
+		}
+		if _, _, err := r.host.AwaitSignal(DomainTopic(r.input.Key.RunID), timeout); err != nil {
+			return CommitResult{}, nil, err
+		}
+	}
+	// The spin guard tripped without the operation ever reporting a durable
+	// escalation. Releasing here is precisely the unsafe release this loop
+	// exists to prevent, so the workflow errors instead: the run keeps its
+	// submit-boundary state and a successor execution reconciles it again.
+	return CommitResult{}, nil, fmt.Errorf("commit reconciliation exhausted its spin guard without a durable escalation")
 }
 
 func (r runContext) revise(turn int, reason string, fromConflict bool, version uint64) (Ack, error) {

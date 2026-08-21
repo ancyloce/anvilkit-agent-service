@@ -22,7 +22,7 @@ func (r *Recorder) Record(ctx context.Context, value contractclient.Evidence) er
 	if err != nil {
 		return fmt.Errorf("marshal validation findings: %w", err)
 	}
-	_, err = r.database.Exec(ctx, `INSERT INTO agent_evaluation.validation_evidence(workspace_id,project_id,run_id,boundary_kind,bom_digest,schema_digest,validator_version,catalog_digest,valid,findings,validated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, value.WorkspaceID, value.ProjectID, value.RunID, value.Kind, value.BOMDigest, value.SchemaDigest, value.ValidatorVersion, value.CatalogDigest, value.Valid, findings, value.ValidatedAt)
+	_, err = r.database.Exec(ctx, `INSERT INTO agent_evaluation.validation_evidence(workspace_id,project_id,run_id,boundary_kind,bom_digest,schema_digest,validator_version,catalog_digest,policy_digest,valid,findings,validated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, value.WorkspaceID, value.ProjectID, value.RunID, value.Kind, value.BOMDigest, value.SchemaDigest, value.ValidatorVersion, value.CatalogDigest, value.PolicyDigest, value.Valid, findings, value.ValidatedAt)
 	if err != nil {
 		return fmt.Errorf("persist validation evidence: %w", err)
 	}

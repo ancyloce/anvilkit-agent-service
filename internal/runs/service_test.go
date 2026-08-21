@@ -25,7 +25,7 @@ func TestCreateCommandStructurallyOmitsServerAuthority(t *testing.T) {
 			t.Fatalf("server-owned field %s is representable", name)
 		}
 	}
-	valid := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
+	valid := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
 	for field := range forbidden {
 		var object map[string]any
 		_ = json.Unmarshal(valid, &object)
@@ -36,10 +36,10 @@ func TestCreateCommandStructurallyOmitsServerAuthority(t *testing.T) {
 		}
 	}
 	for _, raw := range [][]byte{
-		[]byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"Page","targetId":"page-1"}}`),
-		[]byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"not allowed"}}`),
-		[]byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"` + strings.Repeat("a", 129) + `"}}`),
-		[]byte(`{"domain":"platform-agent","domain":"pagix-page","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`),
+		[]byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"Page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`),
+		[]byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"not allowed","workspaceId":"workspace","projectId":"project"}}`),
+		[]byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"` + strings.Repeat("a", 129) + `","workspaceId":"workspace","projectId":"project"}}`),
+		[]byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","operation":"page-change","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`),
 	} {
 		if _, err := DecodeCreateRequest(raw); err == nil {
 			t.Fatalf("unbounded target accepted: %s", raw)
@@ -51,7 +51,7 @@ func TestCreateIsDurableBeforeWorkflowAndReplayIsStable(t *testing.T) {
 	store := &fakeStore{}
 	starter := &checkingStarter{store: store}
 	service := NewService(store, starter, fixedID("run-1"), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), admitAll())
-	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
+	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
 	digest, _ := canonical.Digest(raw)
 	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Raw: raw, Authority: testAuthority()}
 	input.Traceparent = testTraceparent
@@ -77,7 +77,7 @@ func TestCreateIsDurableBeforeWorkflowAndReplayIsStable(t *testing.T) {
 }
 
 func TestConversationalAndHeadlessCreateHaveInteractionParity(t *testing.T) {
-	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
+	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
 	digest, _ := canonical.Digest(raw)
 	create := func(runID, key string) CreateOutcome {
 		store := &fakeStore{}
@@ -101,7 +101,7 @@ func TestCreateCannotAcknowledgeWhenReceiptJournalIsUnavailable(t *testing.T) {
 	receipts := journal.NewMemoryStore()
 	receipts.SetAvailable(false)
 	service := NewService(store, starter, fixedID("run-journal"), fixedClock{time.Unix(100, 0)}, receipts, admitAll())
-	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
+	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
 	digest, _ := canonical.Digest(raw)
 	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "journal-key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()}
 	if _, err := service.Create(context.Background(), input); err == nil {
@@ -138,7 +138,7 @@ func TestTraceparentAndAuthorityIdentitiesUseClosedBounds(t *testing.T) {
 func TestCreateRejectsGeneratedIdentityThatCannotProduceBoundedEventIDs(t *testing.T) {
 	store := &fakeStore{}
 	service := NewService(store, &checkingStarter{store: store}, fixedID(strings.Repeat("r", 108)), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), admitAll())
-	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
+	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
 	digest, _ := canonical.Digest(raw)
 	_, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()})
 	if err == nil || store.created != nil {
@@ -207,12 +207,37 @@ func admitAll() Admission {
 // The admission gate is where service-wide trust material is revalidated
 // before a new run exists. A refusal must stop creation outright: no run
 // identity, no durable record, and no workflow.
+// Creating a run against a target whose authority has been individually
+// withdrawn is denied even while the whole scope stays active; a different
+// target's revocation does not deny the create.
+func TestCreateIsDeniedWhenTheDeclaredTargetIsRevoked(t *testing.T) {
+	store := &fakeStore{}
+	service := NewService(store, &checkingStarter{store: store}, fixedID("run-revoked"), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), admitAll())
+	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
+	digest, _ := canonical.Digest(raw)
+	revoked := testAuthority()
+	revoked.RevokedTargets = []string{"page-1"}
+	_, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key-revoked", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: revoked})
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeAuthorityStale) {
+		t.Fatalf("create against a revoked target = %v", err)
+	}
+	if store.created != nil {
+		t.Fatalf("created = %#v, want nothing persisted for a revoked target", store.created)
+	}
+	unrelated := testAuthority()
+	unrelated.RevokedTargets = []string{"page-other"}
+	if _, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key-unrelated", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: unrelated}); err != nil {
+		t.Fatalf("an unrelated target revocation denied the create: %v", err)
+	}
+}
+
 func TestRefusedAdmissionCreatesNothing(t *testing.T) {
 	store := &fakeStore{}
 	starter := &checkingStarter{store: store}
 	stale := problem.New(problem.CodeAuthorityStale, "")
 	service := NewService(store, starter, fixedID("run-refused"), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), AdmitFunc(func(context.Context, Scope) error { return stale }))
-	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
+	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
 	digest, _ := canonical.Digest(raw)
 	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Raw: raw, Authority: testAuthority(), Traceparent: testTraceparent}
 	_, err := service.Create(context.Background(), input)
@@ -233,7 +258,7 @@ func TestRefusedAdmissionCreatesNothing(t *testing.T) {
 func TestMissingAdmissionGateFailsClosed(t *testing.T) {
 	store := &fakeStore{}
 	service := NewService(store, &checkingStarter{store: store}, fixedID("run-ungated"), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), nil)
-	raw := []byte(`{"domain":"platform-agent","operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1"}}`)
+	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
 	digest, _ := canonical.Digest(raw)
 	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Raw: raw, Authority: testAuthority(), Traceparent: testTraceparent}
 	if _, err := service.Create(context.Background(), input); err == nil {

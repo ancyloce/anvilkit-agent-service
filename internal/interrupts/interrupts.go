@@ -69,25 +69,35 @@ type ApprovalRequest struct {
 
 type DecisionKind string
 
+// The decision vocabulary is the canonical one: both canonical contracts that
+// name a review decision — SubmitApprovalDecisionRequest.decision and
+// ApprovalRequest.allowedDecisions — spell the third decision
+// "request-changes". There is no second spelling anywhere in the system.
 const (
 	DecisionApprove DecisionKind = "approve"
 	DecisionReject  DecisionKind = "reject"
-	DecisionChange  DecisionKind = "change"
+	DecisionChange  DecisionKind = "request-changes"
 )
 
 type Decision struct {
 	RequestVersion uint64       `json:"decisionVersion"`
 	Kind           DecisionKind `json:"decision"`
 	ReviewerID     string       `json:"-"`
-	Reason         string       `json:"reason,omitempty"`
+	Comment        string       `json:"comment,omitempty"`
 	AcceptedAt     time.Time    `json:"acceptedAt"`
 }
 
+// ApprovalDecisionCommand is the reviewer's decision. ActionDigest is the
+// action the reviewer states they are deciding: the canonical command requires
+// it, and the service proves it is the digest the open request actually
+// carries, so a decision can never be recorded against an action the reviewer
+// did not see.
 type ApprovalDecisionCommand struct {
 	RequestID      RequestID    `json:"requestId"`
 	RequestVersion uint64       `json:"decisionVersion"`
 	Decision       DecisionKind `json:"decision"`
-	Reason         string       `json:"reason,omitempty"`
+	ActionDigest   string       `json:"actionDigest"`
+	Comment        string       `json:"comment,omitempty"`
 }
 
 type Cancellation struct {
@@ -276,6 +286,19 @@ type Reservation interface {
 	ReserveChild(context.Context, ChildBudgetRequest) error
 }
 
+// TerminalBudget settles a run's standing budget reservation when a control
+// operation — not the durable workflow — is what makes the run terminal.
+// Cancellation and discard end a run outside the workflow's own terminal
+// transitions, so without this port their usage would never be reconciled and
+// their worst-case hold would keep consuming root headroom until it expired.
+// The settlement is idempotent and fenced on the run's execution generation,
+// so a replayed control command settles nothing twice and a superseded
+// generation settles nothing at all. The executor's terminal settlement
+// satisfies it.
+type TerminalBudget interface {
+	SettleRunBudget(ctx context.Context, snapshot runs.Snapshot, release bool) error
+}
+
 type ChildBudgetRequest struct {
 	Write       Write
 	ChildRunID  runs.ID
@@ -292,4 +315,26 @@ func stable(code problem.Code, detail string) problem.Details {
 	value := problem.New(code, "")
 	value.Detail = detail
 	return value
+}
+
+// ReplayConflict reports why a recorded control write cannot answer this
+// repeat, or nil when it can.
+//
+// The two faults are deliberately distinct codes. Changed canonical bytes
+// under a key already committed to is the governed IDEMPOTENCY_KEY_REUSED case
+// (ADR-021 §4): the caller asked for a different command, so no recorded
+// outcome can honestly answer it, and a client must fix the request rather
+// than retry it. A repeat whose bytes match but whose observed resource
+// revision differs is an unrelated fault — the same command aimed at a
+// precondition the first request was not made under — and keeps the general
+// idempotency conflict, so the two never have to be told apart by their
+// message.
+func ReplayConflict(recordedDigest, digest string, recordedVersion, version uint64) error {
+	switch {
+	case recordedDigest != digest:
+		return stable(problem.CodeIdempotencyKeyReused, "the idempotency key was already used with different canonical request bytes")
+	case recordedVersion != version:
+		return stable(problem.CodeIdempotencyConflict, "the idempotency key was already used against a different resource revision")
+	}
+	return nil
 }

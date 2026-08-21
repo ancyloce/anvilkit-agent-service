@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
+	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
 )
 
 func TestPagixBoundaryHasNoDatabaseCredentialSurface(t *testing.T) {
@@ -95,25 +96,17 @@ func TestFeatureGateSyntaxFailsClosed(t *testing.T) {
 	}
 }
 
-func TestCandidateMutationGateRequiresCompleteNonProductionAuthority(t *testing.T) {
+// The governed AgentRun mutation surface carries no feature gate: a gate
+// named after it is just an ordinary parsed gate with no configuration
+// semantics, in production or anywhere else.
+func TestNoFeatureGateGovernsTheMutationSurface(t *testing.T) {
 	t.Setenv("ANVILKIT_FEATURE_GATES", "candidate-mutations=true")
-	_, err := Load()
-	var details problem.Details
-	if !errors.As(err, &details) || len(details.Fields) != 1 {
-		t.Fatalf("incomplete candidate mutation gate was accepted: %v", err)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestCandidateMutationGateRequiresControlDatabase(t *testing.T) {
-	t.Setenv("ANVILKIT_FEATURE_GATES", "candidate-mutations=true")
-	t.Setenv("ANVILKIT_AUTH_TRUST_SNAPSHOT", "trust.json")
-	t.Setenv("ANVILKIT_AUTH_ISSUERS", "https://issuer.example.com")
-	t.Setenv("ANVILKIT_EVENTS_DATABASE_URL", "postgres://events@db.example.com/anvilkit")
-	t.Setenv("ANVILKIT_RUN_AUTHORITY_FILE", "authority.json")
-	_, err := Load()
-	var details problem.Details
-	if !errors.As(err, &details) || details.Fields["ANVILKIT_CONTROL_DATABASE_URL"] == "" {
-		t.Fatalf("candidate mutations accepted without control authority database: %v", err)
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a mutation-named gate changed configuration validity: %v", err)
 	}
 }
 
@@ -174,5 +167,38 @@ func requiredProductionSettings() map[string]string {
 		"ANVILKIT_CAPABILITY_SNAPSHOT":     "/etc/anvilkit/capability.json",
 		"ANVILKIT_DEFINITION_TRUST_ROOT":   "/etc/anvilkit/definition-trust-root.json",
 		"ANVILKIT_DEFINITION_ATTESTATION":  "/etc/anvilkit/definition-catalog.dsse.json",
+	}
+}
+
+// The reconciliation window a deployment configures is bounded by the commit
+// loop that has to reach its escalation. Without that bound a window set past
+// the loop's reach would let a run be released at the submit boundary before
+// its governed effect was ever durably escalated.
+func TestDomainReconciliationWindowIsBoundedByTheCommitLoop(t *testing.T) {
+	base := func(t *testing.T) Config {
+		t.Helper()
+		t.Setenv("ANVILKIT_ENVIRONMENT", "development")
+		value, err := Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	within := base(t)
+	within.DomainReconcileLimit = workflow.MaximumDomainReconciliations
+	if err := within.Validate(); err != nil {
+		t.Fatalf("the largest permitted window was rejected: %v", err)
+	}
+	beyond := base(t)
+	beyond.DomainReconcileLimit = workflow.MaximumDomainReconciliations + 1
+	err := beyond.Validate()
+	var details problem.Details
+	if !errors.As(err, &details) || details.Fields["ANVILKIT_DOMAIN_RECONCILE_LIMIT"] == "" {
+		t.Fatalf("an unreachable reconciliation window was accepted: %v", err)
+	}
+	zero := base(t)
+	zero.DomainReconcileLimit = 0
+	if zero.Validate() == nil {
+		t.Fatal("an unbounded reconciliation window was accepted")
 	}
 }

@@ -40,7 +40,7 @@ const (
 	testWorkspace = "workspace.test"
 	testProject   = "project.test"
 	testActor     = "actor.test"
-	testRunID     = "run.wp2"
+	testRunID     = "run.test"
 	validDigest   = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	traceparent   = "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"
 )
@@ -338,6 +338,9 @@ type harnessOptions struct {
 	// submissions overrides the durable domain-submission journal, so a test
 	// can inject a crash at an exact write-ahead boundary.
 	submissions domaincommit.Store
+	// evidence wraps the immutable evidence store, so a test can inject a
+	// crash between a durable decision and the audit record it must leave.
+	evidence func(execution.EvidenceRecorder) execution.EvidenceRecorder
 	// budgetHeadroomMicros bounds the controller's total held exposure;
 	// reconcileLimit bounds uncertain domain reconciliations before
 	// escalation, and the retry base/cap shape the unsettled-commit backoff.
@@ -501,6 +504,10 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 	}
 	h.material = toolMaterial
 	h.evidence = events.NewMemoryEvidence()
+	var evidenceRecorder execution.EvidenceRecorder = h.evidence
+	if options.evidence != nil {
+		evidenceRecorder = options.evidence(h.evidence)
+	}
 	h.authoritySource = authority.NewStatic(h.currentAuthority(h.authority(options)))
 	dispatchEffects := &scheduler.MemoryEffects{}
 	dispatchScheduler, err := scheduler.New(execution.DispatchIDs{}, clock, scheduler.PrerequisiteFunc(func(_ context.Context, value scheduler.Create) error {
@@ -545,7 +552,7 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		Submissions:       submissions,
 		CommitAuthority:   h.commitAuthority,
 		Contracts:         contractValidator,
-		Evidence:          h.evidence,
+		Evidence:          evidenceRecorder,
 		Deltas:            events.NewDeltaBroker(),
 		Decisions:         h.journal,
 		Budget:            budgetController,
@@ -784,7 +791,7 @@ func (h *harness) respondInput(request interrupts.InputRequest, key string) (int
 func (h *harness) decideApproval(request interrupts.ApprovalRequest, decision interrupts.DecisionKind, key string) (interrupts.OperationResult, error) {
 	h.t.Helper()
 	snapshot := h.snapshot()
-	return h.service.DecideApproval(context.Background(), interrupts.Write{Scope: testScope(), RunID: testRunID, ExpectedVersion: snapshot.Version, IdempotencyKey: key, Traceparent: traceparent}, interrupts.ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: request.Version, Decision: decision, Reason: "review feedback"})
+	return h.service.DecideApproval(context.Background(), interrupts.Write{Scope: testScope(), RunID: testRunID, ExpectedVersion: snapshot.Version, IdempotencyKey: key, Traceparent: traceparent}, interrupts.ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: request.Version, Decision: decision, ActionDigest: request.ActionDigest, Comment: "review feedback"})
 }
 
 func finalPlan() []byte {

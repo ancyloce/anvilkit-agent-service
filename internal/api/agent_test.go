@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
 	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
+	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
@@ -21,6 +23,23 @@ import (
 type verifier struct {
 	claims auth.Claims
 	err    error
+}
+
+func apiTestGuard(t *testing.T) *contractguard.Guard {
+	t.Helper()
+	guard, err := contractguard.NewGuard("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return guard
+}
+
+// apiTestDefinitions resolves any structurally valid reference; the api tests
+// exercise transport behavior, not catalog membership.
+type apiTestDefinitions struct{}
+
+func (apiTestDefinitions) Resolve(reference agent.DefinitionReference) (agent.Definition, error) {
+	return agent.Definition{DefinitionID: reference.DefinitionID, DefinitionDigest: reference.DefinitionDigest}, nil
 }
 
 func (v verifier) Verify(context.Context, string) (auth.Claims, error) { return v.claims, v.err }
@@ -63,11 +82,14 @@ func (appIDs) NewID() (runs.ID, error) { return "run", nil }
 
 type appEvents struct{}
 
-func (appEvents) Replay(context.Context, events.ReplayRequest) (events.ReplayPage, error) {
+func (appEvents) Replay(_ context.Context, request events.ReplayRequest) (events.ReplayPage, error) {
+	if request.AfterEventID == "expired-cursor" {
+		return events.ReplayPage{}, events.CursorExpired()
+	}
 	return events.ReplayPage{}, nil
 }
 func (appEvents) Snapshot(context.Context, events.Scope, string) (events.SnapshotProjection, error) {
-	return events.SnapshotProjection{}, nil
+	return events.SnapshotProjection{Run: json.RawMessage(`{"runId":"run"}`), Cursor: "run:2"}, nil
 }
 func (appEvents) Wait(context.Context, events.Scope, string, uint64, time.Duration) error { return nil }
 
@@ -90,7 +112,7 @@ func TestCandidateReadRoutesRequireVerifiedBearerAndEmitStrongETag(t *testing.T)
 	now := time.Now()
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent"}, appTrust{}, appClock{now})
 	service := runs.NewService(appStore{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 2}}, appStarter{}, appIDs{}, appClock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
-	core := runapp.New(validator, service, appEvents{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.Bounds{MaximumBytes: 100}}, appAuthority{})
+	core := runapp.New(validator, service, appEvents{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.Bounds{MaximumBytes: 100}}, appAuthority{}, apiTestGuard(t), apiTestDefinitions{})
 	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Hour)}
 	handler := New(nil, WithAgentCore(core, verifier{claims: claims}))
 	request := httptest.NewRequest(http.MethodGet, "/v1/workspaces/workspace/agent-runs/run", nil)
@@ -126,7 +148,7 @@ func TestNonSuccessResponsesHaveStableClosedProblemShapeAndDoNotDiscloseScope(t 
 	now := time.Now()
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent"}, appTrust{}, appClock{now})
 	service := runs.NewService(appStore{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 2}}, appStarter{}, appIDs{}, appClock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
-	core := runapp.New(validator, service, appEvents{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.DefaultBounds()}, appAuthority{})
+	core := runapp.New(validator, service, appEvents{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.DefaultBounds()}, appAuthority{}, apiTestGuard(t), apiTestDefinitions{})
 	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Hour)}
 	handler := New(nil, WithAgentCore(core, verifier{claims: claims}))
 
@@ -183,4 +205,33 @@ func assertClosedProblem(t *testing.T, response *httptest.ResponseRecorder, code
 		t.Fatalf("problem=%v want code=%s", payload, code)
 	}
 	return payload
+}
+
+// The snapshot endpoint is the documented recovery path for an expired
+// durable cursor: a cursor beyond retention answers 410, and the snapshot
+// answers the current resource with the cursor to resume from.
+func TestExpiredCursorAnswers410AndSnapshotIsTheRecoveryPath(t *testing.T) {
+	now := time.Now()
+	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent"}, appTrust{}, appClock{now})
+	service := runs.NewService(appStore{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 2}}, appStarter{}, appIDs{}, appClock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
+	core := runapp.New(validator, service, appEvents{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.DefaultBounds()}, appAuthority{}, apiTestGuard(t), apiTestDefinitions{})
+	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead}, ExpiresAt: now.Add(time.Hour)}
+	handler := New(nil, WithAgentCore(core, verifier{claims: claims}))
+
+	expired := httptest.NewRequest(http.MethodGet, "/v1/workspaces/workspace/agent-runs/run/events", nil)
+	expired.Header.Set("Authorization", "Bearer verified")
+	expired.Header.Set("Last-Event-ID", "expired-cursor")
+	expiredResponse := httptest.NewRecorder()
+	handler.ServeHTTP(expiredResponse, expired)
+	if expiredResponse.Code != http.StatusGone || !strings.Contains(expiredResponse.Body.String(), "EVENT_CURSOR_EXPIRED") {
+		t.Fatalf("expired cursor status=%d body=%s", expiredResponse.Code, expiredResponse.Body.String())
+	}
+
+	snapshot := httptest.NewRequest(http.MethodGet, "/v1/workspaces/workspace/agent-runs/run/snapshot", nil)
+	snapshot.Header.Set("Authorization", "Bearer verified")
+	snapshotResponse := httptest.NewRecorder()
+	handler.ServeHTTP(snapshotResponse, snapshot)
+	if snapshotResponse.Code != http.StatusOK || !strings.Contains(snapshotResponse.Body.String(), `"cursor":"run:2"`) {
+		t.Fatalf("snapshot status=%d body=%s", snapshotResponse.Code, snapshotResponse.Body.String())
+	}
 }

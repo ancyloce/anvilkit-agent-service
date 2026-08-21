@@ -123,6 +123,19 @@ type Command struct {
 	RetryEligible  bool
 	Failure        *problem.Details
 	Traceparent    string
+	// Artifact names the immutable candidate a SubmitForReview transition
+	// makes reviewable; the store projects it as the public
+	// run.artifact-available event.
+	Artifact *EventArtifact
+}
+
+// EventArtifact is the bounded public artifact reference the store projects
+// onto the run.artifact-available event.
+type EventArtifact struct {
+	ArtifactID string
+	Digest     string
+	MediaType  string
+	SizeBytes  int64
 }
 type Run struct {
 	ID                  ID

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
+	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
 )
 
 type Environment string
@@ -57,112 +58,137 @@ type Limits struct {
 }
 
 type Config struct {
-	ServiceName             string
-	ServiceVersion          string
-	Environment             Environment
-	HTTPAddress             string
-	MigrationMode           string
-	MigrationDatabase       string
-	ContractRoot            string
-	DefinitionTrustRoot     string
-	DefinitionAttestation   string
-	AuthTrustSnapshot       string
-	AuthIssuers             []string
-	AuthAudience            string
-	AuthRevalidation        time.Duration
-	RunAuthorityFile        string
-	ControlDatabase         string
-	ControlPoolSize         int
-	WorkflowDatabase        string
-	WorkflowPoolSize        int
-	EventsDatabase          string
-	EventsPoolSize          int
-	ArtifactsDatabase       string
-	ArtifactsPoolSize       int
-	EvaluationDatabase      string
-	EvaluationPoolSize      int
-	ExecutorID              string
-	Pagix                   Endpoint
-	ContractRuntime         Endpoint
-	ObjectStore             Endpoint
-	QueueName               string
-	DLQName                 string
-	WorkerImplementation    string
-	ModelImplementation     string
-	ToolImplementation      string
-	DomainImplementation    string
-	InputRequestTTL         time.Duration
-	ApprovalRequestTTL      time.Duration
-	ProviderEnabled         bool
-	ProviderPriority        []string
-	PolicySnapshot          string
-	CapabilitySnapshot      string
-	ArtifactPolicy          string
-	BudgetUnits             int64 // per-child reservation upper bound in currency micros
-	BudgetHeadroomMicros    int64
-	BudgetReviewBasisPoints int
-	RunTimeout              time.Duration
-	TurnLimit               int
-	DwellDeadline           time.Duration
-	CircuitFailures         int
-	EgressAllowlist         []string
-	SigningKey              SecretRef
-	EncryptionKey           SecretRef
-	RecoveryRegister        Endpoint
-	ReceiptJournal          Endpoint
-	AuthoritativeTime       Endpoint
-	MaximumClockSkew        time.Duration
-	ProtectedAudit          Endpoint
-	OTelEndpoint            string
-	OTelSampleRatio         float64
-	FeatureGates            map[string]bool
-	Limits                  Limits
+	ServiceName                   string
+	ServiceVersion                string
+	Environment                   Environment
+	HTTPAddress                   string
+	MigrationMode                 string
+	MigrationDatabase             string
+	ContractRoot                  string
+	DefinitionTrustRoot           string
+	DefinitionAttestation         string
+	AuthTrustSnapshot             string
+	AuthIssuers                   []string
+	AuthAudience                  string
+	AuthRevalidation              time.Duration
+	RunAuthorityFile              string
+	ControlDatabase               string
+	ControlPoolSize               int
+	WorkflowDatabase              string
+	WorkflowPoolSize              int
+	EventsDatabase                string
+	EventsPoolSize                int
+	ArtifactsDatabase             string
+	ArtifactsPoolSize             int
+	EvaluationDatabase            string
+	EvaluationPoolSize            int
+	ExecutorID                    string
+	Pagix                         Endpoint
+	ContractRuntime               Endpoint
+	ObjectStore                   Endpoint
+	QueueName                     string
+	DLQName                       string
+	WorkerImplementation          string
+	ModelImplementation           string
+	ToolImplementation            string
+	DomainImplementation          string
+	ContractRuntimeImplementation string
+	ContractRuntimeAttempts       int
+	ContractRuntimeBackoff        time.Duration
+	ControlledModelScript         []string
+	InputRequestTTL               time.Duration
+	ApprovalRequestTTL            time.Duration
+	ApplyAuthorizationTTL         time.Duration
+	ArtifactPendingTTL            time.Duration
+	ArtifactGrantTTL              time.Duration
+	EventRetention                time.Duration
+	SSEWriteTimeout               time.Duration
+	ProviderEnabled               bool
+	ProviderPriority              []string
+	PolicySnapshot                string
+	CapabilitySnapshot            string
+	ArtifactPolicy                string
+	BudgetUnits                   int64 // per-child reservation upper bound in currency micros
+	BudgetHeadroomMicros          int64
+	BudgetReviewBasisPoints       int
+	// BudgetMaxReservedMicros bounds the total unreleased reservation
+	// exposure the Platform budget controller may hold per root run scope.
+	BudgetMaxReservedMicros int64
+	// DomainReconcileLimit bounds how many durable uncertain reconciliations
+	// one submitted governed effect may accumulate before it escalates to
+	// operator resolution; the retry base and cap shape the bounded backoff
+	// between reconciliations. It is validated against
+	// workflow.MaximumDomainReconciliations, so a configured window can never
+	// outrun the commit loop that has to reach it: a run is released at the
+	// submit boundary only after a durable escalation, and configuration
+	// cannot put that escalation beyond the loop's reach.
+	DomainReconcileLimit int
+	DomainRetryBase      time.Duration
+	DomainRetryCap       time.Duration
+	RunTimeout           time.Duration
+	TurnLimit            int
+	DwellDeadline        time.Duration
+	CircuitFailures      int
+	EgressAllowlist      []string
+	SigningKey           SecretRef
+	EncryptionKey        SecretRef
+	RecoveryRegister     Endpoint
+	ReceiptJournal       Endpoint
+	AuthoritativeTime    Endpoint
+	MaximumClockSkew     time.Duration
+	ProtectedAudit       Endpoint
+	OTelEndpoint         string
+	OTelSampleRatio      float64
+	FeatureGates         map[string]bool
+	Limits               Limits
 }
 
 // Load reads the complete typed configuration surface. No other package may
 // read process environment directly; cmd/boundarycheck enforces that rule.
 func Load() (Config, error) {
 	cfg := Config{
-		ServiceName:           env("ANVILKIT_SERVICE_NAME", "agent-service"),
-		ServiceVersion:        env("ANVILKIT_SERVICE_VERSION", "dev"),
-		Environment:           Environment(env("ANVILKIT_ENVIRONMENT", "development")),
-		HTTPAddress:           env("ANVILKIT_HTTP_ADDRESS", ":8080"),
-		MigrationMode:         env("ANVILKIT_MIGRATION_MODE", "validate"),
-		MigrationDatabase:     os.Getenv("ANVILKIT_MIGRATION_DATABASE_URL"),
-		ContractRoot:          env("ANVILKIT_CONTRACT_ROOT", "."),
-		DefinitionTrustRoot:   env("ANVILKIT_DEFINITION_TRUST_ROOT", ""),
-		DefinitionAttestation: env("ANVILKIT_DEFINITION_ATTESTATION", ""),
-		AuthTrustSnapshot:     os.Getenv("ANVILKIT_AUTH_TRUST_SNAPSHOT"),
-		AuthIssuers:           csv(os.Getenv("ANVILKIT_AUTH_ISSUERS")),
-		AuthAudience:          env("ANVILKIT_AUTH_AUDIENCE", "urn:anvilkit:audience:agent-service"),
-		RunAuthorityFile:      os.Getenv("ANVILKIT_RUN_AUTHORITY_FILE"),
-		ControlDatabase:       os.Getenv("ANVILKIT_CONTROL_DATABASE_URL"),
-		WorkflowDatabase:      os.Getenv("ANVILKIT_WORKFLOW_DATABASE_URL"),
-		EventsDatabase:        os.Getenv("ANVILKIT_EVENTS_DATABASE_URL"),
-		ArtifactsDatabase:     os.Getenv("ANVILKIT_ARTIFACTS_DATABASE_URL"),
-		EvaluationDatabase:    os.Getenv("ANVILKIT_EVALUATION_DATABASE_URL"),
-		ExecutorID:            env("ANVILKIT_EXECUTOR_ID", "local-1"),
-		Pagix:                 endpoint("ANVILKIT_PAGIX"),
-		ContractRuntime:       endpoint("ANVILKIT_CONTRACT_RUNTIME"),
-		ObjectStore:           endpoint("ANVILKIT_OBJECT_STORE"),
-		QueueName:             env("ANVILKIT_QUEUE_NAME", "agent-tasks"),
-		DLQName:               env("ANVILKIT_DLQ_NAME", "agent-tasks-dlq"),
-		WorkerImplementation:  env("ANVILKIT_WORKER_IMPLEMENTATION", "external"),
-		ModelImplementation:   os.Getenv("ANVILKIT_MODEL_IMPLEMENTATION"),
-		ToolImplementation:    os.Getenv("ANVILKIT_TOOL_IMPLEMENTATION"),
-		DomainImplementation:  os.Getenv("ANVILKIT_DOMAIN_IMPLEMENTATION"),
-		ProviderPriority:      csv(os.Getenv("ANVILKIT_PROVIDER_PRIORITY")),
-		PolicySnapshot:        os.Getenv("ANVILKIT_POLICY_SNAPSHOT"),
-		CapabilitySnapshot:    os.Getenv("ANVILKIT_CAPABILITY_SNAPSHOT"),
-		ArtifactPolicy:        env("ANVILKIT_ARTIFACT_POLICY", "baseline"),
-		EgressAllowlist:       csv(os.Getenv("ANVILKIT_EGRESS_ALLOWLIST")),
-		SigningKey:            secret("ANVILKIT_SIGNING_KEY_REF", "ANVILKIT_SIGNING_KEY"),
-		EncryptionKey:         secret("ANVILKIT_ENCRYPTION_KEY_REF", "ANVILKIT_ENCRYPTION_KEY"),
-		RecoveryRegister:      endpoint("ANVILKIT_RECOVERY_REGISTER"),
-		ReceiptJournal:        endpoint("ANVILKIT_RECEIPT_JOURNAL"),
-		AuthoritativeTime:     endpoint("ANVILKIT_AUTHORITATIVE_TIME"),
-		ProtectedAudit:        endpoint("ANVILKIT_PROTECTED_AUDIT"),
-		OTelEndpoint:          os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
+		ServiceName:                   env("ANVILKIT_SERVICE_NAME", "agent-service"),
+		ServiceVersion:                env("ANVILKIT_SERVICE_VERSION", "dev"),
+		Environment:                   Environment(env("ANVILKIT_ENVIRONMENT", "development")),
+		HTTPAddress:                   env("ANVILKIT_HTTP_ADDRESS", ":8080"),
+		MigrationMode:                 env("ANVILKIT_MIGRATION_MODE", "validate"),
+		MigrationDatabase:             os.Getenv("ANVILKIT_MIGRATION_DATABASE_URL"),
+		ContractRoot:                  env("ANVILKIT_CONTRACT_ROOT", "."),
+		DefinitionTrustRoot:           env("ANVILKIT_DEFINITION_TRUST_ROOT", ""),
+		DefinitionAttestation:         env("ANVILKIT_DEFINITION_ATTESTATION", ""),
+		AuthTrustSnapshot:             os.Getenv("ANVILKIT_AUTH_TRUST_SNAPSHOT"),
+		AuthIssuers:                   csv(os.Getenv("ANVILKIT_AUTH_ISSUERS")),
+		AuthAudience:                  env("ANVILKIT_AUTH_AUDIENCE", "urn:anvilkit:audience:agent-service"),
+		RunAuthorityFile:              os.Getenv("ANVILKIT_RUN_AUTHORITY_FILE"),
+		ControlDatabase:               os.Getenv("ANVILKIT_CONTROL_DATABASE_URL"),
+		WorkflowDatabase:              os.Getenv("ANVILKIT_WORKFLOW_DATABASE_URL"),
+		EventsDatabase:                os.Getenv("ANVILKIT_EVENTS_DATABASE_URL"),
+		ArtifactsDatabase:             os.Getenv("ANVILKIT_ARTIFACTS_DATABASE_URL"),
+		EvaluationDatabase:            os.Getenv("ANVILKIT_EVALUATION_DATABASE_URL"),
+		ExecutorID:                    env("ANVILKIT_EXECUTOR_ID", "local-1"),
+		Pagix:                         endpoint("ANVILKIT_PAGIX"),
+		ContractRuntime:               endpoint("ANVILKIT_CONTRACT_RUNTIME"),
+		ObjectStore:                   endpoint("ANVILKIT_OBJECT_STORE"),
+		QueueName:                     env("ANVILKIT_QUEUE_NAME", "agent-tasks"),
+		DLQName:                       env("ANVILKIT_DLQ_NAME", "agent-tasks-dlq"),
+		WorkerImplementation:          os.Getenv("ANVILKIT_WORKER_IMPLEMENTATION"),
+		ModelImplementation:           os.Getenv("ANVILKIT_MODEL_IMPLEMENTATION"),
+		ToolImplementation:            os.Getenv("ANVILKIT_TOOL_IMPLEMENTATION"),
+		DomainImplementation:          os.Getenv("ANVILKIT_DOMAIN_IMPLEMENTATION"),
+		ContractRuntimeImplementation: os.Getenv("ANVILKIT_CONTRACT_RUNTIME_IMPLEMENTATION"),
+		ControlledModelScript:         csv(env("ANVILKIT_CONTROLLED_MODEL_SCRIPT", "final")),
+		ProviderPriority:              csv(os.Getenv("ANVILKIT_PROVIDER_PRIORITY")),
+		PolicySnapshot:                os.Getenv("ANVILKIT_POLICY_SNAPSHOT"),
+		CapabilitySnapshot:            os.Getenv("ANVILKIT_CAPABILITY_SNAPSHOT"),
+		ArtifactPolicy:                env("ANVILKIT_ARTIFACT_POLICY", "baseline"),
+		EgressAllowlist:               csv(os.Getenv("ANVILKIT_EGRESS_ALLOWLIST")),
+		SigningKey:                    secret("ANVILKIT_SIGNING_KEY_REF", "ANVILKIT_SIGNING_KEY"),
+		EncryptionKey:                 secret("ANVILKIT_ENCRYPTION_KEY_REF", "ANVILKIT_ENCRYPTION_KEY"),
+		RecoveryRegister:              endpoint("ANVILKIT_RECOVERY_REGISTER"),
+		ReceiptJournal:                endpoint("ANVILKIT_RECEIPT_JOURNAL"),
+		AuthoritativeTime:             endpoint("ANVILKIT_AUTHORITATIVE_TIME"),
+		ProtectedAudit:                endpoint("ANVILKIT_PROTECTED_AUDIT"),
+		OTelEndpoint:                  os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 	}
 
 	var err error
@@ -193,6 +219,18 @@ func Load() (Config, error) {
 	if cfg.BudgetReviewBasisPoints, err = integer("ANVILKIT_BUDGET_REVIEW_BASIS_POINTS", 8000); err != nil {
 		return Config{}, err
 	}
+	if cfg.BudgetMaxReservedMicros, err = integer64("ANVILKIT_BUDGET_MAX_RESERVED_MICROS", 10_000_000_000); err != nil {
+		return Config{}, err
+	}
+	if cfg.DomainReconcileLimit, err = integer("ANVILKIT_DOMAIN_RECONCILE_LIMIT", 8); err != nil {
+		return Config{}, err
+	}
+	if cfg.DomainRetryBase, err = duration("ANVILKIT_DOMAIN_RETRY_BASE", 10*time.Second); err != nil {
+		return Config{}, err
+	}
+	if cfg.DomainRetryCap, err = duration("ANVILKIT_DOMAIN_RETRY_CAP", 5*time.Minute); err != nil {
+		return Config{}, err
+	}
 	if cfg.TurnLimit, err = integer("ANVILKIT_TURN_LIMIT", 20); err != nil {
 		return Config{}, err
 	}
@@ -212,6 +250,27 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.ApprovalRequestTTL, err = duration("ANVILKIT_APPROVAL_REQUEST_TTL", 15*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.ApplyAuthorizationTTL, err = duration("ANVILKIT_APPLY_AUTHORIZATION_TTL", 2*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.ArtifactPendingTTL, err = duration("ANVILKIT_ARTIFACT_PENDING_TTL", time.Hour); err != nil {
+		return Config{}, err
+	}
+	if cfg.ArtifactGrantTTL, err = duration("ANVILKIT_ARTIFACT_GRANT_TTL", 5*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.EventRetention, err = duration("ANVILKIT_EVENT_RETENTION", 720*time.Hour); err != nil {
+		return Config{}, err
+	}
+	if cfg.SSEWriteTimeout, err = duration("ANVILKIT_SSE_WRITE_TIMEOUT", 10*time.Second); err != nil {
+		return Config{}, err
+	}
+	if cfg.ContractRuntimeAttempts, err = integer("ANVILKIT_CONTRACT_RUNTIME_ATTEMPTS", 3); err != nil {
+		return Config{}, err
+	}
+	if cfg.ContractRuntimeBackoff, err = duration("ANVILKIT_CONTRACT_RUNTIME_BACKOFF", time.Second); err != nil {
 		return Config{}, err
 	}
 	if cfg.MaximumClockSkew, err = duration("ANVILKIT_MAXIMUM_CLOCK_SKEW", 5*time.Second); err != nil {
@@ -256,21 +315,16 @@ func (c Config) Validate() error {
 	if c.ProviderEnabled && len(c.ProviderPriority) == 0 {
 		return problem.InvalidConfiguration("ANVILKIT_PROVIDER_PRIORITY", "must be non-empty when providers are enabled")
 	}
-	if c.FeatureGates["candidate-mutations"] {
-		if c.Environment == EnvironmentProduction {
-			return problem.InvalidConfiguration("ANVILKIT_FEATURE_GATES", "candidate mutations are forbidden in production until the interaction contract is finalized")
-		}
-		for name, value := range map[string]string{"ANVILKIT_AUTH_TRUST_SNAPSHOT": c.AuthTrustSnapshot, "ANVILKIT_AUTH_ISSUERS": strings.Join(c.AuthIssuers, ","), "ANVILKIT_CONTROL_DATABASE_URL": c.ControlDatabase, "ANVILKIT_EVENTS_DATABASE_URL": c.EventsDatabase, "ANVILKIT_RUN_AUTHORITY_FILE": c.RunAuthorityFile} {
-			if value == "" {
-				return problem.InvalidConfiguration(name, "is required when candidate mutations are enabled")
-			}
-		}
-	}
+	// The governed AgentRun mutation surface is part of the production API and
+	// carries no feature gate: authentication, authorization, concurrency,
+	// idempotency, and canonical schema validation each fail closed on their
+	// own, and composition refuses to serve the API at all without its
+	// authentication trust material and durable stores.
 	if c.Environment == EnvironmentProduction {
 		if strings.Contains(strings.ToLower(c.WorkerImplementation), "fake") || strings.Contains(strings.ToLower(c.WorkerImplementation), "mock") {
 			return problem.InvalidConfiguration("ANVILKIT_WORKER_IMPLEMENTATION", "fake and mock workers are forbidden in production")
 		}
-		for name, value := range map[string]string{"ANVILKIT_MODEL_IMPLEMENTATION": c.ModelImplementation, "ANVILKIT_TOOL_IMPLEMENTATION": c.ToolImplementation, "ANVILKIT_DOMAIN_IMPLEMENTATION": c.DomainImplementation} {
+		for name, value := range map[string]string{"ANVILKIT_MODEL_IMPLEMENTATION": c.ModelImplementation, "ANVILKIT_TOOL_IMPLEMENTATION": c.ToolImplementation, "ANVILKIT_DOMAIN_IMPLEMENTATION": c.DomainImplementation, "ANVILKIT_CONTRACT_RUNTIME_IMPLEMENTATION": c.ContractRuntimeImplementation} {
 			lowered := strings.ToLower(value)
 			if strings.Contains(lowered, "fake") || strings.Contains(lowered, "mock") || strings.Contains(lowered, "controlled") {
 				return problem.InvalidConfiguration(name, "controlled, fake, and mock implementations are forbidden in production")
@@ -314,8 +368,43 @@ func (c Config) Validate() error {
 	if c.InputRequestTTL <= 0 || c.ApprovalRequestTTL <= 0 {
 		return problem.InvalidConfiguration("ANVILKIT_INPUT_REQUEST_TTL", "interrupt deadlines must be positive")
 	}
+	if c.ApplyAuthorizationTTL <= 0 || c.ApplyAuthorizationTTL > 5*time.Minute {
+		return problem.InvalidConfiguration("ANVILKIT_APPLY_AUTHORIZATION_TTL", "apply authorization expiry must be positive and at most five minutes")
+	}
+	if c.ArtifactPendingTTL <= 0 {
+		return problem.InvalidConfiguration("ANVILKIT_ARTIFACT_PENDING_TTL", "artifact pending expiry must be positive")
+	}
+	if c.ArtifactGrantTTL <= 0 || c.ArtifactGrantTTL > 15*time.Minute {
+		return problem.InvalidConfiguration("ANVILKIT_ARTIFACT_GRANT_TTL", "artifact grant expiry must be positive and at most fifteen minutes")
+	}
+	if c.ContractRuntimeAttempts < 1 || c.ContractRuntimeAttempts > 5 {
+		return problem.InvalidConfiguration("ANVILKIT_CONTRACT_RUNTIME_ATTEMPTS", "contract runtime attempts must be between 1 and 5")
+	}
+	if c.ContractRuntimeBackoff < 0 || c.ContractRuntimeBackoff > 30*time.Second {
+		return problem.InvalidConfiguration("ANVILKIT_CONTRACT_RUNTIME_BACKOFF", "contract runtime backoff must be between 0 and 30 seconds")
+	}
+	if c.EventRetention < time.Hour {
+		return problem.InvalidConfiguration("ANVILKIT_EVENT_RETENTION", "the public cursor retention window must be at least one hour")
+	}
+	if c.SSEWriteTimeout <= 0 || c.SSEWriteTimeout > time.Minute {
+		return problem.InvalidConfiguration("ANVILKIT_SSE_WRITE_TIMEOUT", "the event stream write deadline must be positive and at most one minute")
+	}
+	if len(c.ControlledModelScript) < 1 || len(c.ControlledModelScript) > 16 {
+		return problem.InvalidConfiguration("ANVILKIT_CONTROLLED_MODEL_SCRIPT", "the controlled model script must carry between 1 and 16 steps")
+	}
+	for _, step := range c.ControlledModelScript {
+		if step != "final" && step != "need-input" && step != "tool-echo" {
+			return problem.InvalidConfiguration("ANVILKIT_CONTROLLED_MODEL_SCRIPT", "controlled model script steps must be final, need-input, or tool-echo")
+		}
+	}
 	if c.RunTimeout <= 0 || c.DwellDeadline <= 0 || c.MaximumClockSkew < 0 || c.AuthRevalidation <= 0 {
 		return problem.InvalidConfiguration("duration", "timeouts must be positive and clock skew must not be negative")
+	}
+	if c.BudgetMaxReservedMicros < 1 || c.DomainReconcileLimit < 1 || c.DomainRetryBase <= 0 || c.DomainRetryCap < c.DomainRetryBase {
+		return fmt.Errorf("budget controller exposure bound and domain reconciliation window must be positive and ordered")
+	}
+	if c.DomainReconcileLimit > workflow.MaximumDomainReconciliations {
+		return problem.InvalidConfiguration("ANVILKIT_DOMAIN_RECONCILE_LIMIT", fmt.Sprintf("the domain reconciliation window must not exceed %d", workflow.MaximumDomainReconciliations))
 	}
 	if c.BudgetUnits < 1 || c.BudgetHeadroomMicros < 1 || c.BudgetReviewBasisPoints < 1 || c.BudgetReviewBasisPoints > 10_000 || c.TurnLimit < 1 || c.CircuitFailures < 1 {
 		return problem.InvalidConfiguration("limits", "budget, turn, and circuit-breaker limits must be positive")

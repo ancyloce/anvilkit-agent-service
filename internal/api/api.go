@@ -17,7 +17,6 @@ import (
 
 	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
-	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runapp"
 )
@@ -30,11 +29,10 @@ type TokenVerifier interface {
 	Verify(context.Context, string) (auth.Claims, error)
 }
 type Handler struct {
-	readiness    Readiness
-	draining     atomic.Bool
-	core         *runapp.App
-	verifier     TokenVerifier
-	mutationGate bool
+	readiness Readiness
+	draining  atomic.Bool
+	core      *runapp.App
+	verifier  TokenVerifier
 }
 
 type Option func(*Handler)
@@ -42,10 +40,6 @@ type Option func(*Handler)
 func WithAgentCore(core *runapp.App, verifier TokenVerifier) Option {
 	return func(handler *Handler) { handler.core, handler.verifier = core, verifier }
 }
-
-// WithCandidateMutations exists only for test/dev evaluation while the interaction contract is
-// open. Production composition must not enable it before contract freeze.
-func WithCandidateMutations() Option { return func(handler *Handler) { handler.mutationGate = true } }
 func New(readiness Readiness, options ...Option) *Handler {
 	handler := &Handler{readiness: readiness}
 	for _, option := range options {
@@ -109,22 +103,41 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 		return
 	}
 	if len(parts) == 4 && request.Method == http.MethodPost {
-		if !h.mutationGate {
-			writeProblem(response, problem.New(problem.CodeInfrastructureUnavailable, ""), request.Header.Get("traceparent"))
-			return
-		}
 		raw, err := io.ReadAll(http.MaxBytesReader(response, request.Body, 1<<20))
 		if err != nil {
 			writeProblem(response, problem.New(problem.CodeRequestInvalid, ""), request.Header.Get("traceparent"))
 			return
 		}
 		result, err := h.core.Create(request.Context(), claims, workspaceID, request.Header.Get("Idempotency-Key"), request.Header.Get("X-AnvilKit-Request-Digest"), request.Header.Get("traceparent"), raw)
+		// The first successful creation answers 201 with the resource
+		// location; a replayed key answers the recorded result (ADR-021).
+		if err == nil && result.RunID != "" && !result.Replayed {
+			response.Header().Set("Location", request.URL.Path+"/"+result.RunID)
+			h.writeRepresentationStatus(response, result, err, request, http.StatusCreated)
+			return
+		}
 		h.writeRepresentation(response, result, err, request)
 		return
 	}
 	if len(parts) == 5 && request.Method == http.MethodGet {
 		result, err := h.core.Get(request.Context(), claims, workspaceID, parts[4])
 		h.writeRepresentation(response, result, err, request)
+		return
+	}
+	if len(parts) == 6 && parts[5] == "snapshot" && request.Method == http.MethodGet {
+		projection, err := h.core.Snapshot(request.Context(), claims, workspaceID, parts[4])
+		if err != nil {
+			writeProblem(response, err, request.Header.Get("traceparent"))
+			return
+		}
+		body, err := json.Marshal(projection)
+		if err != nil {
+			writeProblem(response, problem.Internal(""), request.Header.Get("traceparent"))
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write(body)
 		return
 	}
 	if len(parts) == 6 && parts[5] == "events" && request.Method == http.MethodGet {
@@ -136,7 +149,11 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 		}
 		return
 	}
-	if h.mutationGate && request.Method == http.MethodPost && len(parts) >= 6 {
+	// The governed AgentRun mutation surface is part of the production API.
+	// Authentication, authorization, If-Match concurrency, idempotency,
+	// canonical schema validation, and bounded-body enforcement each fail
+	// closed on their own; no feature gate stands in front of them.
+	if request.Method == http.MethodPost && len(parts) >= 6 {
 		input := runapp.ControlInput{WorkspaceID: workspaceID, RunID: parts[4], ETag: request.Header.Get("If-Match"), Key: request.Header.Get("Idempotency-Key"), Digest: request.Header.Get("X-AnvilKit-Request-Digest"), Traceparent: request.Header.Get("traceparent")}
 		if len(parts) == 6 && (parts[5] == "cancel" || parts[5] == "retry" || parts[5] == "discard") {
 			if request.Body != nil {
@@ -159,29 +176,40 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 			return
 		}
 		if len(parts) == 8 && parts[5] == "inputs" && parts[7] == "responses" {
-			var body struct {
-				RequestVersion uint64          `json:"requestVersion"`
-				Value          json.RawMessage `json:"value"`
-			}
-			if err := decodeBoundedCommand(response, request, &body); err != nil {
+			raw, err := readBoundedCommand(response, request)
+			if err != nil {
 				writeProblem(response, err, request.Header.Get("traceparent"))
 				return
 			}
-			result, err := h.core.RespondInput(request.Context(), claims, input, interrupts.InputResponseCommand{RequestID: interrupts.RequestID(parts[6]), RequestVersion: body.RequestVersion, Value: body.Value})
+			result, err := h.core.RespondInput(request.Context(), claims, input, parts[6], raw)
+			h.writeRepresentation(response, result, err, request)
+			return
+		}
+		// Operator recovery of a durably escalated governed effect. The
+		// operation identity is in the path, so the decision is bound to the
+		// exact submission the operator reviewed; the resolving operator is
+		// never in the body — the application derives it from the verified
+		// request authority.
+		if len(parts) == 8 && parts[5] == "domain-operations" && parts[7] == "resolution" {
+			// Transport hands the bounded canonical bytes inward untouched:
+			// the application validates them against the pinned
+			// ResolveDomainOperationRequest contract before decoding anything.
+			raw, err := readBoundedCommand(response, request)
+			if err != nil {
+				writeProblem(response, err, request.Header.Get("traceparent"))
+				return
+			}
+			result, err := h.core.ResolveEscalation(request.Context(), claims, input, parts[6], raw)
 			h.writeRepresentation(response, result, err, request)
 			return
 		}
 		if len(parts) == 8 && parts[5] == "approvals" && parts[7] == "decisions" {
-			var body struct {
-				DecisionVersion uint64                  `json:"decisionVersion"`
-				Decision        interrupts.DecisionKind `json:"decision"`
-				Reason          string                  `json:"reason,omitempty"`
-			}
-			if err := decodeBoundedCommand(response, request, &body); err != nil {
+			raw, err := readBoundedCommand(response, request)
+			if err != nil {
 				writeProblem(response, err, request.Header.Get("traceparent"))
 				return
 			}
-			result, err := h.core.DecideApproval(request.Context(), claims, input, interrupts.ApprovalDecisionCommand{RequestID: interrupts.RequestID(parts[6]), RequestVersion: body.DecisionVersion, Decision: body.Decision, Reason: body.Reason})
+			result, err := h.core.DecideApproval(request.Context(), claims, input, parts[6], raw)
 			h.writeRepresentation(response, result, err, request)
 			return
 		}
@@ -189,13 +217,23 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 	writeProblem(response, problem.New(problem.CodeResourceNotFound, request.Header.Get("traceparent")), request.Header.Get("traceparent"))
 }
 
-func decodeBoundedCommand(response http.ResponseWriter, request *http.Request, target any) error {
+// readBoundedCommand reads one bounded command body and admits it as strict
+// canonical JSON without interpreting it.
+func readBoundedCommand(response http.ResponseWriter, request *http.Request) ([]byte, error) {
 	raw, err := io.ReadAll(http.MaxBytesReader(response, request.Body, 64*1024))
 	if err != nil {
-		return problem.New(problem.CodeRequestInvalid, "")
+		return nil, problem.New(problem.CodeRequestInvalid, "")
 	}
 	if _, err := contractvalidator.Admit(raw); err != nil {
-		return problem.New(problem.CodeRequestInvalid, "")
+		return nil, problem.New(problem.CodeRequestInvalid, "")
+	}
+	return raw, nil
+}
+
+func decodeBoundedCommand(response http.ResponseWriter, request *http.Request, target any) error {
+	raw, err := readBoundedCommand(response, request)
+	if err != nil {
+		return err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -221,6 +259,10 @@ func (h *Handler) verify(request *http.Request) (auth.Claims, error) {
 	return claims, nil
 }
 func (h *Handler) writeRepresentation(response http.ResponseWriter, result runapp.Representation, err error, request *http.Request) {
+	h.writeRepresentationStatus(response, result, err, request, http.StatusOK)
+}
+
+func (h *Handler) writeRepresentationStatus(response http.ResponseWriter, result runapp.Representation, err error, request *http.Request, status int) {
 	if err != nil {
 		writeProblem(response, err, request.Header.Get("traceparent"))
 		return
@@ -235,7 +277,7 @@ func (h *Handler) writeRepresentation(response http.ResponseWriter, result runap
 	if result.Replayed {
 		response.Header().Set("Idempotency-Replayed", "true")
 	}
-	response.WriteHeader(http.StatusOK)
+	response.WriteHeader(status)
 	_, _ = response.Write(result.Body)
 }
 func writeProblem(response http.ResponseWriter, err error, traceReference string) {

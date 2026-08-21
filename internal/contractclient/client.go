@@ -4,6 +4,7 @@ package contractclient
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
@@ -19,10 +20,10 @@ const (
 )
 
 type Request struct {
-	WorkspaceID, ProjectID, RunID          string
-	Kind                                   Kind
-	Payload                                []byte
-	BOMDigest, SchemaDigest, CatalogDigest string
+	WorkspaceID, ProjectID, RunID                        string
+	Kind                                                 Kind
+	Payload                                              []byte
+	BOMDigest, SchemaDigest, CatalogDigest, PolicyDigest string
 }
 type Result struct {
 	Valid            bool
@@ -33,12 +34,12 @@ type Runtime interface {
 	CompileValidate(context.Context, Request) (Result, error)
 }
 type Evidence struct {
-	WorkspaceID, ProjectID, RunID                            string
-	Kind                                                     Kind
-	BOMDigest, SchemaDigest, ValidatorVersion, CatalogDigest string
-	Valid                                                    bool
-	Findings                                                 []problem.FieldError
-	ValidatedAt                                              time.Time
+	WorkspaceID, ProjectID, RunID                                          string
+	Kind                                                                   Kind
+	BOMDigest, SchemaDigest, ValidatorVersion, CatalogDigest, PolicyDigest string
+	Valid                                                                  bool
+	Findings                                                               []problem.FieldError
+	ValidatedAt                                                            time.Time
 }
 type Recorder interface {
 	Record(context.Context, Evidence) error
@@ -63,7 +64,7 @@ func New(runtime Runtime, recorder Recorder, sleeper Sleeper, clock Clock, attem
 	return &Orchestrator{runtime, recorder, sleeper, clock, attempts, backoff}, nil
 }
 func (o *Orchestrator) Validate(ctx context.Context, request Request) (Evidence, error) {
-	if request.WorkspaceID == "" || request.ProjectID == "" || request.RunID == "" || (request.Kind != Plan && request.Kind != Artifact) || len(request.Payload) == 0 || len(request.Payload) > 16*1024*1024 || !digest(request.BOMDigest) || !digest(request.SchemaDigest) || !digest(request.CatalogDigest) {
+	if request.WorkspaceID == "" || request.ProjectID == "" || request.RunID == "" || (request.Kind != Plan && request.Kind != Artifact) || len(request.Payload) == 0 || len(request.Payload) > 16*1024*1024 || !digest(request.BOMDigest) || !digest(request.SchemaDigest) || !digest(request.CatalogDigest) || !digest(request.PolicyDigest) {
 		return Evidence{}, problem.New(problem.CodeRequestInvalid, "")
 	}
 	for attempt := 1; attempt <= o.attempts; attempt++ {
@@ -89,7 +90,7 @@ func (o *Orchestrator) Validate(ctx context.Context, request Request) (Evidence,
 		if validatedAt.IsZero() {
 			return Evidence{}, fmt.Errorf("evidence time from the Contract Runtime is unavailable")
 		}
-		evidence := Evidence{request.WorkspaceID, request.ProjectID, request.RunID, request.Kind, request.BOMDigest, request.SchemaDigest, result.ValidatorVersion, request.CatalogDigest, result.Valid, append([]problem.FieldError(nil), result.Findings...), validatedAt}
+		evidence := Evidence{request.WorkspaceID, request.ProjectID, request.RunID, request.Kind, request.BOMDigest, request.SchemaDigest, result.ValidatorVersion, request.CatalogDigest, request.PolicyDigest, result.Valid, append([]problem.FieldError(nil), result.Findings...), validatedAt}
 		if err := o.recorder.Record(ctx, evidence); err != nil {
 			return Evidence{}, fmt.Errorf("record validation evidence: %w", err)
 		}
@@ -118,7 +119,7 @@ func validResult(result Result) bool {
 	return true
 }
 func (o *Orchestrator) RequireForReview(evidence Evidence) error {
-	if evidence.RunID == "" || !evidence.Valid || evidence.ValidatorVersion == "" || !digest(evidence.BOMDigest) || !digest(evidence.SchemaDigest) || !digest(evidence.CatalogDigest) {
+	if evidence.RunID == "" || !evidence.Valid || evidence.ValidatorVersion == "" || !digest(evidence.BOMDigest) || !digest(evidence.SchemaDigest) || !digest(evidence.CatalogDigest) || !digest(evidence.PolicyDigest) {
 		return problem.New(problem.CodeContractInvalid, "")
 	}
 	return nil
@@ -139,4 +140,17 @@ func digest(value string) bool {
 		}
 	}
 	return true
+}
+
+// MemoryRecorder records validation evidence in memory for tests.
+type MemoryRecorder struct {
+	lock    sync.Mutex
+	Records []Evidence
+}
+
+func (r *MemoryRecorder) Record(_ context.Context, evidence Evidence) error {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	r.Records = append(r.Records, evidence)
+	return nil
 }

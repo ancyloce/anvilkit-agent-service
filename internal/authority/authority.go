@@ -64,7 +64,21 @@ type Current struct {
 	PermissionActive bool
 	PolicyActive     bool
 
+	// ActorRole is the role the scope's subject register admits this actor
+	// under. It is authority-owned: it comes from the durable subject record,
+	// never from a claim the caller presents, so a privileged operation can
+	// require a role without trusting the request that asks for it. An actor
+	// with no admitted subject record has no role.
+	ActorRole string
+
 	Grants Grants
+
+	// RevokedTargets and RevokedApprovals are the identity-specific revocation
+	// axes: authority over one target or one accepted approval can be
+	// withdrawn without deactivating the whole scope. Boundaries that act on a
+	// specific target or approval must consult them on every re-read.
+	RevokedTargets   []string
+	RevokedApprovals []string
 }
 
 // Active reports whether every activation axis still permits execution.
@@ -76,6 +90,42 @@ func (c Current) Active() bool {
 // present. Incomplete material is never treated as permissive.
 func (c Current) MaterialComplete() bool {
 	return len(c.Definition) != 0 && len(c.ContractBOM) != 0 && len(c.Policy) != 0 && len(c.Budget) != 0
+}
+
+// RoleOperator is the role a subject must hold in the scope's subject
+// register to recover a run whose governed effect is durably escalated.
+// Operator recovery decides an effect that may already exist at the domain
+// owner, so it is a distinct role from the actor that runs an agent and the
+// reviewer that approves one.
+const RoleOperator = "agent-operator"
+
+// HasRole reports whether the observation's admitted actor role is exactly the
+// named one. A revoked actor has no role for this purpose: an inactive
+// observation never satisfies a role requirement.
+func (c Current) HasRole(role string) bool {
+	return role != "" && c.ActorRole == role && c.ActorActive
+}
+
+// TargetRevoked reports whether authority over the named target has been
+// withdrawn in this scope.
+func (c Current) TargetRevoked(targetID string) bool {
+	for _, revoked := range c.RevokedTargets {
+		if revoked == targetID {
+			return true
+		}
+	}
+	return false
+}
+
+// ApprovalRevoked reports whether the named accepted approval has been
+// withdrawn in this scope. A revoked approval can never authorize a commit.
+func (c Current) ApprovalRevoked(requestID string) bool {
+	for _, revoked := range c.RevokedApprovals {
+		if revoked == requestID {
+			return true
+		}
+	}
+	return false
 }
 
 // Clone returns an independent copy so a caller can never mutate the source's
@@ -90,7 +140,10 @@ func (c Current) Clone() Current {
 		ActorActive:      c.ActorActive,
 		PermissionActive: c.PermissionActive,
 		PolicyActive:     c.PolicyActive,
+		ActorRole:        c.ActorRole,
 		Grants:           c.Grants.clone(),
+		RevokedTargets:   append([]string(nil), c.RevokedTargets...),
+		RevokedApprovals: append([]string(nil), c.RevokedApprovals...),
 	}
 }
 
@@ -100,10 +153,39 @@ type Source interface {
 	Current(context.Context, Scope) (Current, error)
 }
 
+// RevocationKind names one axis of authority withdrawal. The durable
+// current-authority source applies each kind on the next re-read at every
+// boundary; nothing caches past permission.
+type RevocationKind string
+
+const (
+	RevokeActor      RevocationKind = "actor"
+	RevokeRole       RevocationKind = "role"
+	RevokeWorkspace  RevocationKind = "workspace"
+	RevokeDefinition RevocationKind = "definition"
+	RevokePolicy     RevocationKind = "policy"
+	RevokeBudget     RevocationKind = "budget"
+	RevokeTarget     RevocationKind = "target"
+	RevokeApproval   RevocationKind = "approval"
+)
+
+// Revocation is one append-only authority withdrawal. Subject names what is
+// withdrawn: the actor ID, role name, workspace ID, target ID, or approval
+// request ID; material kinds (definition, policy, budget) apply to the whole
+// scope and name the material kind itself.
+type Revocation struct {
+	WorkspaceID  string
+	ProjectID    string
+	RevocationID string
+	Kind         RevocationKind
+	Subject      string
+	Reason       string
+}
+
 // Static serves one configured authority observation and supports explicit
-// revocation. Deployments that resolve authority from a file or an external
-// authority service supply their own Source; this implementation is the
-// configured-material case and the controlled topology's source.
+// revocation. Deployments that resolve authority from the durable scoped
+// store supply that Source; this implementation is the configured-material
+// case and the test topology's source.
 type Static struct {
 	lock    sync.RWMutex
 	value   Current

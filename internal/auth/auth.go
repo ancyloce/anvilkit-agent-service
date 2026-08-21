@@ -26,12 +26,20 @@ const (
 	OpDecideApproval     Operation = "decide-approval"
 	OpIssueAuthorization Operation = "issue-authorization"
 	OpAccessArtifact     Operation = "access-artifact"
+	// OpResolveEscalation is the operator recovery of a run whose governed
+	// effect is durably escalated. It is deliberately its own operation with
+	// its own scope: nothing that can create, cancel, review, or retry a run
+	// can decide an escalated effect, and nothing that can decide one can do
+	// the rest.
+	OpResolveEscalation Operation = "resolve-escalation"
 )
 const (
 	ScopeRead     = "agent:read"
 	ScopeWrite    = "agent:write"
 	ScopeReviewer = "agent:review"
 	ScopeIssuer   = "agent:issue"
+	// ScopeOperator is held only by the operator recovery surface.
+	ScopeOperator = "agent:operate"
 )
 
 func RequiredScopes(operation Operation) []string {
@@ -44,6 +52,8 @@ func RequiredScopes(operation Operation) []string {
 		return []string{ScopeReviewer}
 	case OpIssueAuthorization:
 		return []string{ScopeIssuer}
+	case OpResolveEscalation:
+		return []string{ScopeOperator}
 	default:
 		return nil
 	}
@@ -142,7 +152,7 @@ func (v *Validator) Revalidate(ctx context.Context, claims Claims, operation Ope
 	return err
 }
 func ProtectedOperations() []Operation {
-	values := []Operation{OpCreateRun, OpListRuns, OpGetRun, OpStreamEvents, OpCancel, OpRetry, OpDiscard, OpRespondInput, OpDecideApproval, OpIssueAuthorization, OpAccessArtifact}
+	values := []Operation{OpCreateRun, OpListRuns, OpGetRun, OpStreamEvents, OpCancel, OpRetry, OpDiscard, OpRespondInput, OpDecideApproval, OpIssueAuthorization, OpAccessArtifact, OpResolveEscalation}
 	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
 	return values
 }

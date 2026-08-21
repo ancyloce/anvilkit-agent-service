@@ -34,6 +34,12 @@ type AuthorizationID string
 // resolved from server-owned authority and cannot be supplied by a caller.
 type Command struct {
 	WorkspaceID, ProjectID, RunID, ApprovalRequestID, ArtifactID string
+	// OperationKey is the durable commit-operation identity this issuance is
+	// recorded under. It is server-derived, never caller-supplied. The audit
+	// port persists the authorization audit and the operation mapping as one
+	// semantic write, so a crash or a racing replica can never leave a signed
+	// capability without its operation binding.
+	OperationKey string
 }
 
 type Target struct {
@@ -88,6 +94,14 @@ type AuditRecord struct {
 	TokenDigest     string
 	IssuedAt        time.Time
 	ExpiresAt       time.Time
+	// OperationKey binds this issuance to exactly one durable commit
+	// operation, and Token is the complete signed authorization the operation
+	// carries. Both are persisted in the same write as the audit row: a
+	// replayed operation returns this persisted capability, and a token whose
+	// write lost the operation race is never durably audited, so it can never
+	// be redeemed.
+	OperationKey string
+	Token        string
 }
 
 type Audit interface {
@@ -150,7 +164,7 @@ func New(authority Authority, ids IDs, signer SigningPort, audit Audit, receipts
 }
 
 func (s *IssuerService) Issue(ctx context.Context, command Command) (Authorization, error) {
-	if !opaque(command.WorkspaceID) || !opaque(command.ProjectID) || !opaque(command.RunID) || !opaque(command.ApprovalRequestID) || !opaque(command.ArtifactID) {
+	if !opaque(command.WorkspaceID) || !opaque(command.ProjectID) || !opaque(command.RunID) || !opaque(command.ApprovalRequestID) || !opaque(command.ArtifactID) || !boundedOperationKey(command.OperationKey) {
 		return Authorization{}, denied("bounded issuance command is incomplete")
 	}
 	proof, err := s.authority.Resolve(ctx, command)
@@ -206,7 +220,7 @@ func (s *IssuerService) Issue(ctx context.Context, command Command) (Authorizati
 		return Authorization{}, fmt.Errorf("sign authorization: invalid EdDSA signature size")
 	}
 	compact := header + "." + body + "." + base64.RawURLEncoding.EncodeToString(signature)
-	record := AuditRecord{AuthorizationID: id, WorkspaceID: command.WorkspaceID, ProjectID: command.ProjectID, RunID: command.RunID, KeyID: keyID, PayloadDigest: hash(payloadBytes), TokenDigest: hash([]byte(compact)), IssuedAt: now, ExpiresAt: expires}
+	record := AuditRecord{AuthorizationID: id, WorkspaceID: command.WorkspaceID, ProjectID: command.ProjectID, RunID: command.RunID, KeyID: keyID, PayloadDigest: hash(payloadBytes), TokenDigest: hash([]byte(compact)), IssuedAt: now, ExpiresAt: expires, OperationKey: command.OperationKey, Token: compact}
 	if err := s.audit.Record(ctx, record); err != nil {
 		return Authorization{}, fmt.Errorf("durably audit authorization issuance: %w", err)
 	}
@@ -240,6 +254,21 @@ func payloadFor(id AuthorizationID, keyID string, binding Binding, issued, expir
 
 func validBinding(value Binding) bool {
 	return opaque(value.RunID) && validDigest(value.ActionDigest) && validDigest(value.ArtifactDigest) && targetType(value.Target.Type) && opaque(value.Target.ID) && value.Target.WorkspaceID == value.WorkspaceID && opaque(value.Target.ProjectID) && opaque(value.BaseRevision) && opaque(value.ActorID) && opaque(value.WorkspaceID) && value.ApprovalVersion > 0 && validDigest(value.ContractBOMDigest) && validDigest(value.PolicyDigest) && validDigest(value.DefinitionDigest)
+}
+
+// boundedOperationKey accepts the durable commit-operation identity: it is
+// derived from workflow operation identities, so its alphabet is wider than
+// opaque record identities, but it is still bounded and printable.
+func boundedOperationKey(value string) bool {
+	if len(value) < 1 || len(value) > 512 {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x21 || character > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 func opaque(value string) bool {
@@ -451,16 +480,40 @@ func (r *MemoryKeyRing) Revoke(keyID string) {
 	r.revoked[keyID] = true
 }
 
+// MemoryAudit mirrors the durable audit port's semantics: audit and operation
+// mapping are one atomic write, insert-once by operation. A record that loses
+// the operation race is not audited at all, exactly like the rolled-back
+// database transaction.
 type MemoryAudit struct {
-	lock    sync.Mutex
-	Records []AuditRecord
+	lock       sync.Mutex
+	Records    []AuditRecord
+	operations map[string]AuditRecord
 }
 
 func (a *MemoryAudit) Record(_ context.Context, record AuditRecord) error {
 	a.lock.Lock()
 	defer a.lock.Unlock()
+	if a.operations == nil {
+		a.operations = map[string]AuditRecord{}
+	}
+	key := record.WorkspaceID + "\x00" + record.ProjectID + "\x00" + record.OperationKey
+	if prior, recorded := a.operations[key]; recorded {
+		if prior.AuthorizationID != record.AuthorizationID {
+			return problem.New(problem.CodeIdempotencyConflict, "")
+		}
+		return nil
+	}
+	a.operations[key] = record
 	a.Records = append(a.Records, record)
 	return nil
+}
+
+// Recorded answers the issuance one durable operation already recorded.
+func (a *MemoryAudit) Recorded(workspaceID, projectID, operationKey string) (AuditRecord, bool) {
+	a.lock.Lock()
+	defer a.lock.Unlock()
+	record, recorded := a.operations[workspaceID+"\x00"+projectID+"\x00"+operationKey]
+	return record, recorded
 }
 
 // lowerAlphanumeric reports whether the character is a lower-case letter or a

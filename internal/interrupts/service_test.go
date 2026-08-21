@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -165,6 +166,32 @@ func (r *testReservation) ReserveChild(_ context.Context, request ChildBudgetReq
 	return r.err
 }
 
+// testTerminalBudget records the terminal settlements the service performs so
+// a test can assert that cancellation and discard reconcile usage exactly
+// once, under the run's own execution generation.
+type testTerminalBudget struct {
+	lock       sync.Mutex
+	settled    []string
+	err        error
+	generation uint64
+}
+
+func (b *testTerminalBudget) SettleRunBudget(_ context.Context, snapshot runs.Snapshot, release bool) error {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	if b.err != nil {
+		return b.err
+	}
+	b.generation = snapshot.ExecutionGeneration
+	b.settled = append(b.settled, fmt.Sprintf("%s:%s:%t", snapshot.RunID, snapshot.Status, release))
+	return nil
+}
+func (b *testTerminalBudget) records() []string {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	return append([]string(nil), b.settled...)
+}
+
 func scope() runs.Scope {
 	return runs.Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}
 }
@@ -180,12 +207,18 @@ func reviewerPolicy() json.RawMessage {
 
 func newTestService(t *testing.T, repository *MemoryRepository, clock *testClock, authority *testAuthority, reconciler *testReconciler, reservation *testReservation) (*Service, *testRuntime, *testLeases) {
 	t.Helper()
+	service, runtime, leases, _ := newTestServiceWithBudget(t, repository, clock, authority, reconciler, reservation, &testTerminalBudget{})
+	return service, runtime, leases
+}
+
+func newTestServiceWithBudget(t *testing.T, repository *MemoryRepository, clock *testClock, authority *testAuthority, reconciler *testReconciler, reservation *testReservation, terminalBudget *testTerminalBudget) (*Service, *testRuntime, *testLeases, *testTerminalBudget) {
+	t.Helper()
 	runtime, leases := &testRuntime{}, &testLeases{}
-	service, err := NewService(repository, BoundSchemaValidator{}, authority, runtime, leases, reconciler, reservation, journal.NewMemoryStore(), clock, &testIDs{}, Limits{ChildDepth: 2, ChildFanout: 2})
+	service, err := NewService(repository, BoundSchemaValidator{}, authority, runtime, leases, reconciler, reservation, terminalBudget, journal.NewMemoryStore(), clock, &testIDs{}, Limits{ChildDepth: 2, ChildFanout: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service, runtime, leases
+	return service, runtime, leases, terminalBudget
 }
 
 func TestInputWaitSurvivesServiceReplacementAndAcceptsExactlyOneCurrentResponse(t *testing.T) {
@@ -280,7 +313,10 @@ func TestInputResponseConflictCodesAndExpiryNeverInventOutcome(t *testing.T) {
 		})
 	}
 
-	// Same key with changed bytes is distinct from an already-responded request.
+	// Same key with changed bytes is the governed IDEMPOTENCY_KEY_REUSED
+	// (ADR-021 §4), which is a different fault from an already-responded
+	// request and from a replay against a different observed revision — a
+	// client has to be able to tell them apart from the code alone.
 	repository := NewMemoryRepository()
 	_ = repository.Seed(scope(), snapshot("run", runs.Planning, 1))
 	clock := &testClock{now: testNow}
@@ -290,8 +326,17 @@ func TestInputResponseConflictCodesAndExpiryNeverInventOutcome(t *testing.T) {
 	_, _ = service.RespondInput(context.Background(), write("run", 2, "same"), InputResponseCommand{RequestID: request.ID, RequestVersion: 1, Value: json.RawMessage(`{"answer":"a"}`)})
 	_, err := service.RespondInput(context.Background(), write("run", 2, "same"), InputResponseCommand{RequestID: request.ID, RequestVersion: 1, Value: json.RawMessage(`{"answer":"b"}`)})
 	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeIdempotencyKeyReused) {
+		t.Fatalf("changed replay err=%v, want IDEMPOTENCY_KEY_REUSED", err)
+	}
+	if definition, known := problem.Lookup(problem.CodeIdempotencyKeyReused); !known || definition.Status != 409 {
+		t.Fatalf("IDEMPOTENCY_KEY_REUSED must answer 409, got %+v", definition)
+	}
+	// The same bytes replayed against a different observed run revision is a
+	// different fault and keeps the general idempotency conflict.
+	_, err = service.RespondInput(context.Background(), write("run", 9, "same"), InputResponseCommand{RequestID: request.ID, RequestVersion: 1, Value: json.RawMessage(`{"answer":"a"}`)})
 	if !errors.As(err, &details) || details.Code != string(problem.CodeIdempotencyConflict) {
-		t.Fatalf("changed replay err=%v", err)
+		t.Fatalf("changed revision err=%v, want IDEMPOTENCY_CONFLICT", err)
 	}
 }
 
@@ -330,14 +375,14 @@ func TestApprovalEvidenceIsImmutableAndCannotCommitWithoutM5Gateway(t *testing.T
 	if string(stored.Effects) != `{"kind":"page-apply"}` {
 		t.Fatalf("request evidence mutated: %s", stored.Effects)
 	}
-	approved, err := service.DecideApproval(context.Background(), write("run", 8, "approve"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionApprove})
+	approved, err := service.DecideApproval(context.Background(), write("run", 8, "approve"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionApprove, ActionDigest: request.ActionDigest})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if approved.Snapshot.Status != runs.AwaitingApproval || approved.Snapshot.Version != 8 || len(runtime.signals) != 1 {
 		t.Fatalf("approval bypassed commit gateway: %#v", approved)
 	}
-	_, err = service.DecideApproval(context.Background(), write("run", 8, "other"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionReject})
+	_, err = service.DecideApproval(context.Background(), write("run", 8, "other"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionReject, ActionDigest: request.ActionDigest})
 	var details problem.Details
 	if !errors.As(err, &details) || details.Code != string(problem.CodeApprovalAlreadyDecided) {
 		t.Fatalf("decision mutation err=%v", err)
@@ -355,7 +400,7 @@ func TestApprovalWaitSurvivesServiceReplacement(t *testing.T) {
 		t.Fatalf("opened=%#v err=%v", opened, err)
 	}
 	replacement, runtime, _ := newTestService(t, repository, clock, authority, &testReconciler{clear: true}, &testReservation{})
-	result, err := replacement.DecideApproval(context.Background(), write("run", opened.Snapshot.Version, "decide-restart"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionReject})
+	result, err := replacement.DecideApproval(context.Background(), write("run", opened.Snapshot.Version, "decide-restart"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionReject, ActionDigest: request.ActionDigest})
 	if err != nil || result.Snapshot.Status != runs.AwaitingReview || len(runtime.resumed) != 1 || runtime.resumed[0] != "run:1:review:approved:approval:"+string(request.ID) {
 		t.Fatalf("replacement result=%#v resumed=%v err=%v", result, runtime.resumed, err)
 	}
@@ -371,7 +416,7 @@ func TestApprovalRejectAndChangeReturnToReview(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			result, err := service.DecideApproval(context.Background(), write("run", opened.Snapshot.Version, "decide"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: decision})
+			result, err := service.DecideApproval(context.Background(), write("run", opened.Snapshot.Version, "decide"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: decision, ActionDigest: request.ActionDigest})
 			if err != nil || result.Snapshot.Status != runs.AwaitingReview || len(runtime.resumed) != 1 || runtime.resumed[0] != "run:1:review:approval:"+string(request.ID) {
 				t.Fatalf("decision=%s result=%#v resumed=%v err=%v", decision, result, runtime.resumed, err)
 			}
@@ -403,7 +448,7 @@ func TestSequentialApprovalRequestsReceiveMonotonicVersions(t *testing.T) {
 	if err != nil || first.Version != 1 {
 		t.Fatalf("first request = %#v, %v", first, err)
 	}
-	rejected, err := service.DecideApproval(context.Background(), write("run", opened.Snapshot.Version, "reject-1"), ApprovalDecisionCommand{RequestID: first.ID, RequestVersion: first.Version, Decision: DecisionReject})
+	rejected, err := service.DecideApproval(context.Background(), write("run", opened.Snapshot.Version, "reject-1"), ApprovalDecisionCommand{RequestID: first.ID, RequestVersion: first.Version, Decision: DecisionReject, ActionDigest: first.ActionDigest})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -450,7 +495,7 @@ func TestApprovalDecisionConflictFamiliesDoNotMutateWait(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			command := ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionApprove}
+			command := ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionApprove, ActionDigest: request.ActionDigest}
 			test.mutate(authority, clock, &command)
 			_, err = service.DecideApproval(context.Background(), write("run", opened.Snapshot.Version, "decision"), command)
 			var details problem.Details
@@ -683,7 +728,7 @@ func TestFallbackReservesOnlyAfterEligibleFailureAndRequiredFailureFailsParent(t
 	_ = repository.Seed(scope(), snapshot("parent", runs.Executing, 4))
 	reservation := &testReservation{}
 	runtime, leases := &testRuntime{}, &testLeases{}
-	service, err := NewService(repository, BoundSchemaValidator{}, &testAuthority{}, runtime, leases, &testReconciler{clear: true}, reservation, journal.NewMemoryStore(), &testClock{now: testNow}, &testIDs{}, Limits{ChildDepth: 3, ChildFanout: 3})
+	service, err := NewService(repository, BoundSchemaValidator{}, &testAuthority{}, runtime, leases, &testReconciler{clear: true}, reservation, &testTerminalBudget{}, journal.NewMemoryStore(), &testClock{now: testNow}, &testIDs{}, Limits{ChildDepth: 3, ChildFanout: 3})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -870,4 +915,143 @@ func TestRecordedRetryIsNotResumedAfterAuthorityIsRevoked(t *testing.T) {
 	if len(runtime.resumed) != 1 {
 		t.Fatalf("revoked authority still resumed the recorded retry: %v", runtime.resumed)
 	}
+}
+
+// Cancellation and discard are terminal transitions that happen outside the
+// durable workflow, so each one reconciles the run's usage and settles its
+// budget hold itself. A replay settles nothing twice, and a settlement that
+// fails is reported rather than swallowed — a terminal run whose usage was
+// never reconciled would silently keep consuming root headroom.
+func TestTerminalControlOperationsSettleTheRunBudget(t *testing.T) {
+	for _, item := range []struct {
+		name    string
+		state   runs.State
+		invoke  func(*Service) (OperationResult, error)
+		settled runs.State
+	}{
+		{"cancel", runs.Executing, func(s *Service) (OperationResult, error) {
+			return s.Cancel(context.Background(), write("run", 3, "cancel"))
+		}, runs.Cancelled},
+		{"discard", runs.AwaitingReview, func(s *Service) (OperationResult, error) {
+			return s.Discard(context.Background(), write("run", 3, "discard"))
+		}, runs.Discarded},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			repository := NewMemoryRepository()
+			_ = repository.Seed(scope(), snapshot("run", item.state, 3))
+			service, _, _, terminalBudget := newTestServiceWithBudget(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{}, &testTerminalBudget{})
+			result, err := item.invoke(service)
+			if err != nil || result.Snapshot.Status != item.settled {
+				t.Fatalf("result=%#v err=%v", result, err)
+			}
+			settled := terminalBudget.records()
+			if len(settled) != 1 || settled[0] != fmt.Sprintf("run:%s:true", item.settled) {
+				t.Fatalf("settlements=%v, want exactly one release of the terminal run", settled)
+			}
+			// The settlement is fenced on the run's own execution generation,
+			// so a superseded generation can never settle through this path.
+			if terminalBudget.generation != 3 && terminalBudget.generation != 1 {
+				t.Fatalf("settlement generation=%d, want the run's durable generation", terminalBudget.generation)
+			}
+			// Replaying the same command settles nothing a second time beyond
+			// the idempotent re-settlement of the same reservation.
+			replayed, err := item.invoke(service)
+			if err != nil {
+				t.Fatalf("replayed %s: %v", item.name, err)
+			}
+			if replayed.Snapshot.Status != item.settled {
+				t.Fatalf("replayed snapshot=%#v", replayed.Snapshot)
+			}
+			for _, record := range terminalBudget.records() {
+				if record != fmt.Sprintf("run:%s:true", item.settled) {
+					t.Fatalf("replay settled a different run state: %v", terminalBudget.records())
+				}
+			}
+		})
+	}
+}
+
+// A failing terminal settlement fails the control operation rather than
+// reporting a terminal run whose usage was never reconciled.
+func TestTerminalSettlementFailureIsReported(t *testing.T) {
+	for _, item := range []struct {
+		name   string
+		state  runs.State
+		invoke func(*Service) (OperationResult, error)
+	}{
+		{"cancel", runs.Executing, func(s *Service) (OperationResult, error) {
+			return s.Cancel(context.Background(), write("run", 3, "cancel"))
+		}},
+		{"discard", runs.AwaitingReview, func(s *Service) (OperationResult, error) {
+			return s.Discard(context.Background(), write("run", 3, "discard"))
+		}},
+	} {
+		t.Run(item.name, func(t *testing.T) {
+			repository := NewMemoryRepository()
+			_ = repository.Seed(scope(), snapshot("run", item.state, 3))
+			service, _, _, _ := newTestServiceWithBudget(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{}, &testTerminalBudget{err: errors.New("ledger unavailable")})
+			if _, err := item.invoke(service); err == nil {
+				t.Fatal("a failed terminal budget settlement was swallowed")
+			}
+		})
+	}
+}
+
+// The reviewer states which action they decided, and the service proves it is
+// the action the open request carries. Without that binding a decision
+// recorded while the request was reopened against new material would approve
+// something the reviewer never saw.
+func TestApprovalDecisionMustNameTheOpenRequestsAction(t *testing.T) {
+	repository := NewMemoryRepository()
+	_ = repository.Seed(scope(), snapshot("run", runs.AwaitingReview, 7))
+	service, _, _ := newTestService(t, repository, &testClock{now: testNow}, &testAuthority{}, &testReconciler{clear: true}, &testReservation{})
+	open := OpenApproval{
+		ActionDigest:     "sha256:" + strings.Repeat("a", 64),
+		Effects:          json.RawMessage(`{"kind":"page-apply"}`),
+		ExpectedCost:     json.RawMessage(`{"amount":"1"}`),
+		ReviewerPolicy:   reviewerPolicy(),
+		ExpiresAt:        testNow.Add(time.Hour),
+		ResumeCheckpoint: "review:approved",
+	}
+	request, opened, err := service.RequestApproval(context.Background(), write("run", 7, "open"), open)
+	if err != nil || opened.Snapshot.Status != runs.AwaitingApproval {
+		t.Fatalf("opened=%#v err=%v", opened, err)
+	}
+	// A decision naming a different action is refused, and nothing is recorded.
+	elsewhere := ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionApprove, ActionDigest: "sha256:" + strings.Repeat("b", 64)}
+	_, err = service.DecideApproval(context.Background(), write("run", 8, "wrong-action"), elsewhere)
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeApprovalRequestStale) {
+		t.Fatalf("a decision on a different action was accepted: %v", err)
+	}
+	if stored, _ := repository.Approval(context.Background(), scope(), "run", request.ID); stored.Decision != nil {
+		t.Fatalf("a refused decision was recorded: %#v", stored.Decision)
+	}
+	// A malformed or absent action digest is refused before anything is read.
+	for name, digest := range map[string]string{"absent": "", "malformed": "not-a-digest"} {
+		_, err := service.DecideApproval(context.Background(), write("run", 8, "bad-"+name), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionApprove, ActionDigest: digest})
+		if !errors.As(err, &details) || details.Code != string(problem.CodeRequestInvalid) {
+			t.Fatalf("%s action digest was accepted: %v", name, err)
+		}
+	}
+	// A comment beyond the canonical bound is refused.
+	_, err = service.DecideApproval(context.Background(), write("run", 8, "long-comment"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionApprove, ActionDigest: request.ActionDigest, Comment: strings.Repeat("c", 2049)})
+	if !errors.As(err, &details) || details.Code != string(problem.CodeRequestInvalid) {
+		t.Fatalf("an unbounded comment was accepted: %v", err)
+	}
+	// The decision that names the open request's own action is accepted.
+	accepted, err := service.DecideApproval(context.Background(), write("run", 8, "right-action"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: 1, Decision: DecisionChange, ActionDigest: request.ActionDigest, Comment: "narrow the selector"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := repository.Approval(context.Background(), scope(), "run", request.ID)
+	if stored.Decision == nil || stored.Decision.Kind != DecisionChange || stored.Decision.Comment != "narrow the selector" {
+		t.Fatalf("recorded decision = %#v", stored.Decision)
+	}
+	// The recorded decision carries the canonical vocabulary, not a second
+	// spelling of it.
+	if string(stored.Decision.Kind) != "request-changes" {
+		t.Fatalf("recorded decision kind = %q, want the canonical vocabulary", stored.Decision.Kind)
+	}
+	_ = accepted
 }

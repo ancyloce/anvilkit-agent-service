@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/idempotency"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
@@ -32,20 +33,34 @@ type Store struct {
 	database    *pgxpool.Pool
 	idempotency *idempotency.Store
 	eventBounds events.Bounds
+	guard       *contractguard.Guard
 	inject      FailureInjector
 }
 
-func New(database *pgxpool.Pool, idempotencyStore *idempotency.Store) *Store {
-	return NewConfigured(database, idempotencyStore, events.DefaultBounds(), nil)
+func New(database *pgxpool.Pool, idempotencyStore *idempotency.Store, guard *contractguard.Guard) *Store {
+	return NewConfigured(database, idempotencyStore, events.DefaultBounds(), guard, nil)
 
 }
 
-func NewConfigured(database *pgxpool.Pool, idempotencyStore *idempotency.Store, eventBounds events.Bounds, inject FailureInjector) *Store {
-	return &Store{database: database, idempotency: idempotencyStore, eventBounds: eventBounds, inject: inject}
+func NewConfigured(database *pgxpool.Pool, idempotencyStore *idempotency.Store, eventBounds events.Bounds, guard *contractguard.Guard, inject FailureInjector) *Store {
+	return &Store{database: database, idempotency: idempotencyStore, eventBounds: eventBounds, guard: guard, inject: inject}
+}
+
+// requireEvent validates rendered public event bytes against the pinned
+// AgentEvent contract before they are written. Emission without the guard is
+// not a mode.
+func (s *Store) requireEvent(ctx context.Context, event []byte) error {
+	if s.guard == nil {
+		return fmt.Errorf("public event emission requires the pinned contract guard")
+	}
+	return s.guard.Require(ctx, contractguard.EventIn, events.AgentEventSchemaURI, event)
 }
 
 func (s *Store) Create(ctx context.Context, record runs.CreateRecord) (runs.CreateOutcome, error) {
-	response, err := s.idempotency.Execute(ctx, idempotency.Request{WorkspaceID: record.Scope.WorkspaceID, ProjectID: record.Scope.ProjectID, Operation: "create-run", Key: record.Key, Digest: []byte(record.Digest), VersionBound: 0}, func(ctx context.Context, tx pgx.Tx) (idempotency.Response, error) {
+	// Key isolation includes the authenticated subject and the HTTP method
+	// (ADR-021 §4): a different actor reusing the same key is a fresh
+	// execution, never a replay of someone else's recorded response.
+	response, err := s.idempotency.Execute(ctx, idempotency.Request{WorkspaceID: record.Scope.WorkspaceID, ProjectID: record.Scope.ProjectID, Subject: record.Snapshot.ActorID, Method: "POST", Operation: "create-run", Key: record.Key, Digest: []byte(record.Digest), VersionBound: 0}, func(ctx context.Context, tx pgx.Tx) (idempotency.Response, error) {
 		bytes, err := json.Marshal(record.Snapshot)
 		if err != nil {
 			return idempotency.Response{}, fmt.Errorf("marshal created run: %w", err)
@@ -57,12 +72,24 @@ func (s *Store) Create(ctx context.Context, record runs.CreateRecord) (runs.Crea
 		if err := s.fail(AfterRunWrite); err != nil {
 			return idempotency.Response{}, err
 		}
-		eventBytes, err := json.Marshal(map[string]any{"kind": "AgentEvent", "eventId": record.Snapshot.LatestEventID, "runId": record.Snapshot.RunID, "workspaceId": record.Snapshot.WorkspaceID, "projectId": record.Snapshot.Target.ProjectID, "sequence": 1, "eventType": "run.created", "occurredAt": contractTimestamp(record.Snapshot.CreatedAt), "subject": map[string]string{"subjectType": "user", "subjectId": record.Snapshot.ActorID}, "traceContext": map[string]string{"traceparent": record.Traceparent}, "contractBomReference": record.Snapshot.ContractBOM, "payload": map[string]string{"state": string(runs.Created)}})
+		eventBytes, err := events.Project(events.Projection{
+			WorkspaceID: record.Snapshot.WorkspaceID,
+			ProjectID:   record.Snapshot.Target.ProjectID,
+			RunID:       string(record.Snapshot.RunID),
+			Sequence:    1,
+			EventID:     record.Snapshot.LatestEventID,
+			Type:        events.TypeRunCreated,
+			OccurredAt:  record.Snapshot.CreatedAt,
+			Subject:     events.UserSubject(record.Snapshot.ActorID),
+			Traceparent: record.Traceparent,
+			ContractBOM: record.Snapshot.ContractBOM,
+			Payload:     events.CreatedPayload(string(runs.Created)),
+		}, s.eventBounds)
 		if err != nil {
-			return idempotency.Response{}, fmt.Errorf("marshal created event: %w", err)
+			return idempotency.Response{}, fmt.Errorf("project created event: %w", err)
 		}
-		if err := events.ValidateEnvelope(eventBytes, s.eventBounds, record.Snapshot.LatestEventID, string(record.Snapshot.RunID), 1); err != nil {
-			return idempotency.Response{}, fmt.Errorf("validate created event: %w", err)
+		if err := s.requireEvent(ctx, eventBytes); err != nil {
+			return idempotency.Response{}, fmt.Errorf("validate created event contract: %w", err)
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,1,$4,$5,$6)`, record.Scope.WorkspaceID, record.Scope.ProjectID, record.Snapshot.RunID, record.Snapshot.LatestEventID, eventBytes, record.Snapshot.CreatedAt); err != nil {
 			return idempotency.Response{}, fmt.Errorf("persist created event: %w", err)
@@ -88,7 +115,10 @@ func (s *Store) Create(ctx context.Context, record runs.CreateRecord) (runs.Crea
 		return idempotency.Response{Status: 200, ContentType: "application/json", Body: bytes}, nil
 	})
 	if err != nil {
-		return runs.CreateOutcome{}, translateConflict(err)
+		// The idempotency store reports key reuse, revision conflicts, and
+		// stale preconditions as governed problems already; nothing here
+		// re-derives a code from an error string.
+		return runs.CreateOutcome{}, err
 	}
 	var snapshot runs.Snapshot
 	if err := json.Unmarshal(response.Body, &snapshot); err != nil {
@@ -205,12 +235,24 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 	if err := s.fail(AfterRunWrite); err != nil {
 		return runs.Snapshot{}, err
 	}
-	eventBytes, err := json.Marshal(map[string]any{"kind": "AgentEvent", "eventId": snapshot.LatestEventID, "runId": id, "workspaceId": snapshot.WorkspaceID, "projectId": snapshot.Target.ProjectID, "sequence": sequence, "eventType": "run.state-changed", "occurredAt": contractTimestamp(snapshot.UpdatedAt), "subject": map[string]string{"subjectType": "system", "subjectId": "agent-service"}, "traceContext": map[string]string{"traceparent": traceparent}, "contractBomReference": snapshot.ContractBOM, "payload": map[string]string{"previousState": string(transition.Previous), "state": string(transition.Current)}})
+	eventBytes, err := events.Project(events.Projection{
+		WorkspaceID: snapshot.WorkspaceID,
+		ProjectID:   snapshot.Target.ProjectID,
+		RunID:       string(id),
+		Sequence:    sequence,
+		EventID:     snapshot.LatestEventID,
+		Type:        events.TypeStateChanged,
+		OccurredAt:  snapshot.UpdatedAt,
+		Subject:     events.SystemSubject(),
+		Traceparent: traceparent,
+		ContractBOM: snapshot.ContractBOM,
+		Payload:     events.StateChangedPayload(string(transition.Previous), string(transition.Current)),
+	}, s.eventBounds)
 	if err != nil {
-		return runs.Snapshot{}, fmt.Errorf("marshal run transition event: %w", err)
+		return runs.Snapshot{}, fmt.Errorf("project run transition event: %w", err)
 	}
-	if err := events.ValidateEnvelope(eventBytes, s.eventBounds, snapshot.LatestEventID, string(id), sequence); err != nil {
-		return runs.Snapshot{}, fmt.Errorf("validate run transition event: %w", err)
+	if err := s.requireEvent(ctx, eventBytes); err != nil {
+		return runs.Snapshot{}, fmt.Errorf("validate run transition event contract: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, scope.WorkspaceID, scope.ProjectID, id, sequence, snapshot.LatestEventID, eventBytes, snapshot.UpdatedAt); err != nil {
 		return runs.Snapshot{}, err
@@ -223,6 +265,41 @@ func (s *Store) Transition(ctx context.Context, scope runs.Scope, id runs.ID, ex
 	}
 	if err := s.fail(AfterOutboxWrite); err != nil {
 		return runs.Snapshot{}, err
+	}
+	// A candidate submitted for review becomes publicly observable as an
+	// immutable artifact: the same transaction that lands the state change
+	// projects the run.artifact-available event with its bounded reference.
+	if command.Kind == runs.SubmitForReview && command.Artifact != nil {
+		var artifactSequence uint64
+		if err := tx.QueryRow(ctx, `UPDATE agent_control.agent_runs SET next_event_sequence=next_event_sequence+1 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 RETURNING next_event_sequence-1`, scope.WorkspaceID, scope.ProjectID, id).Scan(&artifactSequence); err != nil {
+			return runs.Snapshot{}, fmt.Errorf("allocate artifact event sequence: %w", err)
+		}
+		artifactEventID := fmt.Sprintf("%s:artifact:%d", id, artifactSequence)
+		artifactEvent, err := events.Project(events.Projection{
+			WorkspaceID: snapshot.WorkspaceID,
+			ProjectID:   snapshot.Target.ProjectID,
+			RunID:       string(id),
+			Sequence:    artifactSequence,
+			EventID:     artifactEventID,
+			Type:        events.TypeArtifactAvailable,
+			OccurredAt:  snapshot.UpdatedAt,
+			Subject:     events.SystemSubject(),
+			Traceparent: traceparent,
+			ContractBOM: snapshot.ContractBOM,
+			Artifact:    &events.EventArtifact{ArtifactID: command.Artifact.ArtifactID, Digest: command.Artifact.Digest, MediaType: command.Artifact.MediaType, SizeBytes: command.Artifact.SizeBytes},
+		}, s.eventBounds)
+		if err != nil {
+			return runs.Snapshot{}, fmt.Errorf("project artifact-available event: %w", err)
+		}
+		if err := s.requireEvent(ctx, artifactEvent); err != nil {
+			return runs.Snapshot{}, fmt.Errorf("validate artifact-available event contract: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, scope.WorkspaceID, scope.ProjectID, id, artifactSequence, artifactEventID, artifactEvent, snapshot.UpdatedAt); err != nil {
+			return runs.Snapshot{}, err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,$5,'agent.public-events',$6,$7)`, scope.WorkspaceID, scope.ProjectID, artifactEventID, id, artifactSequence, artifactEvent, snapshot.UpdatedAt); err != nil {
+			return runs.Snapshot{}, err
+		}
 	}
 	problemBytes, _ := json.Marshal(updated.Problem)
 	if updated.Problem == nil {
@@ -253,23 +330,6 @@ func (s *Store) fail(point FailurePoint) error {
 	return nil
 }
 
-func translateConflict(err error) error {
-	if contains(err.Error(), "canonical digest") {
-		return problem.New(problem.CodeIdempotencyConflict, "")
-	}
-	if contains(err.Error(), "version") {
-		return problem.New(problem.CodeVersionConflict, "")
-	}
-	return err
-}
-func contains(value, fragment string) bool {
-	for index := 0; index+len(fragment) <= len(value); index++ {
-		if value[index:index+len(fragment)] == fragment {
-			return true
-		}
-	}
-	return false
-}
 func requestProblem(detail string) problem.Details {
 	value := problem.New(problem.CodeRequestInvalid, "")
 	value.Detail = detail
@@ -277,7 +337,3 @@ func requestProblem(detail string) problem.Details {
 }
 
 var _ runs.Store = (*Store)(nil)
-
-func contractTimestamp(value time.Time) string {
-	return value.UTC().Truncate(time.Millisecond).Format("2006-01-02T15:04:05.000Z")
-}

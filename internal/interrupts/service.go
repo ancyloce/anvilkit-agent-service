@@ -32,17 +32,32 @@ type Service struct {
 	leases      LeaseRevoker
 	reconciler  CancellationReconciler
 	reservation Reservation
+	budget      TerminalBudget
 	receipts    journal.Store
 	clock       Clock
 	ids         IDs
 	limits      Limits
 }
 
-func NewService(repository Repository, schema SchemaValidator, authority Authority, runtime Runtime, leases LeaseRevoker, reconciler CancellationReconciler, reservation Reservation, receipts journal.Store, clock Clock, ids IDs, limits Limits) (*Service, error) {
-	if repository == nil || schema == nil || authority == nil || runtime == nil || leases == nil || reconciler == nil || reservation == nil || receipts == nil || clock == nil || ids == nil || limits.ChildDepth < 1 || limits.ChildFanout < 1 {
+func NewService(repository Repository, schema SchemaValidator, authority Authority, runtime Runtime, leases LeaseRevoker, reconciler CancellationReconciler, reservation Reservation, terminalBudget TerminalBudget, receipts journal.Store, clock Clock, ids IDs, limits Limits) (*Service, error) {
+	if repository == nil || schema == nil || authority == nil || runtime == nil || leases == nil || reconciler == nil || reservation == nil || terminalBudget == nil || receipts == nil || clock == nil || ids == nil || limits.ChildDepth < 1 || limits.ChildFanout < 1 {
 		return nil, fmt.Errorf("interrupt service dependencies and positive child bounds are required")
 	}
-	return &Service{repository: repository, schema: schema, authority: authority, runtime: runtime, leases: leases, reconciler: reconciler, reservation: reservation, receipts: receipts, clock: clock, ids: ids, limits: limits}, nil
+	return &Service{repository: repository, schema: schema, authority: authority, runtime: runtime, leases: leases, reconciler: reconciler, reservation: reservation, budget: terminalBudget, receipts: receipts, clock: clock, ids: ids, limits: limits}, nil
+}
+
+// settleTerminalBudget performs the final usage reconciliation and budget
+// settlement of a run this service just made terminal. It runs after the
+// aggregate transition and before the receipt, so a crash in between is
+// recovered by the idempotent replay of the same control command; a
+// settlement failure is reported rather than swallowed, because a terminal run
+// whose usage was never reconciled is a budget-correctness defect, not a
+// cosmetic one.
+func (s *Service) settleTerminalBudget(ctx context.Context, snapshot runs.Snapshot) error {
+	if err := s.budget.SettleRunBudget(ctx, snapshot, true); err != nil {
+		return fmt.Errorf("settle terminal run budget: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) now() (time.Time, error) {
@@ -150,7 +165,12 @@ func (s *Service) RequestApproval(ctx context.Context, write Write, command Open
 		return ApprovalRequest{}, OperationResult{}, stable(problem.CodeRequestInvalid, "approval request expiry must be in the future")
 	}
 	request := ApprovalRequest{ID: id, RunID: write.RunID, ActionDigest: command.ActionDigest, Effects: clone(command.Effects), ExpectedCost: clone(command.ExpectedCost), ReviewerPolicy: clone(command.ReviewerPolicy), ExpiresAt: command.ExpiresAt.UTC(), ResumeCheckpoint: command.ResumeCheckpoint, CreatedAt: now}
-	digest, err := digestValue(command)
+	// The idempotency digest is the caller's deterministic operation digest —
+	// like the input path — never a digest over the command itself: the
+	// command carries the wall-clock expiry, and a durable replay in a
+	// successor process must converge on the recorded request instead of
+	// conflicting on a drifted timestamp.
+	digest, err := digestFor(write, command)
 	if err != nil {
 		return ApprovalRequest{}, OperationResult{}, err
 	}
@@ -162,12 +182,19 @@ func (s *Service) RequestApproval(ctx context.Context, write Write, command Open
 }
 
 func (s *Service) DecideApproval(ctx context.Context, write Write, command ApprovalDecisionCommand) (OperationResult, error) {
-	if command.RequestID == "" || command.RequestVersion == 0 || (command.Decision != DecisionApprove && command.Decision != DecisionReject && command.Decision != DecisionChange) || len(command.Reason) > 4096 {
+	if command.RequestID == "" || command.RequestVersion == 0 || (command.Decision != DecisionApprove && command.Decision != DecisionReject && command.Decision != DecisionChange) || !validDigest(command.ActionDigest) || len(command.Comment) > 2048 {
 		return OperationResult{}, stable(problem.CodeRequestInvalid, "approval decision is invalid")
 	}
 	request, err := s.repository.Approval(ctx, write.Scope, write.RunID, command.RequestID)
 	if err != nil {
 		return OperationResult{}, err
+	}
+	// The reviewer states which action they decided. A decision whose action
+	// digest is not the one the open request carries is refused rather than
+	// recorded against a different action — the request may have been reopened
+	// against new material since the reviewer read it.
+	if command.ActionDigest != request.ActionDigest {
+		return OperationResult{}, stable(problem.CodeApprovalRequestStale, "the decision names a different action than the open approval request")
 	}
 	if err := s.authority.AuthorizeReviewer(ctx, write.Scope, request, command.Decision); err != nil {
 		return OperationResult{}, err
@@ -258,6 +285,12 @@ func (s *Service) Cancel(ctx context.Context, write Write) (OperationResult, err
 	if err != nil {
 		return OperationResult{}, err
 	}
+	// Cancellation is the run's terminal transition: its observed usage is
+	// reconciled and its worst-case hold released here, because no workflow
+	// terminal step will ever run for this run again.
+	if err := s.settleTerminalBudget(ctx, final.Snapshot); err != nil {
+		return OperationResult{}, err
+	}
 	if err := s.acknowledge(ctx, write, journal.FactCancel, digest, struct{}{}, final); err != nil {
 		return OperationResult{}, err
 	}
@@ -316,6 +349,12 @@ func (s *Service) Discard(ctx context.Context, write Write) (OperationResult, er
 	digest, _ := digestFor(write, struct{}{})
 	result, err := s.repository.Discard(ctx, write, digest)
 	if err != nil {
+		return OperationResult{}, err
+	}
+	// Discard is terminal in the same sense cancellation is, and settles the
+	// same way: the attempt's observed usage is reconciled and the remaining
+	// worst-case hold is released back to root headroom.
+	if err := s.settleTerminalBudget(ctx, result.Snapshot); err != nil {
 		return OperationResult{}, err
 	}
 	if err := s.acknowledge(ctx, write, journal.FactDiscard, digest, struct{}{}, result); err != nil {

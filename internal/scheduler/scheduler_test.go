@@ -60,8 +60,11 @@ func TestTaskCreationUsesAuthoritativePrerequisite(t *testing.T) {
 		t.Fatal("caller-authored prerequisite flags bypassed authority")
 	}
 }
+
+var acceptedOutput = []byte("fenced worker output")
+
 func result(task Task, lease Lease) Result {
-	return Result{TaskID: task.TaskID, RecoveryEpoch: lease.RecoveryEpoch, ExecutionGeneration: lease.ExecutionGeneration, PhysicalAttemptID: lease.PhysicalAttemptID, LeaseEpoch: lease.LeaseEpoch, FenceToken: lease.FenceToken, Capability: task.Capability, BuildIdentity: "fake-worker-build", ArtifactID: "artifact", ArtifactDigest: "sha256:" + strings.Repeat("b", 64), PendingObjectKey: fmt.Sprintf("pending/%s/r%d/g%d/%s/output", task.TaskID, task.RecoveryEpoch, task.ExecutionGeneration, lease.PhysicalAttemptID), CompletedAt: now}
+	return Result{TaskID: task.TaskID, RecoveryEpoch: lease.RecoveryEpoch, ExecutionGeneration: lease.ExecutionGeneration, PhysicalAttemptID: lease.PhysicalAttemptID, LeaseEpoch: lease.LeaseEpoch, FenceToken: lease.FenceToken, Capability: task.Capability, BuildIdentity: "fake-worker-build", ArtifactID: "artifact", ArtifactDigest: OutputDigest(acceptedOutput), PendingObjectKey: fmt.Sprintf("pending/%s/r%d/g%d/%s/output", task.TaskID, task.RecoveryEpoch, task.ExecutionGeneration, lease.PhysicalAttemptID), CompletedAt: now}
 }
 func TestTaskRequiresReservationAndPolicy(t *testing.T) {
 	for _, mutate := range []func(*Create){func(v *Create) { v.ReservationCurrent = false }, func(v *Create) { v.PolicyAllowed = false }, func(v *Create) { v.ReservationID = "" }} {
@@ -125,7 +128,7 @@ func TestFullFenceMatrixLosesDiagnosticOnly(t *testing.T) {
 			lease, _ := s.Lease(context.Background(), task.Scope, task.TaskID, "worker")
 			value := result(task, lease)
 			mutate(&value)
-			_, err := s.AcceptResult(context.Background(), task.Scope, value)
+			_, err := s.AcceptResult(context.Background(), task.Scope, value, acceptedOutput)
 			var details problem.Details
 			if !errors.As(err, &details) || details.Code != string(problem.CodeWorkerFenceStale) || len(effects.Promoted) != 0 || len(s.Diagnostics()) != 1 {
 				t.Fatalf("err=%v effects=%#v diagnostics=%#v", err, effects, s.Diagnostics())
@@ -144,7 +147,7 @@ func TestWinnerAtomicPromotionAdvanceReleaseAndInjectionRollback(t *testing.T) {
 			})
 			task, _ := s.Create(context.Background(), create())
 			lease, _ := s.Lease(context.Background(), task.Scope, task.TaskID, "worker")
-			if _, err := s.AcceptResult(context.Background(), task.Scope, result(task, lease)); err == nil {
+			if _, err := s.AcceptResult(context.Background(), task.Scope, result(task, lease), acceptedOutput); err == nil {
 				t.Fatal("injection accepted")
 			}
 			stored, _ := s.Get(context.Background(), task.Scope, task.TaskID)
@@ -156,11 +159,11 @@ func TestWinnerAtomicPromotionAdvanceReleaseAndInjectionRollback(t *testing.T) {
 	s, _, effects := service(t, nil)
 	task, _ := s.Create(context.Background(), create())
 	lease, _ := s.Lease(context.Background(), task.Scope, task.TaskID, "worker")
-	accepted, err := s.AcceptResult(context.Background(), task.Scope, result(task, lease))
+	accepted, err := s.AcceptResult(context.Background(), task.Scope, result(task, lease), acceptedOutput)
 	if err != nil || !accepted.Accepted || len(effects.Promoted) != 1 || len(effects.Advanced) != 1 || len(effects.Released) != 1 {
 		t.Fatalf("accepted=%#v effects=%#v err=%v", accepted, effects, err)
 	}
-	duplicate, err := s.AcceptResult(context.Background(), task.Scope, result(task, lease))
+	duplicate, err := s.AcceptResult(context.Background(), task.Scope, result(task, lease), acceptedOutput)
 	if err != nil || !duplicate.Duplicate || len(effects.Promoted) != 1 {
 		t.Fatal("duplicate repeated effects")
 	}
@@ -179,7 +182,7 @@ func TestDLQStableFieldsAndReplayFence(t *testing.T) {
 	lease, _ := s.Lease(context.Background(), task.Scope, task.TaskID, "worker")
 	loser := result(task, lease)
 	loser.FenceToken = "old-fence-token"
-	if _, err := s.AcceptResult(context.Background(), task.Scope, loser); err == nil {
+	if _, err := s.AcceptResult(context.Background(), task.Scope, loser, acceptedOutput); err == nil {
 		t.Fatal("DLQ replay skipped fence")
 	}
 }
@@ -204,7 +207,7 @@ func TestRandomFenceMutationsNeverAccept(t *testing.T) {
 		case 5:
 			value.CompletedAt = lease.ExpiresAt
 		}
-		if accepted, _ := s.AcceptResult(context.Background(), task.Scope, value); accepted.Accepted {
+		if accepted, _ := s.AcceptResult(context.Background(), task.Scope, value, acceptedOutput); accepted.Accepted {
 			t.Fatalf("stale case %d accepted", index)
 		}
 	}
@@ -253,7 +256,7 @@ func TestExpiredAttemptRemainsDiagnosableAndDLQIsScoped(t *testing.T) {
 	}
 	wrongTask := result(task, first)
 	wrongTask.TaskID = "different-task"
-	if _, err := s.AcceptResult(context.Background(), task.Scope, wrongTask); err == nil || len(s.Diagnostics()) != 1 {
+	if _, err := s.AcceptResult(context.Background(), task.Scope, wrongTask, acceptedOutput); err == nil || len(s.Diagnostics()) != 1 {
 		t.Fatalf("expired attempt diagnostic err=%v diagnostics=%#v", err, s.Diagnostics())
 	}
 	entry, err := s.DeadLetter(context.Background(), task.Scope, task.TaskID, "WORKER_FAILED", "execute", "failed")
@@ -277,7 +280,7 @@ func TestResultTimeAndObjectKeyAreBounded(t *testing.T) {
 			lease, _ := s.Lease(context.Background(), task.Scope, task.TaskID, "worker")
 			value := result(task, lease)
 			mutate(&value)
-			if accepted, err := s.AcceptResult(context.Background(), task.Scope, value); err == nil || accepted.Accepted {
+			if accepted, err := s.AcceptResult(context.Background(), task.Scope, value, acceptedOutput); err == nil || accepted.Accepted {
 				t.Fatalf("invalid result accepted=%v err=%v", accepted.Accepted, err)
 			}
 		})

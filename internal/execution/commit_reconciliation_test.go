@@ -415,7 +415,7 @@ func TestOperatorRecoveryEnforcesRoleScopeAndBindingBeforeSettling(t *testing.T)
 		OperationID: operation.ID,
 		Outcome:     execution.DomainRejected,
 		OperatorID:  "operator.oncall",
-		Basis:       "domain-owner audit ticket OPS-7",
+		Basis:       operatorEvidenceBasis,
 	}
 	version := h.snapshot().Version
 
@@ -452,13 +452,20 @@ func TestOperatorRecoveryEnforcesRoleScopeAndBindingBeforeSettling(t *testing.T)
 		t.Fatalf("a mismatched operation identity was accepted: %v", err)
 	}
 
-	// The audit identity and evidence basis are mandatory, and the outcome
-	// must be an authoritative domain outcome.
+	// The audit identity is mandatory, the outcome must be an authoritative
+	// domain outcome, and the basis must be the bounded evidence reference the
+	// canonical contract defines — never operator prose, which would carry
+	// unbounded content of unknown sensitivity into an immutable audit record.
 	for name, invalid := range map[string]execution.OperatorResolution{
-		"no-operator": {OperationID: operation.ID, Outcome: execution.DomainRejected, Basis: "b"},
-		"no-basis":    {OperationID: operation.ID, Outcome: execution.DomainRejected, OperatorID: "operator.oncall"},
-		"blank-basis": {OperationID: operation.ID, Outcome: execution.DomainRejected, OperatorID: "operator.oncall", Basis: "   "},
-		"bad-outcome": {OperationID: operation.ID, Outcome: "settled-somehow", OperatorID: "operator.oncall", Basis: "b"},
+		"no-operator":      {OperationID: operation.ID, Outcome: execution.DomainRejected, Basis: operatorEvidenceBasis},
+		"no-basis":         {OperationID: operation.ID, Outcome: execution.DomainRejected, OperatorID: "operator.oncall"},
+		"blank-basis":      {OperationID: operation.ID, Outcome: execution.DomainRejected, OperatorID: "operator.oncall", Basis: "   "},
+		"prose-basis":      {OperationID: operation.ID, Outcome: execution.DomainRejected, OperatorID: "operator.oncall", Basis: "the owner has no record of this operation, see OPS-7"},
+		"foreign-scheme":   {OperationID: operation.ID, Outcome: execution.DomainRejected, OperatorID: "operator.oncall", Basis: "https://audit.example.com/OPS-7-no-record"},
+		"authorityless":    {OperationID: operation.ID, Outcome: execution.DomainRejected, OperatorID: "operator.oncall", Basis: "anvilkit://evidence/OPS-7-no-record-of-operation"},
+		"uppercase-issuer": {OperationID: operation.ID, Outcome: execution.DomainRejected, OperatorID: "operator.oncall", Basis: "anvilkit://evidence/Domain-Owner-Audit/OPS-7"},
+		"oversized-record": {OperationID: operation.ID, Outcome: execution.DomainRejected, OperatorID: "operator.oncall", Basis: "anvilkit://evidence/domain-owner-audit/" + strings.Repeat("a", 129)},
+		"bad-outcome":      {OperationID: operation.ID, Outcome: "settled-somehow", OperatorID: "operator.oncall", Basis: operatorEvidenceBasis},
 	} {
 		if _, err := h.executor.ResolveEscalation(context.Background(), testScope(), testRunID, version, invalid); !hasProblemCode(err, problem.CodeRequestInvalid) {
 			t.Fatalf("%s was accepted: %v", name, err)
@@ -536,7 +543,7 @@ func TestConcurrentOperatorResolutionsProduceOneDecision(t *testing.T) {
 				OperationID: operation.ID,
 				Outcome:     execution.DomainRejected,
 				OperatorID:  fmt.Sprintf("operator.%02d", index),
-				Basis:       fmt.Sprintf("audit ticket OPS-%02d", index),
+				Basis:       fmt.Sprintf("anvilkit://evidence/domain-owner-audit/OPS-%02d", index),
 			})
 			accepted[index] = err == nil
 		}(index)
@@ -566,4 +573,187 @@ func TestConcurrentOperatorResolutionsProduceOneDecision(t *testing.T) {
 func hasProblemCode(err error, code problem.Code) bool {
 	var details problem.Details
 	return errors.As(err, &details) && details.Code == string(code)
+}
+
+// operatorEvidenceBasis is the bounded evidence reference an operator recovery
+// command carries: the authoritative record a reviewer can retrieve, never
+// operator prose.
+const operatorEvidenceBasis = "anvilkit://evidence/domain-owner-audit/OPS-7-no-record"
+
+// TestOperatorResolutionRefusesAnUnauditableBasisBeforeRecordingAnything
+// proves the ordering that keeps a run recoverable. The journal resolution is
+// immutable, so a decision whose audit record cannot be stored must be refused
+// before the journal holds it — otherwise every retry would re-read the same
+// recorded decision, fail on the same evidence, and the run would never
+// settle. Here the basis is well-formed but names a record whose identity the
+// internal evidence contract prohibits: the command is refused, nothing is
+// persisted, and a corrected decision still settles the run.
+func TestOperatorResolutionRefusesAnUnauditableBasisBeforeRecordingAnything(t *testing.T) {
+	h := newHarness(t, [][]byte{finalPlan()})
+	operation, done := escalatedRun(t, h, "approve-unauditable")
+	defer done()
+	h.grantRole(authority.RoleOperator)
+	journalScope := domaincommit.Scope{WorkspaceID: testWorkspace, ProjectID: testProject}
+
+	// Every one of these is a syntactically valid evidence reference the
+	// internal evidence contract nonetheless refuses to store.
+	for name, basis := range map[string]string{
+		"prompt-record": "anvilkit://evidence/domain-owner-audit/prompt-transcript-42",
+		"secret-record": "anvilkit://evidence/domain-owner-audit/secret-store-entry",
+		"canvas-record": "anvilkit://evidence/domain-owner-audit/canvas-export-9",
+	} {
+		unauditable := execution.OperatorResolution{
+			OperationID: operation.ID,
+			Outcome:     execution.DomainRejected,
+			OperatorID:  "operator.oncall",
+			Basis:       basis,
+		}
+		if _, err := h.executor.ResolveEscalation(context.Background(), testScope(), testRunID, h.snapshot().Version, unauditable); !hasProblemCode(err, problem.CodeRequestInvalid) {
+			t.Fatalf("%s was accepted: %v", name, err)
+		}
+		// Nothing was persisted: the effect is still escalated, awaiting a
+		// decision, and the run is still held at the submit boundary.
+		held, err := h.submissions.Get(context.Background(), journalScope, operation.ID)
+		if err != nil || held.Status != domaincommit.Escalated || held.ResolvedBy != "" || held.ResolutionBasis != "" {
+			t.Fatalf("%s left the journal as %+v err=%v, want the effect still escalated and undecided", name, held, err)
+		}
+		if snapshot := h.snapshot(); snapshot.Status != runs.AwaitingDomainConfirmation {
+			t.Fatalf("%s moved the run to %s, want it still held at the submit boundary", name, snapshot.Status)
+		}
+	}
+
+	// The run is still recoverable: a decision whose audit record can be
+	// stored settles it.
+	settled, err := h.executor.ResolveEscalation(context.Background(), testScope(), testRunID, h.snapshot().Version, execution.OperatorResolution{
+		OperationID: operation.ID,
+		Outcome:     execution.DomainRejected,
+		OperatorID:  "operator.oncall",
+		Basis:       operatorEvidenceBasis,
+	})
+	if err != nil || settled.Status != runs.Failed {
+		t.Fatalf("settled=%+v err=%v, want the corrected decision to settle the run", settled, err)
+	}
+}
+
+// refusingEvidence fails the first append of one evidence type and then
+// behaves exactly like the store it wraps. It is what a crash between a
+// durable decision and its audit record looks like from the executor's side.
+type refusingEvidence struct {
+	inner    execution.EvidenceRecorder
+	lock     sync.Mutex
+	failType string
+	failed   bool
+	appends  map[string]int
+}
+
+func newRefusingEvidence(inner execution.EvidenceRecorder, failType string) *refusingEvidence {
+	return &refusingEvidence{inner: inner, failType: failType, appends: map[string]int{}}
+}
+
+func (r *refusingEvidence) AppendEvidence(ctx context.Context, value events.Evidence) (uint64, error) {
+	r.lock.Lock()
+	if value.Type == r.failType && !r.failed {
+		r.failed = true
+		r.lock.Unlock()
+		return 0, fmt.Errorf("evidence store unavailable")
+	}
+	r.appends[value.Type]++
+	r.lock.Unlock()
+	return r.inner.AppendEvidence(ctx, value)
+}
+
+func (r *refusingEvidence) count(evidenceType string) int {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	return r.appends[evidenceType]
+}
+
+// TestOperatorResolutionConvergesWhenEvidenceFailsAfterTheJournalIsDecided
+// proves the sequence repairs itself. The decision is durable first because
+// the journal compare-and-set is what picks the single winner; if the process
+// then dies before the audit record or the run transition lands, repeating the
+// same decision converges on the recorded one, records the evidence exactly
+// once, and settles the run. The alternate settlement-only recovery path
+// reaches the same terminal state from the same journal.
+func TestOperatorResolutionConvergesWhenEvidenceFailsAfterTheJournalIsDecided(t *testing.T) {
+	var recorder *refusingEvidence
+	h := newHarness(t, [][]byte{finalPlan()}, func(options *harnessOptions) {
+		options.evidence = func(inner execution.EvidenceRecorder) execution.EvidenceRecorder {
+			recorder = newRefusingEvidence(inner, "domain.submission-operator-resolved")
+			return recorder
+		}
+	})
+	operation, done := escalatedRun(t, h, "approve-crash")
+	defer done()
+	h.grantRole(authority.RoleOperator)
+	journalScope := domaincommit.Scope{WorkspaceID: testWorkspace, ProjectID: testProject}
+	command := execution.OperatorResolution{
+		OperationID: operation.ID,
+		Outcome:     execution.DomainRejected,
+		OperatorID:  "operator.oncall",
+		Basis:       operatorEvidenceBasis,
+	}
+
+	// The audit record cannot be written. The decision is already durable, so
+	// the call fails and the run stays held rather than settling unaudited.
+	if _, err := h.executor.ResolveEscalation(context.Background(), testScope(), testRunID, h.snapshot().Version, command); err == nil {
+		t.Fatal("a run settled while its operator-recovery audit record was unwritable")
+	}
+	decided, err := h.submissions.Get(context.Background(), journalScope, operation.ID)
+	if err != nil || decided.Status != domaincommit.Rejected || decided.ResolvedBy != command.OperatorID || decided.ResolutionBasis != command.Basis {
+		t.Fatalf("journal=%+v err=%v, want the audited decision already durable", decided, err)
+	}
+	if snapshot := h.snapshot(); snapshot.Status != runs.AwaitingDomainConfirmation {
+		t.Fatalf("run=%s, want it still held until its audit record lands", snapshot.Status)
+	}
+
+	// Repeating the same decision converges on the recorded one: the evidence
+	// is written, the run settles, and nothing is decided twice.
+	settled, err := h.executor.ResolveEscalation(context.Background(), testScope(), testRunID, h.snapshot().Version, command)
+	if err != nil || settled.Status != runs.Failed {
+		t.Fatalf("retry=%+v err=%v, want convergence onto the recorded decision", settled, err)
+	}
+	if recorder.count("domain.submission-operator-resolved") != 1 {
+		t.Fatalf("operator-recovery evidence appended %d times, want exactly one durable record", recorder.count("domain.submission-operator-resolved"))
+	}
+	records, err := h.evidence.ReadEvidence(context.Background(), events.Scope{WorkspaceID: testWorkspace, ProjectID: testProject}, testRunID, "test", "assert", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audited := 0
+	for _, record := range records {
+		if record.Type == "domain.submission-operator-resolved" {
+			audited++
+			if record.Payload["resolvedBy"] != command.OperatorID || record.Payload["basis"] != command.Basis || record.Payload["outcome"] != execution.DomainRejected {
+				t.Fatalf("evidence payload=%+v, want the journal's own audited facts", record.Payload)
+			}
+		}
+	}
+	if audited != 1 {
+		t.Fatalf("operator-recovery evidence records=%d, want exactly one", audited)
+	}
+
+	// Repeating again still converges, and so does the settlement-only
+	// recovery path that exists for an owner's late answer.
+	if again, err := h.executor.ResolveEscalation(context.Background(), testScope(), testRunID, h.snapshot().Version, command); err != nil || again.Status != runs.Failed {
+		t.Fatalf("second retry=%+v err=%v, want convergence", again, err)
+	}
+	if settledOnly, err := h.executor.ResolveEscalatedSubmission(context.Background(), testScope(), testRunID); err != nil || settledOnly.Status != runs.Failed {
+		t.Fatalf("settlement-only recovery=%+v err=%v, want the same terminal state", settledOnly, err)
+	}
+	// Retries re-present the same evidence, and the store's own identity
+	// dedup keeps exactly one immutable record of the decision.
+	after, err := h.evidence.ReadEvidence(context.Background(), events.Scope{WorkspaceID: testWorkspace, ProjectID: testProject}, testRunID, "test", "assert", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored := 0
+	for _, record := range after {
+		if record.Type == "domain.submission-operator-resolved" {
+			stored++
+		}
+	}
+	if stored != 1 {
+		t.Fatalf("operator-recovery evidence records after retries=%d, want exactly one", stored)
+	}
 }

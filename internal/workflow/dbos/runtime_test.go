@@ -35,8 +35,8 @@ func (h *sqliteHarness) start() *Runtime {
 	h.t.Helper()
 	runtime, err := New(context.Background(), Config{
 		DatabaseURL:        "sqlite:" + h.path,
-		ExecutorID:         "wp2-probe",
-		ApplicationVersion: "wp2-probe",
+		ExecutorID:         "runtime-probe",
+		ApplicationVersion: "runtime-probe",
 		Logger:             slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
 	}, h.ops)
 	if err != nil {

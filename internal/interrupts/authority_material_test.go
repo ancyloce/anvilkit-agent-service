@@ -118,6 +118,10 @@ func staleMaterial() []struct {
 			c.Budget = nil
 			return c
 		}, code: problem.CodeAuthorityStale},
+		{name: "target revoked", mutate: func(c authority.Current) authority.Current {
+			c.RevokedTargets = []string{"page.material"}
+			return c
+		}, code: problem.CodeAuthorityStale},
 		{name: "target project is not the request scope", mutate: func(c authority.Current) authority.Current { return c },
 			scope: runs.Scope{WorkspaceID: "workspace", ProjectID: "other-project", ActorID: "run-actor"}, code: problem.CodeAuthorizationDenied},
 		{name: "target workspace is not the request scope", mutate: func(c authority.Current) authority.Current { return c },
@@ -199,6 +203,73 @@ func TestResumeOfARecordedRetryIsRefusedWhenAuthorityWasRevokedAfterRecording(t 
 	var details problem.Details
 	if !errors.As(err, &details) || details.Code != string(problem.CodeAuthorityStale) {
 		t.Fatalf("resume authorization error = %v, want %s", err, problem.CodeAuthorityStale)
+	}
+}
+
+// The target axis is identity-specific: revoking authority over the run's
+// exact target denies the resume of a recorded retry even while every other
+// axis stays active — the resume would restart execution against it.
+func TestResumeIsRefusedWhenTheRunTargetIsRevoked(t *testing.T) {
+	revoked := materialAuthority()
+	revoked.RevokedTargets = []string{"page.material"}
+	gate, err := NewCurrentAuthority(authorityRunReader{snapshot: materialSnapshot(runs.Preparing)}, policyAuthority{authority: revoked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = gate.AuthorizeResume(context.Background(), materialScope("run-actor"), materialSnapshot(runs.Preparing))
+	var details problem.Details
+	if !errors.As(err, &details) || details.Code != string(problem.CodeAuthorityStale) {
+		t.Fatalf("resume with a revoked target = %v", err)
+	}
+	// A different target's revocation does not deny this run.
+	other := materialAuthority()
+	other.RevokedTargets = []string{"page.other"}
+	gate, err = NewCurrentAuthority(authorityRunReader{snapshot: materialSnapshot(runs.Preparing)}, policyAuthority{authority: other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.AuthorizeResume(context.Background(), materialScope("run-actor"), materialSnapshot(runs.Preparing)); err != nil {
+		t.Fatalf("an unrelated target revocation denied the resume: %v", err)
+	}
+}
+
+// An approval decision acts on one specific target and one specific request:
+// either being individually revoked denies the reviewer decision.
+func TestApprovalDecisionIsDeniedForRevokedTargetOrRevokedRequest(t *testing.T) {
+	request := ApprovalRequest{ID: "approval.1", RunID: "run", ActionDigest: "sha256:" + string(makeDigest('7')), ReviewerPolicy: materialPolicy}
+	cases := map[string]struct {
+		mutate func(authority.Current) authority.Current
+		code   problem.Code
+	}{
+		"target revoked": {mutate: func(c authority.Current) authority.Current {
+			c.RevokedTargets = []string{"page.material"}
+			return c
+		}, code: problem.CodeAuthorityStale},
+		"approval revoked": {mutate: func(c authority.Current) authority.Current {
+			c.RevokedApprovals = []string{"approval.1"}
+			return c
+		}, code: problem.CodeAuthorizationDenied},
+	}
+	for name, test := range cases {
+		t.Run(name, func(t *testing.T) {
+			gate, err := NewCurrentAuthority(authorityRunReader{snapshot: materialSnapshot(runs.AwaitingApproval)}, policyAuthority{authority: test.mutate(materialAuthority())})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = gate.AuthorizeReviewer(context.Background(), materialScope("reviewer"), request, DecisionApprove)
+			var details problem.Details
+			if !errors.As(err, &details) || details.Code != string(test.code) {
+				t.Fatalf("reviewer decision = %v, want %s", err, test.code)
+			}
+		})
+	}
+	// The unrevoked baseline admits the decision.
+	gate, err := NewCurrentAuthority(authorityRunReader{snapshot: materialSnapshot(runs.AwaitingApproval)}, policyAuthority{authority: materialAuthority()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gate.AuthorizeReviewer(context.Background(), materialScope("reviewer"), request, DecisionApprove); err != nil {
+		t.Fatalf("baseline reviewer decision denied: %v", err)
 	}
 }
 

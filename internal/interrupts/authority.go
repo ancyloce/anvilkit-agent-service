@@ -89,6 +89,12 @@ func (a *CurrentAuthority) requireCurrentMaterial(ctx context.Context, scope run
 			return staleAuthority("the pinned " + material.label + " is no longer current")
 		}
 	}
+	// The target axis is identity-specific: authority over this run's exact
+	// target can be withdrawn without deactivating the scope, and a response,
+	// retry, or resume against a revoked target restarts execution against it.
+	if current.TargetRevoked(snapshot.Target.ID) {
+		return staleAuthority("authority over the run's target is revoked")
+	}
 	return nil
 }
 
@@ -130,6 +136,15 @@ func (a *CurrentAuthority) AuthorizeReviewer(ctx context.Context, scope runs.Sco
 	}
 	if requestPolicy != runPolicy || requestPolicy != currentPolicy {
 		return authorityDenied("the approval request reviewer policy is not current")
+	}
+	// An approval decision acts on one specific target and one specific
+	// request: either being individually revoked denies the decision even
+	// while the scope stays active.
+	if current.TargetRevoked(snapshot.Target.ID) {
+		return staleAuthority("authority over the run's target is revoked")
+	}
+	if current.ApprovalRevoked(string(request.ID)) {
+		return authorityDenied("the approval request has been revoked by current authority")
 	}
 	return nil
 }

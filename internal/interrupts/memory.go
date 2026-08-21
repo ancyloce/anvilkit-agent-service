@@ -151,8 +151,8 @@ func (r *MemoryRepository) AcceptInput(_ context.Context, write Write, command I
 		return OperationResult{}, err
 	}
 	if replay, ok := r.replays[replayKey(write, "respond-input")]; ok {
-		if replay.digest != digest || replay.version != write.ExpectedVersion {
-			return OperationResult{}, problem.New(problem.CodeIdempotencyConflict, "")
+		if conflict := ReplayConflict(replay.digest, digest, replay.version, write.ExpectedVersion); conflict != nil {
+			return OperationResult{}, conflict
 		}
 		result := replay.value.(OperationResult)
 		result.Replayed = true
@@ -281,8 +281,8 @@ func (r *MemoryRepository) DecideApproval(_ context.Context, write Write, comman
 		return OperationResult{}, err
 	}
 	if replay, ok := r.replays[replayKey(write, "decide-approval")]; ok {
-		if replay.digest != digest || replay.version != write.ExpectedVersion {
-			return OperationResult{}, problem.New(problem.CodeIdempotencyConflict, "")
+		if conflict := ReplayConflict(replay.digest, digest, replay.version, write.ExpectedVersion); conflict != nil {
+			return OperationResult{}, conflict
 		}
 		result := replay.value.(OperationResult)
 		result.Replayed = true
@@ -304,7 +304,7 @@ func (r *MemoryRepository) DecideApproval(_ context.Context, write Write, comman
 	if !now.Before(request.ExpiresAt) {
 		return OperationResult{}, stable(problem.CodeApprovalRequestExpired, "the approval deadline elapsed before the decision was accepted")
 	}
-	request.Decision = &Decision{RequestVersion: command.RequestVersion, Kind: command.Decision, ReviewerID: write.Scope.ActorID, Reason: command.Reason, AcceptedAt: now}
+	request.Decision = &Decision{RequestVersion: command.RequestVersion, Kind: command.Decision, ReviewerID: write.Scope.ActorID, Comment: command.Comment, AcceptedAt: now}
 	entry.approvals[command.RequestID] = request
 	snapshot := entry.snapshot
 	if command.Decision == DecisionReject || command.Decision == DecisionChange {
@@ -439,8 +439,8 @@ func (r *MemoryRepository) RecordedRetry(_ context.Context, write Write, digest 
 	if !ok {
 		return RetryOutcome{}, false, nil
 	}
-	if replay.digest != digest || replay.version != write.ExpectedVersion {
-		return RetryOutcome{}, false, problem.New(problem.CodeIdempotencyConflict, "")
+	if conflict := ReplayConflict(replay.digest, digest, replay.version, write.ExpectedVersion); conflict != nil {
+		return RetryOutcome{}, false, conflict
 	}
 	result := replay.value.(RetryOutcome)
 	result.Replayed = true
@@ -659,8 +659,8 @@ func (r *MemoryRepository) prepare(write Write, operation, digest string) (*memo
 	}
 	key := replayKey(write, operation)
 	if replay, ok := r.replays[key]; ok {
-		if replay.digest != digest || replay.version != write.ExpectedVersion {
-			return nil, nil, problem.New(problem.CodeIdempotencyConflict, "")
+		if conflict := ReplayConflict(replay.digest, digest, replay.version, write.ExpectedVersion); conflict != nil {
+			return nil, nil, conflict
 		}
 		return entry, &replay, nil
 	}

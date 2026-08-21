@@ -38,7 +38,9 @@ const (
 	CodeLimitExceeded              Code = "LIMIT_EXCEEDED"
 	CodeCircuitOpen                Code = "CIRCUIT_OPEN"
 	CodeVersionConflict            Code = "VERSION_CONFLICT"
+	CodePreconditionRequired       Code = "PRECONDITION_REQUIRED"
 	CodeIdempotencyConflict        Code = "IDEMPOTENCY_CONFLICT"
+	CodeIdempotencyKeyReused       Code = "IDEMPOTENCY_KEY_REUSED"
 	CodeRequestInvalid             Code = "REQUEST_INVALID"
 	CodeResourceNotFound           Code = "RESOURCE_NOT_FOUND"
 	CodeCursorExpired              Code = "EVENT_CURSOR_EXPIRED"
@@ -63,7 +65,7 @@ type Definition struct {
 }
 
 func Codes() []Code {
-	return []Code{CodeInvalidTransition, CodeCommitProofMissing, CodeRetryIneligible, CodeInputRequestStale, CodeInputAlreadyResponded, CodeInputRequestExpired, CodeInputSchemaInvalid, CodeApprovalRequestStale, CodeApprovalAlreadyDecided, CodeApprovalRequestExpired, CodeCancellationUnreconciled, CodeChildLimitExceeded, CodeChildPredecessorIneligible, CodeNoEligibleProvider, CodeProviderLimitExceeded, CodeAuthorityStale, CodeToolDispatchDenied, CodeBudgetDenied, CodeValidationUnavailable, CodeArtifactAccessDenied, CodeApplyAuthorizationDenied, CodeDomainOutcomeUncertain, CodeTaskDispatchDenied, CodeWorkerFenceStale, CodeAdmissionOverloaded, CodeLimitExceeded, CodeCircuitOpen, CodeVersionConflict, CodeIdempotencyConflict, CodeRequestInvalid, CodeResourceNotFound, CodeCursorExpired, CodeEventInvalid, CodeProviderUnavailable, CodeContractInvalid, CodePolicyDenied, CodeWorkerFailed, CodeArtifactInvalid, CodeDomainRejected, CodeTelemetryDegraded, CodeInfrastructureUnavailable, CodeAuthenticationInvalid, CodeAuthorizationDenied, CodeInternal}
+	return []Code{CodeInvalidTransition, CodeCommitProofMissing, CodeRetryIneligible, CodeInputRequestStale, CodeInputAlreadyResponded, CodeInputRequestExpired, CodeInputSchemaInvalid, CodeApprovalRequestStale, CodeApprovalAlreadyDecided, CodeApprovalRequestExpired, CodeCancellationUnreconciled, CodeChildLimitExceeded, CodeChildPredecessorIneligible, CodeNoEligibleProvider, CodeProviderLimitExceeded, CodeAuthorityStale, CodeToolDispatchDenied, CodeBudgetDenied, CodeValidationUnavailable, CodeArtifactAccessDenied, CodeApplyAuthorizationDenied, CodeDomainOutcomeUncertain, CodeTaskDispatchDenied, CodeWorkerFenceStale, CodeAdmissionOverloaded, CodeLimitExceeded, CodeCircuitOpen, CodeVersionConflict, CodePreconditionRequired, CodeIdempotencyConflict, CodeIdempotencyKeyReused, CodeRequestInvalid, CodeResourceNotFound, CodeCursorExpired, CodeEventInvalid, CodeProviderUnavailable, CodeContractInvalid, CodePolicyDenied, CodeWorkerFailed, CodeArtifactInvalid, CodeDomainRejected, CodeTelemetryDegraded, CodeInfrastructureUnavailable, CodeAuthenticationInvalid, CodeAuthorizationDenied, CodeInternal}
 }
 
 func Lookup(code Code) (Definition, bool) {
@@ -124,9 +126,13 @@ func Lookup(code Code) (Definition, bool) {
 	case CodeCircuitOpen:
 		definition = Definition{code, "urn:anvilkit:problem:circuit-open", "Dependency circuit is open", "safe-after-backoff", 503}
 	case CodeVersionConflict:
-		definition = Definition{code, "urn:anvilkit:problem:version-conflict", "Version precondition failed", "never", 409}
+		definition = Definition{code, "urn:anvilkit:problem:version-conflict", "Version precondition failed", "never", 412}
+	case CodePreconditionRequired:
+		definition = Definition{code, "urn:anvilkit:problem:precondition-required", "Concurrency precondition is required", "never", 428}
 	case CodeIdempotencyConflict:
 		definition = Definition{code, "urn:anvilkit:problem:idempotency-conflict", "Idempotency key conflicts with its recorded request", "never", 409}
+	case CodeIdempotencyKeyReused:
+		definition = Definition{code, "urn:anvilkit:problem:idempotency-key-reused", "Idempotency key was reused with different canonical bytes", "never", 409}
 	case CodeRequestInvalid:
 		definition = Definition{code, "urn:anvilkit:problem:request-invalid", "Request is invalid", "never", 422}
 	case CodeResourceNotFound:

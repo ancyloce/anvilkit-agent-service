@@ -9,62 +9,114 @@ import (
 
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
-	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
+
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-const agentEventSchema = "anvilkit://schema/agent-event?digest=sha256:2fdd8937381427507e721675ebbd66144595a193b53ba460534e9712df9b774a"
+func testContractBOM() json.RawMessage {
+	return json.RawMessage(`{"repository":"anvilkit/contracts","bomDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ociManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidenceManifestDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}`)
+}
 
-func TestMarshalEventProducesReplayableContractEnvelope(t *testing.T) {
-	write := interrupts.Write{
-		Scope:       runs.Scope{WorkspaceID: "workspace.synthetic.001", ProjectID: "project.synthetic.001", ActorID: "actor.synthetic.001"},
-		RunID:       "child-run",
-		Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
-	}
-	snapshot := runs.Snapshot{ContractBOM: json.RawMessage(`{"repository":"anvilkit/contracts","bomDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ociManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidenceManifestDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}`)}
-	raw, err := marshalEvent(write, snapshot, 1, "child-run:1", "run.created", map[string]string{
-		"parentRunId": "parent-run",
-		"rootRunId":   "root-run",
-		"state":       string(runs.Created),
-	}, time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := events.ValidateEnvelope(raw, events.DefaultBounds(), "child-run:1", "child-run", 1); err != nil {
-		t.Fatalf("event is not replayable: %v\n%s", err, raw)
-	}
+// Every event this store persists is rendered by the repository-owned
+// projector; this pins that the projector's output for the store's shapes is
+// replayable and contract-valid.
+func TestProjectedInterruptEventsAreReplayableContractEnvelopes(t *testing.T) {
 	guard, err := contractguard.NewGuard("../../..")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := guard.Require(context.Background(), contractguard.EventIn, agentEventSchema, raw); err != nil {
-		t.Fatalf("event violates AgentEvent: %v\n%s", err, raw)
+	occurred := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	projections := map[string]events.Projection{
+		"child created": {
+			WorkspaceID: "workspace.synthetic.001",
+			ProjectID:   "project.synthetic.001",
+			RunID:       "child-run",
+			Sequence:    1,
+			EventID:     "child-run:1",
+			Type:        events.TypeRunCreated,
+			OccurredAt:  occurred,
+			Subject:     events.SystemSubject(),
+			Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+			ContractBOM: testContractBOM(),
+			Payload:     events.ChildCreatedPayload("parent-run", "root-run", string(runs.Created)),
+		},
+		"input requested": {
+			WorkspaceID: "workspace.synthetic.001",
+			ProjectID:   "project.synthetic.001",
+			RunID:       "run-input",
+			Sequence:    3,
+			EventID:     "run-input:control:3",
+			Type:        events.TypeInputRequested,
+			OccurredAt:  occurred,
+			Subject:     events.SystemSubject(),
+			Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+			ContractBOM: testContractBOM(),
+			Payload:     events.InputRequestedPayload("request.input01", 1, "2026-08-14T12:15:00.000Z"),
+		},
+		"approval requested": {
+			WorkspaceID: "workspace.synthetic.001",
+			ProjectID:   "project.synthetic.001",
+			RunID:       "run-approval",
+			Sequence:    5,
+			EventID:     "run-approval:control:5",
+			Type:        events.TypeApprovalRequested,
+			OccurredAt:  occurred,
+			Subject:     events.SystemSubject(),
+			Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+			ContractBOM: testContractBOM(),
+			Payload:     events.ApprovalRequestedPayload("request.approve01", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1, "2026-08-14T12:15:00.000Z"),
+		},
+		"problem recorded": {
+			WorkspaceID: "workspace.synthetic.001",
+			ProjectID:   "project.synthetic.001",
+			RunID:       "run-stuck",
+			Sequence:    7,
+			EventID:     "run-stuck:control:7",
+			Type:        events.TypeProblemRecorded,
+			OccurredAt:  occurred,
+			Subject:     events.SystemSubject(),
+			Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+			ContractBOM: testContractBOM(),
+			Payload:     events.ProblemPayload("RUN_STUCK", string(runs.Executing)),
+		},
 	}
-}
-
-func TestMarshalEventRejectsUnknownEventType(t *testing.T) {
-	_, err := marshalEvent(interrupts.Write{RunID: "run"}, runs.Snapshot{}, 1, "event", "run.stuck", nil, time.Now())
-	if err == nil {
-		t.Fatal("unknown AgentEvent event type was accepted")
-	}
-}
-
-func TestControlEventsMapToFrozenAgentEventTypes(t *testing.T) {
-	tests := map[string]string{
-		"approval.decided":           "run.state-changed",
-		"run.cancellation-requested": "run.state-changed",
-		"run.stuck":                  "run.problem-recorded",
-	}
-	for controlType, expected := range tests {
-		actual, err := wireTypeForControlEvent(controlType)
-		if err != nil || actual != expected {
-			t.Errorf("wire type for %q = %q, %v; want %q", controlType, actual, err, expected)
+	for name, projection := range projections {
+		raw, err := events.Project(projection, events.DefaultBounds())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := events.ValidateEnvelope(raw, events.DefaultBounds(), projection.EventID, projection.RunID, projection.Sequence); err != nil {
+			t.Fatalf("%s is not replayable: %v\n%s", name, err, raw)
+		}
+		if err := guard.Require(context.Background(), contractguard.EventIn, events.AgentEventSchemaURI, raw); err != nil {
+			t.Fatalf("%s violates AgentEvent: %v\n%s", name, err, raw)
 		}
 	}
-	if _, err := wireTypeForControlEvent("unknown"); err == nil {
-		t.Fatal("unknown control event type was accepted")
+}
+
+// Internal control vocabulary must never reach the public wire: the projector
+// refuses any type outside the six-event registry, so a control name like
+// run.stuck cannot be emitted directly.
+func TestProjectorRejectsInternalVocabulary(t *testing.T) {
+	for _, internal := range []string{"run.stuck", "approval.decided", "run.cancellation-requested", "agent.turn-completed"} {
+		_, err := events.Project(events.Projection{
+			WorkspaceID: "workspace",
+			ProjectID:   "project",
+			RunID:       "run",
+			Sequence:    1,
+			EventID:     "run:1",
+			Type:        internal,
+			OccurredAt:  time.Now(),
+			Subject:     events.SystemSubject(),
+			Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+			ContractBOM: testContractBOM(),
+			Payload:     map[string]string{"state": "executing"},
+		}, events.DefaultBounds())
+		if err == nil {
+			t.Fatalf("internal vocabulary %q reached the public projector", internal)
+		}
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/idempotency"
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
@@ -26,14 +27,15 @@ import (
 type Store struct {
 	database    *pgxpool.Pool
 	idempotency *idempotency.Store
+	guard       *contractguard.Guard
 	clock       func() time.Time
 }
 
-func New(database *pgxpool.Pool, idempotencyStore *idempotency.Store) (*Store, error) {
-	if database == nil || idempotencyStore == nil {
-		return nil, fmt.Errorf("interrupt Postgres store requires database and idempotency store")
+func New(database *pgxpool.Pool, idempotencyStore *idempotency.Store, guard *contractguard.Guard) (*Store, error) {
+	if database == nil || idempotencyStore == nil || guard == nil {
+		return nil, fmt.Errorf("interrupt Postgres store requires database, idempotency store, and the pinned contract guard")
 	}
-	return &Store{database: database, idempotency: idempotencyStore, clock: time.Now}, nil
+	return &Store{database: database, idempotency: idempotencyStore, guard: guard, clock: time.Now}, nil
 }
 
 func (s *Store) Current(ctx context.Context, scope runs.Scope, id runs.ID) (runs.Snapshot, error) {
@@ -79,6 +81,13 @@ func (s *Store) OpenInput(ctx context.Context, write interrupts.Write, request i
 		}
 		snapshot, err := s.transition(ctx, tx, write, runs.Command{Kind: runs.RequestInput, Traceparent: write.Traceparent}, request.CreatedAt)
 		if err != nil {
+			return nil, err
+		}
+		// The durable input wait is a public lifecycle fact: the same
+		// transaction that opens it projects run.input-requested so a client
+		// can discover the request identity and the required request version
+		// from the durable stream alone.
+		if err := s.controlEvent(ctx, tx, write, snapshot, events.TypeInputRequested, events.InputRequestedPayload(string(request.ID), request.Version, contractTimestamp(request.ExpiresAt)), request.CreatedAt); err != nil {
 			return nil, err
 		}
 		return envelope{request, interrupts.OperationResult{Snapshot: snapshot}}, nil
@@ -143,7 +152,7 @@ func (s *Store) Approval(ctx context.Context, scope runs.Scope, runID runs.ID, i
 	if decision != nil {
 		request.Decision = &interrupts.Decision{RequestVersion: request.Version, Kind: interrupts.DecisionKind(*decision), ReviewerID: *reviewer, AcceptedAt: *decided}
 		if reason != nil {
-			request.Decision.Reason = *reason
+			request.Decision.Comment = *reason
 		}
 	}
 	return request, nil
@@ -162,6 +171,13 @@ func (s *Store) OpenApproval(ctx context.Context, write interrupts.Write, reques
 		}
 		snapshot, err := s.transition(ctx, tx, write, runs.Command{Kind: runs.RequestApproval, Traceparent: write.Traceparent}, request.CreatedAt)
 		if err != nil {
+			return nil, err
+		}
+		// The durable approval wait is a public lifecycle fact: the same
+		// transaction that opens it projects run.approval-requested with the
+		// exact action digest the reviewer will bind and the required decision
+		// version, so a reviewer can decide from the public surface alone.
+		if err := s.controlEvent(ctx, tx, write, snapshot, events.TypeApprovalRequested, events.ApprovalRequestedPayload(string(request.ID), request.ActionDigest, request.Version, contractTimestamp(request.ExpiresAt)), request.CreatedAt); err != nil {
 			return nil, err
 		}
 		return envelope{request, interrupts.OperationResult{Snapshot: snapshot}}, nil
@@ -195,7 +211,7 @@ func (s *Store) DecideApproval(ctx context.Context, write interrupts.Write, comm
 		if !now.Before(expires) {
 			return nil, interruptsProblem(problem.CodeApprovalRequestExpired, "the approval deadline elapsed before the decision was accepted")
 		}
-		if _, err := tx.Exec(ctx, `UPDATE agent_control.approval_requests SET decision=$5,decision_reason=$6,reviewer_id=$7,decided_at=$8 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 AND decided_at IS NULL`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, command.RequestID, command.Decision, command.Reason, write.Scope.ActorID, now); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE agent_control.approval_requests SET decision=$5,decision_reason=$6,reviewer_id=$7,decided_at=$8 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND request_id=$4 AND decided_at IS NULL`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, command.RequestID, command.Decision, command.Comment, write.Scope.ActorID, now); err != nil {
 			return nil, err
 		}
 		snapshot, err := s.load(ctx, tx, write.Scope, write.RunID)
@@ -207,7 +223,7 @@ func (s *Store) DecideApproval(ctx context.Context, write interrupts.Write, comm
 			if err != nil {
 				return nil, err
 			}
-		} else if err := s.controlEvent(ctx, tx, write, snapshot, "approval.decided", now); err != nil {
+		} else if err := s.controlEvent(ctx, tx, write, snapshot, events.TypeStateChanged, events.StateChangedPayload(string(snapshot.Status), string(snapshot.Status)), now); err != nil {
 			return nil, err
 		}
 		return interrupts.OperationResult{Snapshot: snapshot}, nil
@@ -357,7 +373,7 @@ func (s *Store) RequestCancellation(ctx context.Context, write interrupts.Write,
 			if err != nil {
 				return nil, err
 			}
-		} else if err := s.controlEvent(ctx, tx, write, snapshot, "run.cancellation-requested", now); err != nil {
+		} else if err := s.controlEvent(ctx, tx, write, snapshot, events.TypeStateChanged, events.StateChangedPayload(string(snapshot.Status), string(snapshot.Status)), now); err != nil {
 			return nil, err
 		}
 		c := interrupts.Cancellation{RequestedAt: now, RequestedBy: write.Scope.ActorID, CommitPhase: commit}
@@ -412,15 +428,15 @@ func (s *Store) RecordedRetry(ctx context.Context, write interrupts.Write, diges
 	var storedDigest []byte
 	var version int64
 	var raw []byte
-	err := s.database.QueryRow(ctx, `SELECT request_digest,version_bound,response_body FROM agent_control.write_idempotency WHERE workspace_id=$1 AND project_id=$2 AND operation='retry' AND idempotency_key=$3`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.IdempotencyKey).Scan(&storedDigest, &version, &raw)
+	err := s.database.QueryRow(ctx, `SELECT request_digest,version_bound,response_body FROM agent_control.write_idempotency WHERE workspace_id=$1 AND project_id=$2 AND subject=$3 AND method='POST' AND operation='retry' AND idempotency_key=$4`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.Scope.ActorID, write.IdempotencyKey).Scan(&storedDigest, &version, &raw)
 	if err == pgx.ErrNoRows {
 		return interrupts.RetryOutcome{}, false, nil
 	}
 	if err != nil {
 		return interrupts.RetryOutcome{}, false, err
 	}
-	if string(storedDigest) != digest || uint64(version) != write.ExpectedVersion {
-		return interrupts.RetryOutcome{}, false, problem.New(problem.CodeIdempotencyConflict, "")
+	if conflict := interrupts.ReplayConflict(string(storedDigest), digest, uint64(version), write.ExpectedVersion); conflict != nil {
+		return interrupts.RetryOutcome{}, false, conflict
 	}
 	var result interrupts.RetryOutcome
 	if err := json.Unmarshal(raw, &result); err != nil {
@@ -509,13 +525,21 @@ func (s *Store) CreateChild(ctx context.Context, write interrupts.Write, child i
 			return nil, err
 		}
 		childWrite := interrupts.Write{Scope: write.Scope, RunID: child.RunID, Traceparent: write.Traceparent}
-		event, err := marshalEvent(childWrite, childSnapshot, 1, childSnapshot.LatestEventID, "run.created", map[string]string{
-			"parentRunId": string(child.ParentRunID),
-			"rootRunId":   string(child.RootRunID),
-			"state":       string(runs.Created),
-		}, child.CreatedAt)
+		event, err := events.Project(events.Projection{
+			WorkspaceID: write.Scope.WorkspaceID,
+			ProjectID:   write.Scope.ProjectID,
+			RunID:       string(child.RunID),
+			Sequence:    1,
+			EventID:     childSnapshot.LatestEventID,
+			Type:        events.TypeRunCreated,
+			OccurredAt:  child.CreatedAt,
+			Subject:     events.SystemSubject(),
+			Traceparent: write.Traceparent,
+			ContractBOM: childSnapshot.ContractBOM,
+			Payload:     events.ChildCreatedPayload(string(child.ParentRunID), string(child.RootRunID), string(runs.Created)),
+		}, events.DefaultBounds())
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("project child created event: %w", err)
 		}
 		if err := s.persistEvent(ctx, tx, childWrite, 1, childSnapshot.LatestEventID, event, child.CreatedAt); err != nil {
 			return nil, err
@@ -656,7 +680,7 @@ func (s *Store) MarkStuck(ctx context.Context, progress interrupts.Progress, at 
 	if tag.RowsAffected() != 1 {
 		return false, tx.Commit(ctx)
 	}
-	if err := s.controlEvent(ctx, tx, write, snapshot, "run.stuck", at); err != nil {
+	if err := s.controlEvent(ctx, tx, write, snapshot, events.TypeProblemRecorded, events.ProblemPayload("RUN_STUCK", string(snapshot.Status)), at); err != nil {
 		return false, err
 	}
 	alertID := fmt.Sprintf("%s:dwell:%s:%d", progress.RunID, progress.State, progress.EnteredAt.UnixNano())
@@ -673,8 +697,27 @@ func (s *Store) MarkStuck(ctx context.Context, progress interrupts.Progress, at 
 	return true, nil
 }
 
+// operationMethod maps every canonical write operation to the method axis of
+// its idempotency scope (ADR-021 §4): API-originated commands carry their HTTP
+// method; durable operations that originate inside the service carry the
+// internal method. An operation outside this vocabulary cannot write at all.
+func operationMethod(operation string) (string, bool) {
+	switch operation {
+	case "respond-input", "decide-approval", "cancel", "retry", "discard":
+		return "POST", true
+	case "request-input", "request-approval", "expire-input", "expire-approval", "cancel-reconciled", "create-child":
+		return idempotency.MethodInternal, true
+	default:
+		return "", false
+	}
+}
+
 func (s *Store) execute(ctx context.Context, write interrupts.Write, operation, digest string, handler func(context.Context, pgx.Tx) (any, error), target any) (bool, error) {
-	response, err := s.idempotency.Execute(ctx, idempotency.Request{WorkspaceID: write.Scope.WorkspaceID, ProjectID: write.Scope.ProjectID, Operation: operation, Key: write.IdempotencyKey, RunID: string(write.RunID), Digest: []byte(digest), VersionBound: int64(write.ExpectedVersion)}, func(ctx context.Context, tx pgx.Tx) (idempotency.Response, error) {
+	method, known := operationMethod(operation)
+	if !known {
+		return false, fmt.Errorf("interrupt store: %q is not a registered write operation", operation)
+	}
+	response, err := s.idempotency.Execute(ctx, idempotency.Request{WorkspaceID: write.Scope.WorkspaceID, ProjectID: write.Scope.ProjectID, Subject: write.Scope.ActorID, Method: method, Operation: operation, Key: write.IdempotencyKey, RunID: string(write.RunID), Digest: []byte(digest), VersionBound: int64(write.ExpectedVersion)}, func(ctx context.Context, tx pgx.Tx) (idempotency.Response, error) {
 		value, err := handler(ctx, tx)
 		if err != nil {
 			return idempotency.Response{}, err
@@ -726,9 +769,21 @@ func (s *Store) transition(ctx context.Context, tx pgx.Tx, write interrupts.Writ
 	if err != nil {
 		return runs.Snapshot{}, translate(err)
 	}
-	event, err := marshalEvent(write, snapshot, sequence, snapshot.LatestEventID, "run.state-changed", map[string]string{"previousState": string(transition.Previous), "state": string(transition.Current)}, now)
+	event, err := events.Project(events.Projection{
+		WorkspaceID: write.Scope.WorkspaceID,
+		ProjectID:   write.Scope.ProjectID,
+		RunID:       string(write.RunID),
+		Sequence:    sequence,
+		EventID:     snapshot.LatestEventID,
+		Type:        events.TypeStateChanged,
+		OccurredAt:  now,
+		Subject:     events.SystemSubject(),
+		Traceparent: write.Traceparent,
+		ContractBOM: snapshot.ContractBOM,
+		Payload:     events.StateChangedPayload(string(transition.Previous), string(transition.Current)),
+	}, events.DefaultBounds())
 	if err != nil {
-		return runs.Snapshot{}, err
+		return runs.Snapshot{}, fmt.Errorf("project interrupt transition event: %w", err)
 	}
 	if err := s.persistEvent(ctx, tx, write, sequence, snapshot.LatestEventID, event, now); err != nil {
 		return runs.Snapshot{}, err
@@ -745,19 +800,31 @@ func (s *Store) transition(ctx context.Context, tx pgx.Tx, write interrupts.Writ
 	}
 	return snapshot, nil
 }
-func (s *Store) controlEvent(ctx context.Context, tx pgx.Tx, write interrupts.Write, snapshot runs.Snapshot, eventType string, now time.Time) error {
+
+// controlEvent publishes one additional public event without a run version
+// bump. The wire type and payload arrive already allowlisted from the call
+// site; internal control vocabulary never enters the public payload.
+func (s *Store) controlEvent(ctx context.Context, tx pgx.Tx, write interrupts.Write, snapshot runs.Snapshot, wireType string, payload map[string]string, now time.Time) error {
 	var sequence uint64
 	if err := tx.QueryRow(ctx, `UPDATE agent_control.agent_runs SET next_event_sequence=next_event_sequence+1,updated_at=$4 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 RETURNING next_event_sequence-1`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, now).Scan(&sequence); err != nil {
 		return err
 	}
 	id := fmt.Sprintf("%s:control:%d", write.RunID, sequence)
-	wireEventType, err := wireTypeForControlEvent(eventType)
+	event, err := events.Project(events.Projection{
+		WorkspaceID: write.Scope.WorkspaceID,
+		ProjectID:   write.Scope.ProjectID,
+		RunID:       string(write.RunID),
+		Sequence:    sequence,
+		EventID:     id,
+		Type:        wireType,
+		OccurredAt:  now,
+		Subject:     events.SystemSubject(),
+		Traceparent: write.Traceparent,
+		ContractBOM: snapshot.ContractBOM,
+		Payload:     payload,
+	}, events.DefaultBounds())
 	if err != nil {
-		return err
-	}
-	event, err := marshalEvent(write, snapshot, sequence, id, wireEventType, map[string]string{"controlType": eventType, "state": string(snapshot.Status)}, now)
-	if err != nil {
-		return err
+		return fmt.Errorf("project control event: %w", err)
 	}
 	return s.persistEvent(ctx, tx, write, sequence, id, event, now)
 }
@@ -765,51 +832,14 @@ func (s *Store) persistEvent(ctx context.Context, tx pgx.Tx, write interrupts.Wr
 	if err := events.ValidateEnvelope(event, events.DefaultBounds(), id, string(write.RunID), sequence); err != nil {
 		return fmt.Errorf("validate interrupt event: %w", err)
 	}
+	if err := s.guard.Require(ctx, contractguard.EventIn, events.AgentEventSchemaURI, event); err != nil {
+		return fmt.Errorf("validate interrupt event contract: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, sequence, id, event, now); err != nil {
 		return err
 	}
 	_, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,$5,'agent.public-events',$6,$7)`, write.Scope.WorkspaceID, write.Scope.ProjectID, id, write.RunID, sequence, event, now)
 	return err
-}
-
-func wireTypeForControlEvent(eventType string) (string, error) {
-	switch eventType {
-	case "approval.decided", "run.cancellation-requested":
-		return "run.state-changed", nil
-	case "run.stuck":
-		return "run.problem-recorded", nil
-	default:
-		return "", fmt.Errorf("unsupported control event type %q", eventType)
-	}
-}
-
-func marshalEvent(write interrupts.Write, snapshot runs.Snapshot, sequence uint64, id, eventType string, payload map[string]string, now time.Time) ([]byte, error) {
-	switch eventType {
-	case "run.created", "run.state-changed", "run.input-requested", "run.approval-requested", "run.artifact-available", "run.problem-recorded":
-	default:
-		return nil, fmt.Errorf("unsupported agent event type %q", eventType)
-	}
-	envelope := map[string]any{
-		"kind":                 "AgentEvent",
-		"eventId":              id,
-		"runId":                write.RunID,
-		"workspaceId":          write.Scope.WorkspaceID,
-		"projectId":            write.Scope.ProjectID,
-		"sequence":             sequence,
-		"eventType":            eventType,
-		"occurredAt":           contractTimestamp(now),
-		"subject":              map[string]string{"subjectType": "system", "subjectId": "agent-service"},
-		"traceContext":         map[string]string{"traceparent": write.Traceparent},
-		"contractBomReference": snapshot.ContractBOM,
-	}
-	if len(payload) != 0 {
-		envelope["payload"] = payload
-	}
-	event, err := json.Marshal(envelope)
-	if err != nil {
-		return nil, fmt.Errorf("marshal interrupt event: %w", err)
-	}
-	return event, nil
 }
 
 func contractTimestamp(value time.Time) string {
@@ -838,22 +868,7 @@ func translate(err error) error {
 	if errors.As(err, &postgresError) && postgresError.Code == "23505" {
 		return problem.New(problem.CodeIdempotencyConflict, "")
 	}
-	text := err.Error()
-	if contains(text, "canonical digest") || contains(text, "version bound differs") {
-		return problem.New(problem.CodeIdempotencyConflict, "")
-	}
-	if contains(text, "stale version") {
-		return problem.New(problem.CodeVersionConflict, "")
-	}
 	return err
-}
-func contains(value, fragment string) bool {
-	for i := 0; i+len(fragment) <= len(value); i++ {
-		if value[i:i+len(fragment)] == fragment {
-			return true
-		}
-	}
-	return false
 }
 
 var _ interrupts.Repository = (*Store)(nil)

@@ -27,7 +27,7 @@ func integrationConfig(t *testing.T, schemaSuffix, executorID string) Config {
 		DatabaseURL:        databaseURL,
 		Schema:             "agent_dbos_" + schemaSuffix,
 		ExecutorID:         executorID,
-		ApplicationVersion: "wp2-integration",
+		ApplicationVersion: "runtime-integration",
 		Logger:             slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
 	}
 }
@@ -45,7 +45,7 @@ func TestDBOSPostgresRestartAndReplay(t *testing.T) {
 	suffix := randomSuffix(t)
 	ops := workflowtest.NewProbeOps()
 	ops.NeedInput = true
-	first, err := New(context.Background(), integrationConfig(t, suffix, "wp2-executor"), ops)
+	first, err := New(context.Background(), integrationConfig(t, suffix, "runtime-executor"), ops)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestDBOSPostgresRestartAndReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	second, err := New(context.Background(), integrationConfig(t, suffix, "wp2-executor"), ops)
+	second, err := New(context.Background(), integrationConfig(t, suffix, "runtime-executor"), ops)
 	if err != nil {
 		t.Fatal(err)
 	}

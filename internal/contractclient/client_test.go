@@ -37,7 +37,7 @@ type clock struct{}
 
 func (clock) Now() time.Time { return time.Unix(1, 0) }
 func request(kind Kind) Request {
-	return Request{WorkspaceID: "workspace", ProjectID: "project", RunID: "run", Kind: kind, Payload: []byte(`{}`), BOMDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SchemaDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CatalogDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}
+	return Request{WorkspaceID: "workspace", ProjectID: "project", RunID: "run", Kind: kind, Payload: []byte(`{}`), BOMDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", SchemaDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", CatalogDigest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", PolicyDigest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
 }
 func TestPlanAndArtifactCrossingBoundaryRecordCompleteEvidence(t *testing.T) {
 	for _, kind := range []Kind{Plan, Artifact} {

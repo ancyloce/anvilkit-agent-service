@@ -187,7 +187,7 @@ func TestApprovalExpiryAndDecisionNeverBothWin(t *testing.T) {
 		go func() {
 			defer wait.Done()
 			<-start
-			_, decisionErr = service.DecideApproval(context.Background(), write("run", 5, "decide"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: request.Version, Decision: DecisionReject, Reason: "revise"})
+			_, decisionErr = service.DecideApproval(context.Background(), write("run", 5, "decide"), ApprovalDecisionCommand{RequestID: request.ID, RequestVersion: request.Version, Decision: DecisionReject, ActionDigest: request.ActionDigest, Comment: "revise"})
 		}()
 		go func() {
 			defer wait.Done()

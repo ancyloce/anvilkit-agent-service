@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 )
 
@@ -86,8 +87,17 @@ type ObjectStore interface {
 	Delete(context.Context, Reference) error
 	Exists(context.Context, Reference) (bool, error)
 }
+
+// Reader signs bounded read access, verifies presented capabilities, and
+// revokes what it signed. SignRead receives the grant being issued so real
+// implementations audit every grant durably before any capability leaves the
+// service. Verify proves a presented grant: its signature, its durable
+// audited record, and its revocation state — a forged, tampered, unknown, or
+// revoked capability fails closed. Revoke withdraws every outstanding grant
+// on the record immutably: the audit history is marked, never deleted.
 type Reader interface {
-	SignRead(context.Context, Record, time.Duration) (string, error)
+	SignRead(context.Context, Record, Grant, time.Duration) (string, error)
+	Verify(context.Context, Record, Grant) error
 	Revoke(context.Context, Record) error
 }
 type Grant struct {
@@ -100,18 +110,29 @@ type Grant struct {
 	ExpiresAt          time.Time
 }
 type Service struct {
-	lock                 sync.Mutex
+	store                Store
 	objects              ObjectStore
 	reader               Reader
-	records              map[string]Record
+	authority            authority.Source
 	pendingTTL, grantTTL time.Duration
 }
 
-func New(objects ObjectStore, reader Reader, pendingTTL, grantTTL time.Duration) (*Service, error) {
-	if objects == nil || reader == nil || pendingTTL <= 0 || grantTTL <= 0 || grantTTL > 15*time.Minute {
+func New(store Store, objects ObjectStore, reader Reader, source authority.Source, pendingTTL, grantTTL time.Duration) (*Service, error) {
+	if store == nil || objects == nil || reader == nil || source == nil || pendingTTL <= 0 || grantTTL <= 0 || grantTTL > 15*time.Minute {
 		return nil, fmt.Errorf("artifact dependencies or TTLs are invalid")
 	}
-	return &Service{objects: objects, reader: reader, records: map[string]Record{}, pendingTTL: pendingTTL, grantTTL: grantTTL}, nil
+	return &Service{store: store, objects: objects, reader: reader, authority: source, pendingTTL: pendingTTL, grantTTL: grantTTL}, nil
+}
+
+// permittedByAuthority re-reads the one current-authority source for the
+// acting scope. Artifact access is an external disclosure: issuing or using a
+// grant under revoked or incomplete authority fails closed.
+func (s *Service) permittedByAuthority(ctx context.Context, workspace, project, actor string) error {
+	current, err := s.authority.Current(ctx, authority.Scope{WorkspaceID: workspace, ProjectID: project, ActorID: actor})
+	if err != nil || !current.MaterialComplete() || !current.Active() {
+		return problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	return nil
 }
 func key(workspace, project string, id ID) string {
 	return workspace + "\x00" + project + "\x00" + string(id)
@@ -126,10 +147,9 @@ func (s *Service) Create(ctx context.Context, input Create) (Record, error) {
 	if actualDigest != input.ClaimedDigest {
 		state = Quarantined
 	}
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	identity := key(input.WorkspaceID, input.ProjectID, input.ID)
-	if prior, ok := s.records[identity]; ok {
+	if prior, ok, err := s.store.Get(ctx, input.WorkspaceID, input.ProjectID, input.ID); err != nil {
+		return Record{}, fmt.Errorf("read artifact record: %w", err)
+	} else if ok {
 		if prior.Digest != input.ClaimedDigest || prior.ActualDigest != actualDigest || prior.Reference != input.Reference {
 			return Record{}, problem.New(problem.CodeIdempotencyConflict, "")
 		}
@@ -139,23 +159,30 @@ func (s *Service) Create(ctx context.Context, input Create) (Record, error) {
 		return Record{}, fmt.Errorf("write immutable artifact: %w", err)
 	}
 	record := Record{WorkspaceID: input.WorkspaceID, ProjectID: input.ProjectID, RunID: input.RunID, ID: input.ID, Digest: input.ClaimedDigest, ActualDigest: actualDigest, Reference: input.Reference, Schema: input.Schema, Lineage: cloneLineage(input.Lineage), State: state, Version: 1, SecurityGeneration: 1, CreatedAt: input.CreatedAt, UpdatedAt: input.CreatedAt}
-	s.records[identity] = record
-	return record, nil
+	winner, created, err := s.store.Create(ctx, record)
+	if err != nil {
+		return Record{}, fmt.Errorf("record artifact identity: %w", err)
+	}
+	if !created && (winner.Digest != record.Digest || winner.ActualDigest != record.ActualDigest || winner.Reference != record.Reference) {
+		return Record{}, problem.New(problem.CodeIdempotencyConflict, "")
+	}
+	return winner, nil
 }
-func (s *Service) Get(_ context.Context, workspace, project string, id ID) (Record, error) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	value, ok := s.records[key(workspace, project, id)]
+func (s *Service) Get(ctx context.Context, workspace, project string, id ID) (Record, error) {
+	value, ok, err := s.store.Get(ctx, workspace, project, id)
+	if err != nil {
+		return Record{}, fmt.Errorf("read artifact record: %w", err)
+	}
 	if !ok {
 		return Record{}, problem.New(problem.CodeResourceNotFound, "")
 	}
-	return clone(value), nil
+	return value, nil
 }
 func (s *Service) Transition(ctx context.Context, workspace, project string, id ID, expected uint64, next State, now time.Time) (Record, error) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	identity := key(workspace, project, id)
-	value, ok := s.records[identity]
+	value, ok, err := s.store.Get(ctx, workspace, project, id)
+	if err != nil {
+		return Record{}, fmt.Errorf("read artifact record: %w", err)
+	}
 	if !ok {
 		return Record{}, problem.New(problem.CodeResourceNotFound, "")
 	}
@@ -170,52 +197,74 @@ func (s *Service) Transition(ctx context.Context, workspace, project string, id 
 	}
 	if (next == Quarantined && value.State != Quarantined) || next == Expired {
 		value.SecurityGeneration++
-		if err := s.reader.Revoke(ctx, clone(value)); err != nil {
+		if err := s.reader.Revoke(ctx, value); err != nil {
 			return Record{}, fmt.Errorf("revoke artifact grants: %w", err)
 		}
 	}
 	value.State = next
 	value.Version++
 	value.UpdatedAt = now
-	s.records[identity] = value
-	return clone(value), nil
+	return s.store.Update(ctx, value, expected)
 }
 func (s *Service) Grant(ctx context.Context, workspace, project string, id ID, purpose Purpose, actor string, now time.Time) (Grant, error) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	value, ok := s.records[key(workspace, project, id)]
+	value, ok, err := s.store.Get(ctx, workspace, project, id)
+	if err != nil {
+		return Grant{}, fmt.Errorf("read artifact record: %w", err)
+	}
 	if !ok {
 		return Grant{}, problem.New(problem.CodeResourceNotFound, "")
 	}
 	if !eligible(value.State, purpose) || actor == "" || len(actor) > 128 || now.IsZero() || now.Before(value.CreatedAt) {
 		return Grant{}, problem.New(problem.CodeArtifactAccessDenied, "")
 	}
-	url, err := s.reader.SignRead(ctx, clone(value), s.grantTTL)
+	if err := s.permittedByAuthority(ctx, workspace, project, actor); err != nil {
+		return Grant{}, err
+	}
+	grant := Grant{ArtifactID: value.ID, Digest: value.Digest, SecurityGeneration: value.SecurityGeneration, Purpose: purpose, ActorID: actor, ExpiresAt: now.Add(s.grantTTL)}
+	url, err := s.reader.SignRead(ctx, value, grant, s.grantTTL)
 	if err != nil {
 		return Grant{}, err
 	}
 	if url == "" {
 		return Grant{}, fmt.Errorf("artifact reader returned an empty signed URL")
 	}
-	return Grant{ArtifactID: value.ID, Digest: value.Digest, SecurityGeneration: value.SecurityGeneration, Purpose: purpose, ActorID: actor, URL: url, ExpiresAt: now.Add(s.grantTTL)}, nil
+	grant.URL = url
+	return grant, nil
 }
-func (s *Service) UseGrant(_ context.Context, workspace, project, actor string, grant Grant, now time.Time) (Record, error) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	value, ok := s.records[key(workspace, project, grant.ArtifactID)]
+
+// UseGrant admits one artifact access. Everything is verified before any
+// bytes are disclosed: the current record's scope, digest, and security
+// generation; the acting actor and the grant's purpose against the record's
+// state; the grant's expiry; the signed capability itself together with its
+// durable audited record and revocation state; and the current authority for
+// the acting scope. Any failed axis denies access.
+func (s *Service) UseGrant(ctx context.Context, workspace, project, actor string, grant Grant, now time.Time) (Record, error) {
+	value, ok, err := s.store.Get(ctx, workspace, project, grant.ArtifactID)
+	if err != nil {
+		return Record{}, fmt.Errorf("read artifact record: %w", err)
+	}
 	if !ok {
 		return Record{}, problem.New(problem.CodeResourceNotFound, "")
 	}
 	if actor == "" || actor != grant.ActorID || now.IsZero() || !now.Before(grant.ExpiresAt) || now.Before(value.CreatedAt) || value.Digest != grant.Digest || value.SecurityGeneration != grant.SecurityGeneration || !eligible(value.State, grant.Purpose) {
 		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
 	}
-	return clone(value), nil
+	if grant.URL == "" {
+		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	if err := s.reader.Verify(ctx, value, grant); err != nil {
+		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	if err := s.permittedByAuthority(ctx, workspace, project, actor); err != nil {
+		return Record{}, err
+	}
+	return value, nil
 }
-func (s *Service) SetLegalHold(_ context.Context, workspace, project string, id ID, expected uint64, hold bool, now time.Time) (Record, error) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	identity := key(workspace, project, id)
-	value, ok := s.records[identity]
+func (s *Service) SetLegalHold(ctx context.Context, workspace, project string, id ID, expected uint64, hold bool, now time.Time) (Record, error) {
+	value, ok, err := s.store.Get(ctx, workspace, project, id)
+	if err != nil {
+		return Record{}, fmt.Errorf("read artifact record: %w", err)
+	}
 	if !ok {
 		return Record{}, problem.New(problem.CodeResourceNotFound, "")
 	}
@@ -225,19 +274,18 @@ func (s *Service) SetLegalHold(_ context.Context, workspace, project string, id 
 	value.LegalHold = hold
 	value.Version++
 	value.UpdatedAt = now
-	s.records[identity] = value
-	return clone(value), nil
+	return s.store.Update(ctx, value, expected)
 }
 func (s *Service) Delete(ctx context.Context, workspace, project string, id ID, expected uint64, reason string, now time.Time) (Record, error) {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	identity := key(workspace, project, id)
-	value, ok := s.records[identity]
+	value, ok, err := s.store.Get(ctx, workspace, project, id)
+	if err != nil {
+		return Record{}, fmt.Errorf("read artifact record: %w", err)
+	}
 	if !ok {
 		return Record{}, problem.New(problem.CodeResourceNotFound, "")
 	}
 	if value.State == Deleted {
-		return clone(value), nil
+		return value, nil
 	}
 	if value.LegalHold {
 		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
@@ -245,52 +293,87 @@ func (s *Service) Delete(ctx context.Context, workspace, project string, id ID, 
 	if value.Version != expected || reason == "" {
 		return Record{}, problem.New(problem.CodeVersionConflict, "")
 	}
-	value.SecurityGeneration++
-	if err := s.reader.Revoke(ctx, clone(value)); err != nil {
+	if err := s.reader.Revoke(ctx, value); err != nil {
 		return Record{}, fmt.Errorf("revoke artifact grants: %w", err)
 	}
 	if err := s.objects.Delete(ctx, value.Reference); err != nil {
 		return Record{}, fmt.Errorf("delete artifact object: %w", err)
 	}
+	// Deletion routes through the revocable terminal states the lifecycle
+	// permits: a live artifact expires first, then the tombstone lands. Each
+	// step is one CAS with one version and security-generation increment.
+	if value.State != Quarantined && value.State != Expired {
+		expiredStep := value
+		expiredStep.State = Expired
+		expiredStep.Version++
+		expiredStep.SecurityGeneration++
+		expiredStep.UpdatedAt = now
+		next, err := s.store.Update(ctx, expiredStep, value.Version)
+		if err != nil {
+			return Record{}, err
+		}
+		value = next
+	}
+	expected = value.Version
 	value.State = Deleted
 	value.Version++
+	value.SecurityGeneration++
 	value.UpdatedAt = now
 	deleted := now
 	value.DeletedAt = &deleted
 	value.DeletionReason = reason
-	s.records[identity] = value
-	return clone(value), nil
+	return s.store.Update(ctx, value, expected)
 }
 func (s *Service) Reconcile(ctx context.Context, now time.Time) error {
-	s.lock.Lock()
-	defer s.lock.Unlock()
-	for identity, value := range s.records {
+	values, err := s.store.Snapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("list artifact records: %w", err)
+	}
+	for _, value := range values {
 		exists, err := s.objects.Exists(ctx, value.Reference)
 		if err != nil {
 			return err
 		}
-		if value.State == Pending && now.Sub(value.CreatedAt) >= s.pendingTTL && !value.LegalHold {
-			value.State = Expired
-			value.Version++
-			value.SecurityGeneration++
-			if err := s.reader.Revoke(ctx, clone(value)); err != nil {
-				return fmt.Errorf("revoke expired artifact grants: %w", err)
+		expire := func(record Record) (Record, error) {
+			record.State = Expired
+			record.Version++
+			record.SecurityGeneration++
+			if err := s.reader.Revoke(ctx, record); err != nil {
+				return Record{}, fmt.Errorf("revoke expired artifact grants: %w", err)
 			}
-			value.UpdatedAt = now
+			record.UpdatedAt = now
+			return s.store.Update(ctx, record, record.Version-1)
+		}
+		if value.State == Pending && now.Sub(value.CreatedAt) >= s.pendingTTL && !value.LegalHold {
+			value, err = expire(value)
+			if err != nil {
+				return fmt.Errorf("reconcile expired artifact: %w", err)
+			}
 		}
 		if !exists && value.State != Deleted {
+			// An orphaned record routes through the revocable terminal states
+			// the lifecycle permits before its tombstone lands.
+			if value.State != Quarantined && value.State != Expired {
+				value, err = expire(value)
+				if err != nil {
+					return fmt.Errorf("reconcile orphaned artifact: %w", err)
+				}
+			}
+			expected := value.Version
 			value.State = Deleted
 			value.Version++
 			value.SecurityGeneration++
-			if err := s.reader.Revoke(ctx, clone(value)); err != nil {
+			if err := s.reader.Revoke(ctx, value); err != nil {
 				return fmt.Errorf("revoke orphaned artifact grants: %w", err)
 			}
 			value.UpdatedAt = now
 			deleted := now
 			value.DeletedAt = &deleted
 			value.DeletionReason = "orphaned-object"
+			if _, err := s.store.Update(ctx, value, expected); err != nil {
+				return fmt.Errorf("reconcile artifact record: %w", err)
+			}
 		}
-		s.records[identity] = value
 	}
 	return nil
 }

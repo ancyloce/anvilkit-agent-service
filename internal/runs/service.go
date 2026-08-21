@@ -31,16 +31,53 @@ func (s Scope) Validate() error {
 	return nil
 }
 
-// CreateRequest is an internal candidate command. Server-owned authority fields
-// are structurally absent and this type is not frozen as the interaction wire shape.
+// CreateRequest is the canonical CreateAgentRunRequest command (ADR-021). The
+// caller declares only authorized intent: the definition reference, the
+// operation, the fully scoped target, and optional input and labels.
+// Server-owned authority fields are structurally absent; the owning domain is
+// derived from the operation on the server.
 type CreateRequest struct {
-	Domain    string        `json:"domain"`
-	Operation string        `json:"operation"`
-	Target    TargetCommand `json:"target"`
+	Kind       string                     `json:"kind"`
+	Definition DefinitionReferenceCommand `json:"definition"`
+	Operation  string                     `json:"operation"`
+	Target     TargetCommand              `json:"target"`
+	Input      *CreateRunInput            `json:"input,omitempty"`
+	Labels     map[string]string          `json:"labels,omitempty"`
+}
+type DefinitionReferenceCommand struct {
+	DefinitionID     string `json:"definitionId"`
+	DefinitionDigest string `json:"definitionDigest"`
 }
 type TargetCommand struct {
-	Type string `json:"targetType"`
-	ID   string `json:"targetId"`
+	Type        string `json:"targetType"`
+	ID          string `json:"targetId"`
+	WorkspaceID string `json:"workspaceId"`
+	ProjectID   string `json:"projectId"`
+}
+type CreateRunInput struct {
+	UserInput      string                     `json:"userInput,omitempty"`
+	ArtifactInputs []ArtifactReferenceCommand `json:"artifactInputs,omitempty"`
+}
+type ArtifactReferenceCommand struct {
+	ArtifactID string `json:"artifactId"`
+	Digest     string `json:"digest"`
+	MediaType  string `json:"mediaType"`
+	SizeBytes  int64  `json:"sizeBytes"`
+}
+
+// operationDomain derives the owning domain from the declared operation. The
+// domain is a server-owned fact: callers never declare it.
+func operationDomain(operation string) string {
+	switch operation {
+	case "page-change", "image-operation":
+		return "pagix-page"
+	case "artifact-validation":
+		return "contract-runtime"
+	case "component-package":
+		return "platform-agent"
+	default:
+		return ""
+	}
 }
 
 // Authority is the one current-authority observation type, shared with every
@@ -206,8 +243,35 @@ func DecodeCreateRequest(raw []byte) (CreateRequest, error) {
 	if err := consumeEOF(decoder); err != nil {
 		return CreateRequest{}, requestProblem("body must contain exactly one JSON value")
 	}
-	if !oneOf(request.Domain, "platform-agent", "pagix-page", "contract-runtime") || !oneOf(request.Operation, "page-change", "artifact-validation", "image-operation", "component-package") || !validTargetType(request.Target.Type) || !validOpaqueID(request.Target.ID) {
-		return CreateRequest{}, requestProblem("domain, operation, and target must use bounded values")
+	if request.Kind != "CreateAgentRunRequest" {
+		return CreateRequest{}, requestProblem("kind must be CreateAgentRunRequest")
+	}
+	if !validOpaqueID(request.Definition.DefinitionID) || !validDigest(request.Definition.DefinitionDigest) {
+		return CreateRequest{}, requestProblem("definition reference must carry a bounded identity and digest")
+	}
+	if !oneOf(request.Operation, "page-change", "artifact-validation", "image-operation", "component-package") || !validTargetType(request.Target.Type) || !validOpaqueID(request.Target.ID) || !validOpaqueID(request.Target.WorkspaceID) || !validOpaqueID(request.Target.ProjectID) {
+		return CreateRequest{}, requestProblem("operation and fully scoped target must use bounded values")
+	}
+	if request.Input != nil {
+		if request.Input.UserInput == "" && len(request.Input.ArtifactInputs) == 0 {
+			return CreateRequest{}, requestProblem("input must carry user input or artifact references")
+		}
+		if len(request.Input.UserInput) > 16384 || len(request.Input.ArtifactInputs) > 32 {
+			return CreateRequest{}, requestProblem("input exceeds the bounded command")
+		}
+		for _, reference := range request.Input.ArtifactInputs {
+			if !validOpaqueID(reference.ArtifactID) || !validDigest(reference.Digest) || reference.MediaType == "" || len(reference.MediaType) > 128 || reference.SizeBytes < 1 {
+				return CreateRequest{}, requestProblem("artifact references must be bounded and digest-pinned")
+			}
+		}
+	}
+	if len(request.Labels) > 16 {
+		return CreateRequest{}, requestProblem("labels exceed the bounded command")
+	}
+	for key, value := range request.Labels {
+		if key == "" || len(key) > 64 || len(value) > 256 {
+			return CreateRequest{}, requestProblem("labels must use bounded keys and values")
+		}
 	}
 	return request, nil
 }
@@ -228,6 +292,23 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CreateOutcome,
 	request, err := DecodeCreateRequest(input.Raw)
 	if err != nil {
 		return CreateOutcome{}, err
+	}
+	// The declared target must bind the authenticated workspace and the
+	// project the caller's verified claims authorize; a caller cannot aim a
+	// run at another workspace's or project's target by declaration.
+	if request.Target.WorkspaceID != input.Scope.WorkspaceID || request.Target.ProjectID != input.Scope.ProjectID {
+		denied := problem.New(problem.CodeAuthorizationDenied, "")
+		denied.Detail = "the declared target must bind the authenticated workspace and an authorized project"
+		return CreateOutcome{}, denied
+	}
+	// The one authority observation the caller resolved must still govern the
+	// exact target the run would act on. The application boundary performs the
+	// same check; this one holds even for callers that reach the service
+	// directly, so no composition can create a run against a revoked target.
+	if input.Authority.TargetRevoked(request.Target.ID) {
+		stale := problem.New(problem.CodeAuthorityStale, "")
+		stale.Detail = "authority over the declared target is revoked"
+		return CreateOutcome{}, stale
 	}
 	digest, err := canonical.Digest(input.Raw)
 	if err != nil {
@@ -258,7 +339,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CreateOutcome,
 	if now.IsZero() {
 		return CreateOutcome{}, problem.New(problem.CodeAuthorityStale, "")
 	}
-	snapshot := Snapshot{Kind: "AgentRun", RunID: runID, RootRunID: runID, WorkspaceID: input.Scope.WorkspaceID, ActorID: input.Scope.ActorID, Domain: request.Domain, Operation: request.Operation, Target: Target{Type: request.Target.Type, ID: request.Target.ID, WorkspaceID: input.Scope.WorkspaceID, ProjectID: input.Scope.ProjectID}, Definition: append(json.RawMessage(nil), input.Authority.Definition...), ContractBOM: append(json.RawMessage(nil), input.Authority.ContractBOM...), Policy: append(json.RawMessage(nil), input.Authority.Policy...), Budget: append(json.RawMessage(nil), input.Authority.Budget...), Idempotency: IdempotencyProjection{Scope: input.Scope.WorkspaceID + ":create-run", Key: input.Key, CanonicalRequestDigest: digest}, Status: Created, Version: 1, ExecutionGeneration: 1, LatestEventID: string(runID) + ":1", CreatedAt: now, UpdatedAt: now}
+	snapshot := Snapshot{Kind: "AgentRun", RunID: runID, RootRunID: runID, WorkspaceID: input.Scope.WorkspaceID, ActorID: input.Scope.ActorID, Domain: operationDomain(request.Operation), Operation: request.Operation, Target: Target{Type: request.Target.Type, ID: request.Target.ID, WorkspaceID: input.Scope.WorkspaceID, ProjectID: input.Scope.ProjectID}, Definition: append(json.RawMessage(nil), input.Authority.Definition...), ContractBOM: append(json.RawMessage(nil), input.Authority.ContractBOM...), Policy: append(json.RawMessage(nil), input.Authority.Policy...), Budget: append(json.RawMessage(nil), input.Authority.Budget...), Idempotency: IdempotencyProjection{Scope: input.Scope.WorkspaceID + ":create-run", Key: input.Key, CanonicalRequestDigest: digest}, Status: Created, Version: 1, ExecutionGeneration: 1, LatestEventID: string(runID) + ":1", CreatedAt: now, UpdatedAt: now}
 	outcome, err := s.store.Create(ctx, CreateRecord{Scope: input.Scope, Key: input.Key, Digest: digest, Traceparent: input.Traceparent, Snapshot: snapshot})
 	if err != nil {
 		return CreateOutcome{}, err
@@ -410,6 +491,12 @@ func asciiAlphaNumeric(character byte) bool {
 }
 
 func ParseETag(value string, id ID) (uint64, error) {
+	// A missing precondition and a stale one are different answers: the
+	// caller who sent nothing gets 428 and retries with the current ETag; the
+	// caller who sent a stale value gets 412.
+	if strings.TrimSpace(value) == "" {
+		return 0, problem.New(problem.CodePreconditionRequired, "")
+	}
 	prefix := "\"" + string(id) + ":v"
 	if !strings.HasPrefix(value, prefix) || !strings.HasSuffix(value, "\"") {
 		return 0, problem.New(problem.CodeVersionConflict, "")
