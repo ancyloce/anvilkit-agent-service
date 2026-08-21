@@ -217,6 +217,10 @@ func (b *testTerminalBudget) records() []string {
 	return append([]string(nil), b.settled...)
 }
 
+func (b *testTerminalBudget) OutstandingCancelledRunBudget(context.Context, runs.Snapshot) (bool, error) {
+	return false, nil
+}
+
 // fences reports the runs whose budget dispatch authority the service revoked.
 func (b *testTerminalBudget) fences() []string {
 	b.lock.Lock()

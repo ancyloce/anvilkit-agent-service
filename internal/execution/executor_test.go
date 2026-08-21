@@ -273,6 +273,12 @@ func (d *deferredSettlement) FenceRunBudget(ctx context.Context, snapshot runs.S
 	}
 	return d.inner.FenceRunBudget(ctx, snapshot)
 }
+func (d *deferredSettlement) OutstandingCancelledRunBudget(ctx context.Context, snapshot runs.Snapshot) (bool, error) {
+	if d.inner == nil {
+		return false, fmt.Errorf("cancelled budget hold lookup is unavailable")
+	}
+	return d.inner.OutstandingCancelledRunBudget(ctx, snapshot)
+}
 func (d *deferredSettlement) SettleCancelledRunBudget(ctx context.Context, snapshot runs.Snapshot) error {
 	if d.inner == nil {
 		return fmt.Errorf("cancelled budget settlement is unavailable")

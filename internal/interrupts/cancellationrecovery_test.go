@@ -41,8 +41,10 @@ func (r *recordingRepository) FinishCancellation(ctx context.Context, write Writ
 
 // settledBudget accepts every budget act and records the runs it settled.
 type settledBudget struct {
-	fenced  []string
-	settled []string
+	fenced      []string
+	settled     []string
+	asked       []string
+	outstanding bool
 }
 
 func (b *settledBudget) SettleRunBudget(context.Context, runs.Snapshot, bool) error { return nil }
@@ -53,6 +55,10 @@ func (b *settledBudget) FenceRunBudget(_ context.Context, snapshot runs.Snapshot
 func (b *settledBudget) SettleCancelledRunBudget(_ context.Context, snapshot runs.Snapshot) error {
 	b.settled = append(b.settled, string(snapshot.RunID))
 	return nil
+}
+func (b *settledBudget) OutstandingCancelledRunBudget(_ context.Context, snapshot runs.Snapshot) (bool, error) {
+	b.asked = append(b.asked, string(snapshot.RunID))
+	return b.outstanding, nil
 }
 
 // TestCancellationRecoveryFinishesWithADurablyValidWrite proves the sweep's
