@@ -18,6 +18,7 @@ import (
 
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
+	eventpg "github.com/ancyloce/anvilkit-agent-service/internal/events/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/idempotency"
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
@@ -28,6 +29,11 @@ type Store struct {
 	database    *pgxpool.Pool
 	idempotency *idempotency.Store
 	guard       *contractguard.Guard
+	// projections is the one production path from an internal fact to a
+	// durable public event. This store never writes an event any other way,
+	// so every event it produces carries its source evidence and the digest
+	// of the ruleset that projected it.
+	projections *eventpg.ProjectionWriter
 	clock       func() time.Time
 }
 
@@ -35,7 +41,12 @@ func New(database *pgxpool.Pool, idempotencyStore *idempotency.Store, guard *con
 	if database == nil || idempotencyStore == nil || guard == nil {
 		return nil, fmt.Errorf("interrupt Postgres store requires database, idempotency store, and the pinned contract guard")
 	}
-	return &Store{database: database, idempotency: idempotencyStore, guard: guard, clock: time.Now}, nil
+	clock := time.Now
+	projections, err := eventpg.NewProjectionWriter(guard, events.DefaultBounds(), clock)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{database: database, idempotency: idempotencyStore, guard: guard, projections: projections, clock: clock}, nil
 }
 
 func (s *Store) Current(ctx context.Context, scope runs.Scope, id runs.ID) (runs.Snapshot, error) {
@@ -536,7 +547,7 @@ func (s *Store) CreateChild(ctx context.Context, write interrupts.Write, child i
 			return nil, err
 		}
 		childWrite := interrupts.Write{Scope: write.Scope, RunID: child.RunID, Traceparent: write.Traceparent}
-		event, err := events.Project(events.Projection{
+		if err := s.projectEvent(ctx, tx, childWrite, childSnapshot, events.Projection{
 			WorkspaceID: write.Scope.WorkspaceID,
 			ProjectID:   write.Scope.ProjectID,
 			RunID:       string(child.RunID),
@@ -548,11 +559,7 @@ func (s *Store) CreateChild(ctx context.Context, write interrupts.Write, child i
 			Traceparent: write.Traceparent,
 			ContractBOM: childSnapshot.ContractBOM,
 			Payload:     events.ChildCreatedPayload(string(child.ParentRunID), string(child.RootRunID), string(runs.Created)),
-		}, events.DefaultBounds())
-		if err != nil {
-			return nil, fmt.Errorf("project child created event: %w", err)
-		}
-		if err := s.persistEvent(ctx, tx, childWrite, 1, childSnapshot.LatestEventID, event, child.CreatedAt); err != nil {
+		}); err != nil {
 			return nil, err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO agent_workflow.checkpoints(workspace_id,project_id,workflow_id,workflow_version,step_name,state_bytes) VALUES($1,$2,$3,1,'created',$4)`, write.Scope.WorkspaceID, write.Scope.ProjectID, string(child.RunID)+":g1", childBytes); err != nil {
@@ -809,7 +816,7 @@ func (s *Store) transition(ctx context.Context, tx pgx.Tx, write interrupts.Writ
 	if err != nil {
 		return runs.Snapshot{}, translate(err)
 	}
-	event, err := events.Project(events.Projection{
+	if err := s.projectEvent(ctx, tx, write, snapshot, events.Projection{
 		WorkspaceID: write.Scope.WorkspaceID,
 		ProjectID:   write.Scope.ProjectID,
 		RunID:       string(write.RunID),
@@ -821,11 +828,7 @@ func (s *Store) transition(ctx context.Context, tx pgx.Tx, write interrupts.Writ
 		Traceparent: write.Traceparent,
 		ContractBOM: snapshot.ContractBOM,
 		Payload:     events.StateChangedPayload(string(transition.Previous), string(transition.Current)),
-	}, events.DefaultBounds())
-	if err != nil {
-		return runs.Snapshot{}, fmt.Errorf("project interrupt transition event: %w", err)
-	}
-	if err := s.persistEvent(ctx, tx, write, sequence, snapshot.LatestEventID, event, now); err != nil {
+	}); err != nil {
 		return runs.Snapshot{}, err
 	}
 	problemBytes, _ := json.Marshal(snapshot.Problem)
@@ -849,36 +852,35 @@ func (s *Store) controlEvent(ctx context.Context, tx pgx.Tx, write interrupts.Wr
 	if err := tx.QueryRow(ctx, `UPDATE agent_control.agent_runs SET next_event_sequence=next_event_sequence+1,updated_at=$4 WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 RETURNING next_event_sequence-1`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, now).Scan(&sequence); err != nil {
 		return err
 	}
-	id := fmt.Sprintf("%s:control:%d", write.RunID, sequence)
-	event, err := events.Project(events.Projection{
+	return s.projectEvent(ctx, tx, write, snapshot, events.Projection{
 		WorkspaceID: write.Scope.WorkspaceID,
 		ProjectID:   write.Scope.ProjectID,
 		RunID:       string(write.RunID),
 		Sequence:    sequence,
-		EventID:     id,
+		EventID:     fmt.Sprintf("%s:control:%d", write.RunID, sequence),
 		Type:        wireType,
 		OccurredAt:  now,
 		Subject:     events.SystemSubject(),
 		Traceparent: write.Traceparent,
 		ContractBOM: snapshot.ContractBOM,
 		Payload:     payload,
-	}, events.DefaultBounds())
-	if err != nil {
-		return fmt.Errorf("project control event: %w", err)
-	}
-	return s.persistEvent(ctx, tx, write, sequence, id, event, now)
+	})
 }
-func (s *Store) persistEvent(ctx context.Context, tx pgx.Tx, write interrupts.Write, sequence uint64, id string, event []byte, now time.Time) error {
-	if err := events.ValidateEnvelope(event, events.DefaultBounds(), id, string(write.RunID), sequence); err != nil {
-		return fmt.Errorf("validate interrupt event: %w", err)
-	}
-	if err := s.guard.Require(ctx, contractguard.EventIn, events.AgentEventSchemaURI, event); err != nil {
-		return fmt.Errorf("validate interrupt event contract: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO agent_events.agent_events(workspace_id,project_id,run_id,sequence,event_id,event_bytes,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID, sequence, id, event, now); err != nil {
+
+// projectEvent is this store's only route to a durable public event: it
+// records the authoritative evidence behind the fact, projects the event from
+// it through the repository-owned projector, and persists both together with
+// the outbox hand-off in the caller's transaction.
+func (s *Store) projectEvent(ctx context.Context, tx pgx.Tx, write interrupts.Write, snapshot runs.Snapshot, projection events.Projection) error {
+	producer, err := events.ProjectionProducer("agent-interrupts", snapshot.Definition, snapshot.ContractBOM, snapshot.Policy)
+	if err != nil {
 		return err
 	}
-	_, err := tx.Exec(ctx, `INSERT INTO agent_events.outbox(workspace_id,project_id,outbox_id,run_id,event_sequence,topic,payload,available_at) VALUES($1,$2,$3,$4,$5,'agent.public-events',$6,$7)`, write.Scope.WorkspaceID, write.Scope.ProjectID, id, write.RunID, sequence, event, now)
+	_, err = s.projections.Write(ctx, tx, events.Scope{WorkspaceID: write.Scope.WorkspaceID, ProjectID: write.Scope.ProjectID}, eventpg.Fact{
+		Projection:  projection,
+		Producer:    producer,
+		Correlation: events.ProjectionCorrelation{WorkflowID: string(write.RunID) + ":g1"},
+	})
 	return err
 }
 

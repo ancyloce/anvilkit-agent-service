@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,16 +83,38 @@ func TestProjectedInterruptEventsAreReplayableContractEnvelopes(t *testing.T) {
 			Payload:     events.ProblemPayload("RUN_STUCK", string(runs.Executing)),
 		},
 	}
+	producer, err := events.ProjectionProducer("agent-interrupts", nil, testContractBOM(), []byte(`{"policyId":"policy.1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, projection := range projections {
-		raw, err := events.Project(projection, events.DefaultBounds())
+		identity, err := events.ProjectionEvidenceID(projection.EventID)
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if err := events.ValidateEnvelope(raw, events.DefaultBounds(), projection.EventID, projection.RunID, projection.Sequence); err != nil {
-			t.Fatalf("%s is not replayable: %v\n%s", name, err, raw)
+		// The projection reaches the projector only through the record it is
+		// projected from: the evidence is built first and binds the reference,
+		// so no test can hand the projector a provenance of its own choosing
+		// any more than production can.
+		source, bound, err := events.ProjectionEvidence(projection, producer, events.ProjectionCorrelation{WorkflowID: projection.RunID + ":g1"})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
 		}
-		if err := guard.Require(context.Background(), contractguard.EventIn, events.AgentEventSchemaURI, raw); err != nil {
-			t.Fatalf("%s violates AgentEvent: %v\n%s", name, err, raw)
+		if source.EvidenceID != identity || source.PublicEventID != projection.EventID {
+			t.Fatalf("%s: source evidence=%q publicEvent=%q, want the derived binding", name, source.EvidenceID, source.PublicEventID)
+		}
+		raw, err := events.Project(bound, events.DefaultBounds())
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if err := events.ValidateEnvelope(raw.Bytes, events.DefaultBounds(), projection.EventID, projection.RunID, projection.Sequence); err != nil {
+			t.Fatalf("%s is not replayable: %v\n%s", name, err, raw.Bytes)
+		}
+		if err := guard.Require(context.Background(), contractguard.EventIn, events.AgentEventSchemaURI, raw.Bytes); err != nil {
+			t.Fatalf("%s violates AgentEvent: %v\n%s", name, err, raw.Bytes)
+		}
+		if raw.EvidenceID != identity || raw.ProjectorDigest == "" {
+			t.Fatalf("%s lost its provenance: %#v", name, raw)
 		}
 	}
 }
@@ -114,8 +137,10 @@ func TestProjectorRejectsInternalVocabulary(t *testing.T) {
 			ContractBOM: testContractBOM(),
 			Payload:     map[string]string{"state": "executing"},
 		}, events.DefaultBounds())
-		if err == nil {
-			t.Fatalf("internal vocabulary %q reached the public projector", internal)
+		// The refusal must be the registry's, not an incidental one: the type
+		// is what the projector rejected.
+		if err == nil || !strings.Contains(err.Error(), internal) {
+			t.Fatalf("internal vocabulary %q reached the public projector: %v", internal, err)
 		}
 	}
 }
