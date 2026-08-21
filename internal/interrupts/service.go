@@ -53,6 +53,12 @@ func NewService(repository Repository, schema SchemaValidator, authority Authori
 // settlement failure is reported rather than swallowed, because a terminal run
 // whose usage was never reconciled is a budget-correctness defect, not a
 // cosmetic one.
+//
+// Discard is the one path that settles this way. It acts on a run waiting for
+// a reviewer, so the executor's terminal step is an authority on the attempt
+// being over. Cancellation is not: it can land while a billed operation is
+// still running, so it fences first and concludes only behind an
+// authoritative reconciliation.
 func (s *Service) settleTerminalBudget(ctx context.Context, snapshot runs.Snapshot) error {
 	if err := s.budget.SettleRunBudget(ctx, snapshot, true); err != nil {
 		return fmt.Errorf("settle terminal run budget: %w", err)
@@ -242,6 +248,17 @@ func (s *Service) Cancel(ctx context.Context, write Write) (OperationResult, err
 	if err := s.leases.RevokeRun(ctx, write.Scope, write.RunID); err != nil {
 		return result, fmt.Errorf("revoke cancellation leases: %w", err)
 	}
+	// Budget dispatch authority is revoked in the same immediate breath as the
+	// workflow and the leases. It has to be: a reservation the control plane
+	// left current would still authorize an expensive dispatch after the run
+	// was cancelled, and a replayed durable step or a restarted workflow is
+	// exactly the thing that would use it. Fencing withdraws that authority
+	// and nothing else — the hold keeps its worst-case bound and stays
+	// unreleased, because the attempt this cancellation interrupted may still
+	// be running and its cost is not yet known to anybody.
+	if err := s.budget.FenceRunBudget(ctx, result.Snapshot); err != nil {
+		return result, fmt.Errorf("revoke cancellation budget authority: %w", err)
+	}
 	descendants, err := s.repository.Descendants(ctx, write.Scope, write.RunID)
 	if err != nil {
 		return result, fmt.Errorf("load cancellation descendants: %w", err)
@@ -263,19 +280,34 @@ func (s *Service) Cancel(ctx context.Context, write Write) (OperationResult, err
 		if err := s.leases.RevokeRun(ctx, write.Scope, child.RunID); err != nil {
 			return result, fmt.Errorf("revoke descendant leases: %w", err)
 		}
+		if err := s.budget.FenceRunBudget(ctx, childSnapshot); err != nil {
+			return result, fmt.Errorf("revoke descendant budget authority: %w", err)
+		}
 	}
-	clear, authoritative, err := s.reconciler.Reconcile(ctx, write.Scope, write.RunID, cancellation.CommitPhase)
+	// Reconciliation and accounting cover the whole hierarchy, not just the
+	// requested run. Cancelling a parent stops its children's workflows, so no
+	// terminal step of theirs will ever settle what they spent — and a parent
+	// projected as cancelled over a child that is still running would be a
+	// terminal state asserted about work in flight.
+	//
+	// The accounting is concluded before the aggregate transition, not after,
+	// so a failure leaves the run visibly cancelling, which is the state the
+	// recovery sweep looks for. Settling after the transition would hide a
+	// stranded hold behind a terminal run nothing comes back to.
+	settled, err := concludeCancelledHierarchy(ctx, s.repository, s.reconciler, s.budget, write.Scope, write.RunID, result.Snapshot, descendants)
 	if err != nil {
-		return result, fmt.Errorf("reconcile cancellation: %w", err)
+		return result, err
 	}
 	cancellation.DispatchStopped, cancellation.LeasesRevoked, cancellation.ChildrenPropagated = true, true, true
-	cancellation.Reconciled, cancellation.ExternalUncertain = clear, !clear
+	cancellation.Reconciled, cancellation.ExternalUncertain = settled, !settled
 	if err := s.repository.RecordCancellation(ctx, write, cancellation); err != nil {
 		return result, fmt.Errorf("record cancellation progress: %w", err)
 	}
-	if authoritative != nil || !clear {
-		// Commit-phase cancellation and uncertainty stay visible; neither may be
-		// projected as cancelled by this service.
+	if !settled {
+		// Commit-phase cancellation, an authoritative outcome the domain owner
+		// already settled, and an unresolved effect anywhere in the hierarchy
+		// all stay visible; none may be projected as cancelled by this service.
+		// The recovery sweep comes back to them.
 		if err := s.acknowledge(ctx, write, journal.FactCancel, digest, struct{}{}, result); err != nil {
 			return OperationResult{}, err
 		}
@@ -283,12 +315,6 @@ func (s *Service) Cancel(ctx context.Context, write Write) (OperationResult, err
 	}
 	final, err := s.repository.FinishCancellation(ctx, Write{Scope: write.Scope, RunID: write.RunID, ExpectedVersion: result.Snapshot.Version, IdempotencyKey: write.IdempotencyKey + ":reconciled", Traceparent: write.Traceparent}, cancellation)
 	if err != nil {
-		return OperationResult{}, err
-	}
-	// Cancellation is the run's terminal transition: its observed usage is
-	// reconciled and its worst-case hold released here, because no workflow
-	// terminal step will ever run for this run again.
-	if err := s.settleTerminalBudget(ctx, final.Snapshot); err != nil {
 		return OperationResult{}, err
 	}
 	if err := s.acknowledge(ctx, write, journal.FactCancel, digest, struct{}{}, final); err != nil {

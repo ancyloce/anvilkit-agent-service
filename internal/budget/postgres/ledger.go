@@ -35,10 +35,14 @@ func NewLedger(database *pgxpool.Pool, now func() time.Time) (*Ledger, error) {
 
 var _ budget.Ledger = (*Ledger)(nil)
 
-const reservationColumns = `root_run_id,run_id,workspace_id,project_id,policy_version,budget_version,upper_bound_micros,observed_micros,controller_generation,attempt_final,released,expired,expires_at`
+const reservationColumns = `root_run_id,run_id,workspace_id,project_id,policy_version,budget_version,upper_bound_micros,observed_micros,controller_generation,attempt_final,released,expired,cancelled,expires_at`
 
-// expiryTaskID names the fence an elapsed reservation records.
-const expiryTaskID = "budget-expiry"
+// expiryTaskID names the fence an elapsed reservation records, and
+// cancellationTaskID the fence a cancelled one records.
+const (
+	expiryTaskID       = "budget-expiry"
+	cancellationTaskID = "budget-cancellation"
+)
 
 // rootLockKey renders the tenant half of the advisory lock a root aggregate's
 // reservations serialize on. The separator is a printable character because
@@ -51,7 +55,7 @@ func rootLockKey(scope budget.Scope) string {
 func scanReservation(row pgx.Row, id budget.ReservationID) (budget.Reservation, error) {
 	value := budget.Reservation{ID: id}
 	var generation uint64
-	err := row.Scan(&value.RootRunID, &value.RunID, &value.WorkspaceID, &value.ProjectID, &value.PolicyVersion, &value.BudgetVersion, &value.UpperBoundMicros, &value.ObservedMicros, &generation, &value.AttemptFinal, &value.Released, &value.Expired, &value.ExpiresAt)
+	err := row.Scan(&value.RootRunID, &value.RunID, &value.WorkspaceID, &value.ProjectID, &value.PolicyVersion, &value.BudgetVersion, &value.UpperBoundMicros, &value.ObservedMicros, &generation, &value.AttemptFinal, &value.Released, &value.Expired, &value.Cancelled, &value.ExpiresAt)
 	if err != nil {
 		return budget.Reservation{}, err
 	}
@@ -98,12 +102,13 @@ func (l *Ledger) Reserve(ctx context.Context, estimate budget.Estimate, generati
 		if recorded.RootRunID != estimate.RootRunID || recorded.RunID != estimate.RunID || recorded.PolicyVersion != estimate.PolicyVersion || recorded.BudgetVersion != estimate.BudgetVersion || recorded.Generation != generation || recorded.UpperBoundMicros != estimate.MaximumCostMicros {
 			return budget.Reservation{}, problem.New(problem.CodeIdempotencyConflict, "")
 		}
-		if recorded.Expired || recorded.Released {
+		if recorded.Expired || recorded.Cancelled || recorded.Released {
 			// Answering this replay with the recorded reservation would tell
 			// the caller it holds budget it does not: the fence already
 			// withdrew its authority to dispatch. The replay is refused so the
-			// expiry is handled rather than skipped.
-			return budget.Reservation{}, budgetProblem("the reservation lifetime elapsed and must reconcile to authoritative finality")
+			// fence is handled rather than skipped, and so no replayed durable
+			// operation can hand cancelled work its dispatch authority back.
+			return budget.Reservation{}, budgetProblem("the reservation is fenced and must reconcile to authoritative finality")
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return budget.Reservation{}, err
@@ -158,6 +163,13 @@ func (l *Ledger) FenceExpired(ctx context.Context, scope budget.Scope, rootRunID
 	return fenced, nil
 }
 
+// Every fencing and settlement statement stamps updated_at with
+// GREATEST(updated_at, now): the monotonic guard raises if a write moves the
+// timestamp backwards, and a fence computed from a clock read taken before the
+// transaction can otherwise lose that race to a concurrent usage observation
+// that already stamped a later value. The write itself is what must be
+// monotonic, not the caller's clock.
+//
 // fenceExpiredTx fences every elapsed unreleased hold of the root aggregate
 // and leaves an immutable expiry observation behind. It changes exactly one
 // thing: the hold may no longer authorize a dispatch. It does not write an
@@ -167,7 +179,7 @@ func (l *Ledger) FenceExpired(ctx context.Context, scope budget.Scope, rootRunID
 // the headroom a still-running attempt is entitled to. The immutable record
 // carries no cost and is not final, for the same reason.
 func fenceExpiredTx(ctx context.Context, tx pgx.Tx, scope budget.Scope, rootRunID string, now time.Time) ([]budget.Reservation, error) {
-	rows, err := tx.Query(ctx, `UPDATE agent_control.budget_reservations SET expired=true,updated_at=$4
+	rows, err := tx.Query(ctx, `UPDATE agent_control.budget_reservations SET expired=true,updated_at=GREATEST(updated_at,$4)
 		WHERE workspace_id=$1 AND project_id=$2 AND root_run_id=$3 AND released=false AND expired=false AND expires_at<=$4
 		RETURNING reservation_id,`+reservationColumns, scope.WorkspaceID, scope.ProjectID, rootRunID, now)
 	if err != nil {
@@ -182,6 +194,51 @@ func fenceExpiredTx(ctx context.Context, tx pgx.Tx, scope budget.Scope, rootRunI
 			scope.WorkspaceID, scope.ProjectID, budget.ExpiryObservationID(value.ID), string(value.ID), value.RootRunID, value.RunID, expiryTaskID, uint64(value.Generation), now); err != nil {
 			return nil, fmt.Errorf("record budget expiry fence: %w", err)
 		}
+	}
+	return fenced, nil
+}
+
+// FenceCancelled withdraws one hold's authority to dispatch because the work
+// it funds was cancelled, and records the immutable cancellation fence. The
+// statement is a conditional update rather than a read-then-write, so two
+// concurrent cancellations of the same run converge instead of racing. It
+// writes no observed cost, marks no attempt final, and releases nothing: a
+// cancellation request cannot witness what a billed model, tool, or worker
+// operation already in flight will report.
+func (l *Ledger) FenceCancelled(ctx context.Context, scope budget.Scope, id budget.ReservationID, now time.Time) (budget.Reservation, error) {
+	if !scope.Valid() || id == "" || now.IsZero() {
+		return budget.Reservation{}, budgetProblem("cancellation fencing requires a scoped reservation and authoritative time")
+	}
+	tx, err := l.database.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return budget.Reservation{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	current, err := scanReservation(tx.QueryRow(ctx, `SELECT `+reservationColumns+` FROM agent_control.budget_reservations WHERE workspace_id=$1 AND project_id=$2 AND reservation_id=$3 FOR UPDATE`, scope.WorkspaceID, scope.ProjectID, id), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return budget.Reservation{}, problem.New(problem.CodeResourceNotFound, "")
+	}
+	if err != nil {
+		return budget.Reservation{}, fmt.Errorf("lock budget reservation for cancellation: %w", err)
+	}
+	if current.Cancelled || current.Released {
+		// Already fenced, or already settled against an authoritative final
+		// cost. Either way there is no dispatch authority left to withdraw.
+		return current, tx.Commit(ctx)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_control.budget_reservations SET cancelled=true,updated_at=GREATEST(updated_at,$4) WHERE workspace_id=$1 AND project_id=$2 AND reservation_id=$3`, scope.WorkspaceID, scope.ProjectID, id, now.UTC()); err != nil {
+		return budget.Reservation{}, fmt.Errorf("fence cancelled budget reservation: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO agent_control.budget_observations(workspace_id,project_id,observation_id,reservation_id,root_run_id,run_id,task_id,physical_attempt_id,recovery_epoch,execution_generation,meter_sequence,cost_micros,final,observed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$3,0,$8,0,0,false,$9) ON CONFLICT (workspace_id,project_id,observation_id) DO NOTHING`,
+		scope.WorkspaceID, scope.ProjectID, budget.CancellationObservationID(id), string(id), current.RootRunID, current.RunID, cancellationTaskID, uint64(current.Generation), now.UTC()); err != nil {
+		return budget.Reservation{}, fmt.Errorf("record budget cancellation fence: %w", err)
+	}
+	fenced, err := scanReservation(tx.QueryRow(ctx, `SELECT `+reservationColumns+` FROM agent_control.budget_reservations WHERE workspace_id=$1 AND project_id=$2 AND reservation_id=$3`, scope.WorkspaceID, scope.ProjectID, id), id)
+	if err != nil {
+		return budget.Reservation{}, fmt.Errorf("read fenced budget reservation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return budget.Reservation{}, err
 	}
 	return fenced, nil
 }
@@ -236,7 +293,7 @@ func (l *Ledger) Observe(ctx context.Context, value budget.Observation) error {
 	if released || value.CostMicros > upper-observed {
 		return budgetProblem("observed usage exceeds reservation")
 	}
-	if _, err := tx.Exec(ctx, `UPDATE agent_control.budget_reservations SET observed_micros=observed_micros+$4,attempt_final=attempt_final OR $5,updated_at=$6 WHERE workspace_id=$1 AND project_id=$2 AND reservation_id=$3`,
+	if _, err := tx.Exec(ctx, `UPDATE agent_control.budget_reservations SET observed_micros=observed_micros+$4,attempt_final=attempt_final OR $5,updated_at=GREATEST(updated_at,$6) WHERE workspace_id=$1 AND project_id=$2 AND reservation_id=$3`,
 		value.Scope.WorkspaceID, value.Scope.ProjectID, value.ReservationID, value.CostMicros, value.Final, l.now().UTC()); err != nil {
 		return fmt.Errorf("accumulate budget observation: %w", err)
 	}
@@ -266,12 +323,42 @@ func (l *Ledger) Settle(ctx context.Context, value budget.Settlement) (budget.Re
 	if budget.Generation(generation) != value.Generation || !attemptFinal {
 		return budget.Reservation{}, budgetProblem("settlement fence failed")
 	}
-	if released && (upper != value.FinalCost || observed != value.FinalCost || !value.Release) {
+	if observed == value.FinalCost && upper == value.FinalCost && released == value.Release {
+		// The intended outcome already stands. Converging here is what makes a
+		// replayed durable settlement a no-op instead of a conflict.
+		settled, err := scanReservation(tx.QueryRow(ctx, `SELECT `+reservationColumns+` FROM agent_control.budget_reservations WHERE workspace_id=$1 AND project_id=$2 AND reservation_id=$3`, value.Scope.WorkspaceID, value.Scope.ProjectID, value.ReservationID), value.ReservationID)
+		if err != nil {
+			return budget.Reservation{}, fmt.Errorf("read settled budget reservation: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return budget.Reservation{}, err
+		}
+		return settled, nil
+	}
+	if released {
 		return budget.Reservation{}, budgetProblem("released budget reservation is immutable")
 	}
-	if _, err := tx.Exec(ctx, `UPDATE agent_control.budget_reservations SET observed_micros=$4,upper_bound_micros=$4,released=$5,updated_at=$6 WHERE workspace_id=$1 AND project_id=$2 AND reservation_id=$3`,
-		value.Scope.WorkspaceID, value.Scope.ProjectID, value.ReservationID, value.FinalCost, value.Release, l.now().UTC()); err != nil {
+	// The compare-and-set is decided before the settlement is judged on its
+	// merits. A settlement computed from usage the row no longer holds is
+	// stale, not wrong, and reporting it as a rejection would send the caller
+	// looking for a defect instead of re-reading and settling again.
+	if observed != value.ExpectedObservedMicros || attemptFinal != value.ExpectedAttemptFinal {
+		return budget.Reservation{}, budget.Conflict{ReservationID: value.ReservationID, ObservedMicros: observed, AttemptFinal: attemptFinal}
+	}
+	if value.FinalCost < observed || value.FinalCost > upper {
+		return budget.Reservation{}, budgetProblem("final usage is inconsistent")
+	}
+	// The predicate is carried in the statement as well, so the write is
+	// refused by the database itself if the usage or finality the caller read
+	// is no longer what the row holds. It never overwrites usage that arrived
+	// while the settlement was being computed.
+	tag, err := tx.Exec(ctx, `UPDATE agent_control.budget_reservations SET observed_micros=$4,upper_bound_micros=$4,released=$5,updated_at=GREATEST(updated_at,$6) WHERE workspace_id=$1 AND project_id=$2 AND reservation_id=$3 AND observed_micros=$7 AND attempt_final=$8`,
+		value.Scope.WorkspaceID, value.Scope.ProjectID, value.ReservationID, value.FinalCost, value.Release, l.now().UTC(), value.ExpectedObservedMicros, value.ExpectedAttemptFinal)
+	if err != nil {
 		return budget.Reservation{}, fmt.Errorf("settle budget reservation: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return budget.Reservation{}, budget.Conflict{ReservationID: value.ReservationID, ObservedMicros: observed, AttemptFinal: attemptFinal}
 	}
 	settled, err := scanReservation(tx.QueryRow(ctx, `SELECT `+reservationColumns+` FROM agent_control.budget_reservations WHERE workspace_id=$1 AND project_id=$2 AND reservation_id=$3`, value.Scope.WorkspaceID, value.Scope.ProjectID, value.ReservationID), value.ReservationID)
 	if err != nil {
@@ -317,7 +404,7 @@ func collectReservations(rows pgx.Rows) ([]budget.Reservation, error) {
 		var id string
 		value := budget.Reservation{}
 		var generation uint64
-		if err := rows.Scan(&id, &value.RootRunID, &value.RunID, &value.WorkspaceID, &value.ProjectID, &value.PolicyVersion, &value.BudgetVersion, &value.UpperBoundMicros, &value.ObservedMicros, &generation, &value.AttemptFinal, &value.Released, &value.Expired, &value.ExpiresAt); err != nil {
+		if err := rows.Scan(&id, &value.RootRunID, &value.RunID, &value.WorkspaceID, &value.ProjectID, &value.PolicyVersion, &value.BudgetVersion, &value.UpperBoundMicros, &value.ObservedMicros, &generation, &value.AttemptFinal, &value.Released, &value.Expired, &value.Cancelled, &value.ExpiresAt); err != nil {
 			return nil, fmt.Errorf("scan budget reservation: %w", err)
 		}
 		value.ID = budget.ReservationID(id)

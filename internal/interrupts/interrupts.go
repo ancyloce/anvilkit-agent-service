@@ -146,6 +146,15 @@ type ChildOutcome struct {
 	Artifact string     `json:"artifactLineageReference,omitempty"`
 }
 
+// PendingCancellation is one requested cancellation that has not reconciled.
+// The scope is the run's own control scope, so every act a recovery sweep
+// performs from it stays inside the tenant that owns the run.
+type PendingCancellation struct {
+	Scope       runs.Scope
+	RunID       runs.ID
+	RequestedAt time.Time
+}
+
 type Progress struct {
 	Scope      runs.Scope
 	RunID      runs.ID
@@ -239,6 +248,13 @@ type Repository interface {
 	RecordChildOutcome(context.Context, runs.Scope, runs.ID, ChildOutcome) error
 	ChildOutcome(context.Context, runs.Scope, runs.ID) (ChildOutcome, error)
 	Descendants(context.Context, runs.Scope, runs.ID) ([]Child, error)
+	// UnreconciledCancellations lists every run whose cancellation was
+	// requested and has not reconciled, whatever state the run is in. The
+	// run's state is not a sufficient subject on its own: a cancellation
+	// requested inside the commit boundary deliberately leaves the run in its
+	// committing state, so a sweep that looked only for cancelling runs would
+	// never come back to the holds that cancellation fenced.
+	UnreconciledCancellations(context.Context) ([]PendingCancellation, error)
 	RecordProgress(context.Context, runs.Scope, runs.ID, runs.State, time.Time) error
 	Progress(context.Context) ([]Progress, error)
 	// MarkStuck atomically records the stuck marker, durable run event, and
@@ -297,6 +313,23 @@ type Reservation interface {
 // satisfies it.
 type TerminalBudget interface {
 	SettleRunBudget(ctx context.Context, snapshot runs.Snapshot, release bool) error
+	// FenceRunBudget withdraws a run's budget dispatch authority at the
+	// instant cancellation is requested. It is not settlement, and must not
+	// be: cancellation revokes authority immediately, but a billed model,
+	// tool, or worker operation can still be running at that instant, and
+	// releasing its hold — or claiming its attempt final — would discard a
+	// cost nobody has reported yet.
+	FenceRunBudget(ctx context.Context, snapshot runs.Snapshot) error
+	// SettleCancelledRunBudget concludes a cancelled run's accounting once an
+	// authoritative reconciliation has proven no physical attempt of the run
+	// remains outstanding. It is separated from fencing precisely because
+	// only the caller holds that proof.
+	SettleCancelledRunBudget(ctx context.Context, snapshot runs.Snapshot) error
+	// OutstandingCancelledRunBudget reports whether a run's root aggregate
+	// still holds budget a cancellation fenced and nothing has concluded, so
+	// a recovery sweep can pass over a cancellation with nothing left to
+	// settle without interrogating the effect stores again.
+	OutstandingCancelledRunBudget(ctx context.Context, snapshot runs.Snapshot) (bool, error)
 }
 
 type ChildBudgetRequest struct {

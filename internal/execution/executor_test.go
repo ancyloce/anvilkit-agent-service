@@ -267,6 +267,18 @@ func (d *deferredSettlement) SettleRunBudget(ctx context.Context, snapshot runs.
 	}
 	return d.inner.SettleRunBudget(ctx, snapshot, release)
 }
+func (d *deferredSettlement) FenceRunBudget(ctx context.Context, snapshot runs.Snapshot) error {
+	if d.inner == nil {
+		return fmt.Errorf("cancellation budget fencing is unavailable")
+	}
+	return d.inner.FenceRunBudget(ctx, snapshot)
+}
+func (d *deferredSettlement) SettleCancelledRunBudget(ctx context.Context, snapshot runs.Snapshot) error {
+	if d.inner == nil {
+		return fmt.Errorf("cancelled budget settlement is unavailable")
+	}
+	return d.inner.SettleCancelledRunBudget(ctx, snapshot)
+}
 
 type harness struct {
 	t        *testing.T
@@ -341,6 +353,17 @@ type harnessOptions struct {
 	// evidence wraps the immutable evidence store, so a test can inject a
 	// crash between a durable decision and the audit record it must leave.
 	evidence func(execution.EvidenceRecorder) execution.EvidenceRecorder
+	// modelAdapter wraps the controlled provider adapter, so a test can hold a
+	// real billable provider call open across a concurrent control-plane
+	// operation instead of simulating one.
+	modelAdapter func(modelgateway.Adapter) modelgateway.Adapter
+	// reconciler overrides the cancellation reconciler, so a test can supply
+	// one that answers from the same in-flight state the production reader
+	// answers from.
+	reconciler interrupts.CancellationReconciler
+	// leases overrides the lease revoker, so a test can prove cancellation
+	// revoked the run's leases rather than assume it.
+	leases interrupts.LeaseRevoker
 	// budgetHeadroomMicros bounds the controller's total held exposure;
 	// reconcileLimit bounds uncertain domain reconciliations before
 	// escalation, and the retry base/cap shape the unsettled-commit backoff.
@@ -395,7 +418,11 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 	if options.modelRecorder != nil {
 		modelRecorder = options.modelRecorder
 	}
-	stack, err := execution.NewControlledModelStack(adapter, clock, modelRecorder, registry)
+	var providerAdapter modelgateway.Adapter = adapter
+	if options.modelAdapter != nil {
+		providerAdapter = options.modelAdapter(adapter)
+	}
+	stack, err := execution.NewControlledModelStack(providerAdapter, clock, modelRecorder, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -484,7 +511,15 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 	// receives the same deferred settlement handle production uses; the real
 	// executor is published into it once built.
 	h.settlement = &deferredSettlement{}
-	service, err := interrupts.NewService(h.repo, interrupts.BoundSchemaValidator{}, allowAllAuthority{}, engineSignals{h}, noLeases{}, clearReconciler{}, allowReservation{}, h.settlement, h.journal, clock, &sequenceIDs{}, interrupts.Limits{ChildDepth: 4, ChildFanout: 16})
+	var reconciler interrupts.CancellationReconciler = clearReconciler{}
+	if options.reconciler != nil {
+		reconciler = options.reconciler
+	}
+	var leases interrupts.LeaseRevoker = noLeases{}
+	if options.leases != nil {
+		leases = options.leases
+	}
+	service, err := interrupts.NewService(h.repo, interrupts.BoundSchemaValidator{}, allowAllAuthority{}, engineSignals{h}, leases, reconciler, allowReservation{}, h.settlement, h.journal, clock, &sequenceIDs{}, interrupts.Limits{ChildDepth: 4, ChildFanout: 16})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -41,7 +41,7 @@ func TestRedactorRemovesSecretsFromLogsAndErrors(t *testing.T) {
 	}
 }
 
-func TestPinnedM8BoundarySetMaintainsCompleteTraceContinuity(t *testing.T) {
+func TestPinnedServiceBoundarySetMaintainsCompleteTraceContinuity(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	telemetry, err := New("agent-service", exporter, NewRedactor(nil))
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -387,6 +388,22 @@ func (r *MemoryRepository) RequestCancellation(_ context.Context, write Write, d
 		Result       OperationResult
 	}{cancellation, result})
 	return cancellation, result, nil
+}
+
+// UnreconciledCancellations lists every requested cancellation that has not
+// reconciled, in a deterministic order so a sweep behaves the same way twice.
+func (r *MemoryRepository) UnreconciledCancellations(_ context.Context) ([]PendingCancellation, error) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	var pending []PendingCancellation
+	for _, entry := range r.runs {
+		if entry.cancellation == nil || entry.cancellation.Reconciled {
+			continue
+		}
+		pending = append(pending, PendingCancellation{Scope: entry.scope, RunID: entry.snapshot.RunID, RequestedAt: entry.cancellation.RequestedAt})
+	}
+	sort.Slice(pending, func(i, j int) bool { return pending[i].RunID < pending[j].RunID })
+	return pending, nil
 }
 
 func (r *MemoryRepository) RecordCancellation(_ context.Context, write Write, cancellation Cancellation) error {

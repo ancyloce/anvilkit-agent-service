@@ -250,6 +250,10 @@ type BudgetController interface {
 	Reconcile(ctx context.Context, scope budget.Scope, id budget.ReservationID, generation budget.Generation, finalCost *int64, release bool, actor string) (budget.Reservation, error)
 	ReconcileSuperseded(ctx context.Context, scope budget.Scope, rootRunID string, current budget.Generation, actor string) ([]budget.Reservation, error)
 	RecoverSupersededFinality(ctx context.Context, scope budget.Scope, rootRunID string, actor string) ([]budget.Reservation, error)
+	FenceCancelledRun(ctx context.Context, scope budget.Scope, rootRunID, runID string) ([]budget.Reservation, error)
+	ConcludeCancelledRun(ctx context.Context, scope budget.Scope, rootRunID, runID, actor string) ([]budget.Reservation, error)
+	RecoverCancelledFinality(ctx context.Context, scope budget.Scope, rootRunID string, actor string) ([]budget.Reservation, error)
+	OutstandingCancelledHolds(ctx context.Context, scope budget.Scope, rootRunID string) (bool, error)
 }
 
 // Config wires the executor. Every dependency is required; the executor
@@ -2461,17 +2465,105 @@ func (e *Executor) settleRunBudget(ctx context.Context, snapshot runs.Snapshot, 
 	if err != nil {
 		return fmt.Errorf("re-read run budget reservation for settlement: %w", err)
 	}
-	observed := reservation.ObservedMicros
 	// The reservation may have been superseded between its finality being
 	// recorded and this settlement — an explicit retry can advance the root
 	// aggregate's generation while this attempt is still finishing. The
 	// controller completes that settlement on superseded terms rather than
 	// refusing it, so a late final no longer waits for another retry to run
 	// the superseded sweep.
-	if _, err := e.cfg.Budget.Reconcile(ctx, scope, id, generation, &observed, release, budget.SettlementActor); err != nil {
-		return fmt.Errorf("settle run budget reservation: %w", err)
+	//
+	// The settlement is a compare-and-set against the usage this read saw, so
+	// usage that commits while it is being computed makes it lose rather than
+	// overwrite that usage. Losing is answered by re-reading and settling
+	// against the larger, now-durable total; each round costs one committed
+	// observation, so the bound converges.
+	for attempt := 0; ; attempt++ {
+		observed := reservation.ObservedMicros
+		_, settleErr := e.cfg.Budget.Reconcile(ctx, scope, id, generation, &observed, release, budget.SettlementActor)
+		if settleErr == nil {
+			break
+		}
+		var conflict budget.Conflict
+		if !errors.As(settleErr, &conflict) || attempt >= budgetSettlementRounds {
+			return fmt.Errorf("settle run budget reservation: %w", settleErr)
+		}
+		reservation, err = e.cfg.Budget.Reservation(ctx, scope, id)
+		if err != nil {
+			return fmt.Errorf("re-read run budget reservation after settlement conflict: %w", err)
+		}
+		if reservation.Released {
+			break
+		}
+	}
+	if err := e.recoverCancelledBudget(ctx, snapshot); err != nil {
+		return err
 	}
 	return e.recoverSupersededBudget(ctx, snapshot)
+}
+
+// budgetSettlementRounds bounds the re-read-and-settle loop a losing
+// compare-and-set drives. Each round requires another observation to have
+// committed, so a small bound still converges for every attempt shape this
+// service dispatches while an unbounded loop would turn a stuck writer into a
+// spin.
+const budgetSettlementRounds = 8
+
+// FenceRunBudget withdraws a run's budget dispatch authority the instant its
+// cancellation is requested. It is deliberately not settlement: cancellation
+// may revoke dispatch, leases, and descendant work immediately, but a billed
+// model, tool, or worker operation can still be running at that instant, and
+// nothing at that moment knows what it will report. So the hold keeps its
+// worst-case bound and stays unreleased, and only stops being able to
+// authorize new work.
+func (e *Executor) FenceRunBudget(ctx context.Context, snapshot runs.Snapshot) error {
+	if _, err := e.cfg.Budget.FenceCancelledRun(ctx, budgetScopeOf(snapshot), string(snapshot.RootRunID), string(snapshot.RunID)); err != nil {
+		var details problem.Details
+		if errors.As(err, &details) && details.Code == string(problem.CodeResourceNotFound) {
+			return nil
+		}
+		return fmt.Errorf("fence cancelled run budget: %w", err)
+	}
+	return nil
+}
+
+// SettleCancelledRunBudget concludes a cancelled run's accounting once an
+// authoritative reconciliation has proven that no physical attempt of the run
+// remains outstanding. Only the caller holds that proof, which is why this is
+// a separate act from fencing rather than something cancellation does on its
+// own: settling here without the proof would release budget a running
+// operation is still spending.
+func (e *Executor) SettleCancelledRunBudget(ctx context.Context, snapshot runs.Snapshot) error {
+	if _, err := e.cfg.Budget.ConcludeCancelledRun(ctx, budgetScopeOf(snapshot), string(snapshot.RootRunID), string(snapshot.RunID), budget.SettlementActor); err != nil {
+		return fmt.Errorf("settle cancelled run budget: %w", err)
+	}
+	return nil
+}
+
+// OutstandingCancelledRunBudget reports whether a run's root aggregate still
+// holds budget a cancellation fenced and nothing has concluded. The recovery
+// sweep leads with it for runs whose lifecycle is already over, so a
+// cancellation that has nothing left to settle costs one indexed ledger read
+// rather than a fresh interrogation of every authoritative effect store.
+func (e *Executor) OutstandingCancelledRunBudget(ctx context.Context, snapshot runs.Snapshot) (bool, error) {
+	outstanding, err := e.cfg.Budget.OutstandingCancelledHolds(ctx, budgetScopeOf(snapshot), string(snapshot.RootRunID))
+	if err != nil {
+		return false, fmt.Errorf("read outstanding cancelled budget holds: %w", err)
+	}
+	return outstanding, nil
+}
+
+// recoverCancelledBudget converges the root aggregate's cancelled holds whose
+// physical attempt has since reported finality. It closes the same kind of
+// window recoverSupersededBudget closes: a crash between an attempt's finality
+// becoming durable and the settlement that acts on it leaves a hold nothing
+// re-drives, because the cancelled run is terminal and its workflow will not
+// replay. The predicate it works from — cancelled, final, unreleased — is
+// falsified by the settlement itself, so repeating it converges.
+func (e *Executor) recoverCancelledBudget(ctx context.Context, snapshot runs.Snapshot) error {
+	if _, err := e.cfg.Budget.RecoverCancelledFinality(ctx, budgetScopeOf(snapshot), string(snapshot.RootRunID), budget.SettlementActor); err != nil {
+		return fmt.Errorf("recover cancelled budget reservations: %w", err)
+	}
+	return nil
 }
 
 // recoverSupersededBudget converges the root aggregate's superseded holds that

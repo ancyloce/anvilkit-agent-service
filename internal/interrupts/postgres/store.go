@@ -415,6 +415,17 @@ func (s *Store) FinishCancellation(ctx context.Context, write interrupts.Write, 
 		if err != nil {
 			return nil, err
 		}
+		// The run's cancellation records are stamped reconciled in the same
+		// transaction that terminalizes it. Without this the recovery sweep,
+		// whose subject is the set of unreconciled cancellations, would keep
+		// finding a cancellation that has demonstrably finished — and a
+		// recovery path that never stops revisiting completed work is a slow
+		// leak, not a recovery path. The stamp is keyed by run rather than by
+		// control identity because the transition is a fact about the run, and
+		// the caller finishing it need not be the caller that requested it.
+		if _, err := tx.Exec(ctx, `UPDATE agent_control.lifecycle_controls SET evidence=jsonb_set(jsonb_set(evidence,'{reconciled}','true'::jsonb),'{externalUncertain}','false'::jsonb) WHERE workspace_id=$1 AND project_id=$2 AND run_id=$3 AND control_kind='cancel'`, write.Scope.WorkspaceID, write.Scope.ProjectID, write.RunID); err != nil {
+			return nil, err
+		}
 		return interrupts.OperationResult{Snapshot: snapshot}, nil
 	}, &result)
 	if err != nil {
@@ -643,6 +654,35 @@ func (s *Store) RecordProgress(ctx context.Context, scope runs.Scope, id runs.ID
 	}
 	return nil
 }
+
+// UnreconciledCancellations lists every requested cancellation whose evidence
+// does not yet record it as reconciled. It is deliberately not filtered by run
+// state: a cancellation requested inside the commit boundary leaves the run in
+// its committing state, and one that terminalized through the domain path can
+// still have left a descendant's fenced hold waiting to be concluded. One row
+// per run is enough — a run's cancellation reconciles once, whichever control
+// record requested it.
+//
+// The enumeration crosses tenants because process recovery has to; every act
+// performed from a row is scoped by the workspace, project, and actor that row
+// itself carries, never by a caller-supplied scope.
+func (s *Store) UnreconciledCancellations(ctx context.Context) ([]interrupts.PendingCancellation, error) {
+	rows, err := s.database.Query(ctx, `SELECT DISTINCT ON (workspace_id,project_id,run_id) workspace_id,project_id,run_id,actor_id,created_at FROM agent_control.lifecycle_controls WHERE control_kind='cancel' AND COALESCE((evidence->>'reconciled')::boolean,false)=false ORDER BY workspace_id,project_id,run_id,created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []interrupts.PendingCancellation
+	for rows.Next() {
+		var pending interrupts.PendingCancellation
+		if err := rows.Scan(&pending.Scope.WorkspaceID, &pending.Scope.ProjectID, &pending.RunID, &pending.Scope.ActorID, &pending.RequestedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, pending)
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) Progress(ctx context.Context) ([]interrupts.Progress, error) {
 	rows, err := s.database.Query(ctx, `SELECT workspace_id,project_id,run_id,state,entered_at,progress_at,stuck_at FROM agent_control.run_progress`)
 	if err != nil {

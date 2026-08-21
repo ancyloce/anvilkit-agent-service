@@ -166,13 +166,16 @@ func (r *testReservation) ReserveChild(_ context.Context, request ChildBudgetReq
 	return r.err
 }
 
-// testTerminalBudget records the terminal settlements the service performs so
-// a test can assert that cancellation and discard reconcile usage exactly
+// testTerminalBudget records the budget acts the service performs so a test
+// can assert the order they happen in: cancellation fences before it settles,
+// discard settles directly, and a cancelled run's accounting is concluded only
 // once, under the run's own execution generation.
 type testTerminalBudget struct {
 	lock       sync.Mutex
 	settled    []string
+	fenced     []string
 	err        error
+	fenceErr   error
 	generation uint64
 }
 
@@ -186,10 +189,39 @@ func (b *testTerminalBudget) SettleRunBudget(_ context.Context, snapshot runs.Sn
 	b.settled = append(b.settled, fmt.Sprintf("%s:%s:%t", snapshot.RunID, snapshot.Status, release))
 	return nil
 }
+
+func (b *testTerminalBudget) FenceRunBudget(_ context.Context, snapshot runs.Snapshot) error {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	if b.fenceErr != nil {
+		return b.fenceErr
+	}
+	b.fenced = append(b.fenced, string(snapshot.RunID))
+	return nil
+}
+
+func (b *testTerminalBudget) SettleCancelledRunBudget(_ context.Context, snapshot runs.Snapshot) error {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	if b.err != nil {
+		return b.err
+	}
+	b.generation = snapshot.ExecutionGeneration
+	b.settled = append(b.settled, fmt.Sprintf("%s:%s:%t", snapshot.RunID, snapshot.Status, true))
+	return nil
+}
+
 func (b *testTerminalBudget) records() []string {
 	b.lock.Lock()
 	defer b.lock.Unlock()
 	return append([]string(nil), b.settled...)
+}
+
+// fences reports the runs whose budget dispatch authority the service revoked.
+func (b *testTerminalBudget) fences() []string {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	return append([]string(nil), b.fenced...)
 }
 
 func scope() runs.Scope {
@@ -360,7 +392,7 @@ func TestSequentialInputRequestsReceiveMonotonicVersions(t *testing.T) {
 	}
 }
 
-func TestApprovalEvidenceIsImmutableAndCannotCommitWithoutM5Gateway(t *testing.T) {
+func TestApprovalEvidenceIsImmutableAndApprovalNeverCommitsDirectly(t *testing.T) {
 	repository := NewMemoryRepository()
 	_ = repository.Seed(scope(), snapshot("run", runs.AwaitingReview, 7))
 	clock := &testClock{now: testNow}
@@ -928,13 +960,19 @@ func TestTerminalControlOperationsSettleTheRunBudget(t *testing.T) {
 		state   runs.State
 		invoke  func(*Service) (OperationResult, error)
 		settled runs.State
+		// accounted is the state the run is in when its budget is settled.
+		// Cancellation settles before the terminal transition on purpose: a
+		// settlement that failed after the transition would leave a stranded
+		// hold behind a run the recovery sweep no longer looks at.
+		accounted runs.State
+		fences    bool
 	}{
 		{"cancel", runs.Executing, func(s *Service) (OperationResult, error) {
 			return s.Cancel(context.Background(), write("run", 3, "cancel"))
-		}, runs.Cancelled},
+		}, runs.Cancelled, runs.Cancelling, true},
 		{"discard", runs.AwaitingReview, func(s *Service) (OperationResult, error) {
 			return s.Discard(context.Background(), write("run", 3, "discard"))
-		}, runs.Discarded},
+		}, runs.Discarded, runs.Discarded, false},
 	} {
 		t.Run(item.name, func(t *testing.T) {
 			repository := NewMemoryRepository()
@@ -945,8 +983,19 @@ func TestTerminalControlOperationsSettleTheRunBudget(t *testing.T) {
 				t.Fatalf("result=%#v err=%v", result, err)
 			}
 			settled := terminalBudget.records()
-			if len(settled) != 1 || settled[0] != fmt.Sprintf("run:%s:true", item.settled) {
+			if len(settled) != 1 || settled[0] != fmt.Sprintf("run:%s:true", item.accounted) {
 				t.Fatalf("settlements=%v, want exactly one release of the terminal run", settled)
+			}
+			// Cancellation revokes the run's budget dispatch authority before
+			// it settles anything. Discard has no such race to fence: it acts
+			// on a run that is waiting for a reviewer, not one that may have a
+			// billed call in flight.
+			fenced := terminalBudget.fences()
+			if item.fences && (len(fenced) != 1 || fenced[0] != "run") {
+				t.Fatalf("fences=%v, want the cancelled run's dispatch authority revoked", fenced)
+			}
+			if !item.fences && len(fenced) != 0 {
+				t.Fatalf("fences=%v, want no cancellation fencing outside cancellation", fenced)
 			}
 			// The settlement is fenced on the run's own execution generation,
 			// so a superseded generation can never settle through this path.
@@ -963,7 +1012,7 @@ func TestTerminalControlOperationsSettleTheRunBudget(t *testing.T) {
 				t.Fatalf("replayed snapshot=%#v", replayed.Snapshot)
 			}
 			for _, record := range terminalBudget.records() {
-				if record != fmt.Sprintf("run:%s:true", item.settled) {
+				if record != fmt.Sprintf("run:%s:true", item.accounted) {
 					t.Fatalf("replay settled a different run state: %v", terminalBudget.records())
 				}
 			}

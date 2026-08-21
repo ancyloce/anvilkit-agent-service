@@ -47,7 +47,11 @@ func (e Estimate) Scope() Scope { return Scope{WorkspaceID: e.WorkspaceID, Proje
 // elapsed, so it may no longer authorize a dispatch and is awaiting
 // reconciliation — and it deliberately does not release the hold: work whose
 // true cost is still unknown keeps its worst-case headroom until finality is
-// known.
+// known. Cancelled is the same kind of fact from the control plane: the work
+// this hold funds was cancelled, so the hold may no longer authorize a
+// dispatch. Like expiry it settles nothing and releases nothing, because a
+// cancellation request is not evidence of what a billed model, tool, or worker
+// operation already in flight has spent.
 type Reservation struct {
 	ID                                                                     ReservationID
 	RootRunID, RunID, WorkspaceID, ProjectID, PolicyVersion, BudgetVersion string
@@ -56,6 +60,7 @@ type Reservation struct {
 	AttemptFinal                                                           bool
 	Released                                                               bool
 	Expired                                                                bool
+	Cancelled                                                              bool
 	ExpiresAt                                                              time.Time
 }
 
@@ -74,14 +79,44 @@ type Observation struct {
 	CostMicros                                        int64
 	Final                                             bool
 }
+
+// Settlement is one compare-and-set against a reservation. FinalCost is
+// derived from usage the caller read, so ExpectedObservedMicros and
+// ExpectedAttemptFinal carry exactly the usage and finality state that read
+// saw. The ledger writes only while the durable row still matches them:
+// usage that lands between the caller's read and this write makes the write
+// lose rather than overwrite it, which is the difference between an attempt's
+// late cost being counted and being silently discarded.
 type Settlement struct {
-	Scope         Scope
-	ReservationID ReservationID
-	Generation    Generation
-	FinalCost     int64
-	Release       bool
-	Actor         string
+	Scope                  Scope
+	ReservationID          ReservationID
+	Generation             Generation
+	FinalCost              int64
+	ExpectedObservedMicros int64
+	ExpectedAttemptFinal   bool
+	Release                bool
+	Actor                  string
 }
+
+// Conflict is the typed, retryable outcome of a settlement whose
+// compare-and-set lost: usage or finality arrived after the caller read the
+// reservation, so the settlement it computed is stale rather than wrong. The
+// resolution is always the same — re-read the reservation, recompute against
+// the usage that is now durable, and settle again — so the type carries the
+// state the ledger actually holds and reports itself retryable.
+type Conflict struct {
+	ReservationID  ReservationID
+	ObservedMicros int64
+	AttemptFinal   bool
+}
+
+func (c Conflict) Error() string {
+	return fmt.Sprintf("budget settlement for reservation %s lost its compare-and-set: usage is now %d micros (final=%t)", c.ReservationID, c.ObservedMicros, c.AttemptFinal)
+}
+
+// Retryable reports that re-reading and settling again is the correct
+// response, never that the settlement was rejected on its merits.
+func (Conflict) Retryable() bool { return true }
 
 // Ledger is the durable reservation record. Every operation is scoped by
 // workspace and project. Reserve converges when an identical reservation
@@ -101,7 +136,19 @@ type Ledger interface {
 	// answered with a reservation that can no longer authorize anything.
 	Reserve(ctx context.Context, estimate Estimate, generation Generation, maximumReservedMicros int64) (Reservation, error)
 	Observe(context.Context, Observation) error
+	// Settle is a compare-and-set against the usage and finality state the
+	// caller read. A settlement whose intended outcome already stands
+	// converges, so replay is a no-op; a settlement that lost the race to
+	// concurrent usage returns Conflict rather than overwriting it.
 	Settle(context.Context, Settlement) (Reservation, error)
+	// FenceCancelled withdraws one reservation's authority to dispatch
+	// because the work it funds was cancelled, and leaves an immutable
+	// cancellation record behind. It is not settlement: the hold keeps its
+	// worst-case bound, its usage stays additive, and no attempt is made
+	// final, because cancelling a request says nothing about what a billed
+	// operation already in flight will report. Fencing an already-fenced or
+	// already-released hold changes nothing and is not an error.
+	FenceCancelled(ctx context.Context, scope Scope, id ReservationID, now time.Time) (Reservation, error)
 	Reservation(context.Context, Scope, ReservationID) (Reservation, error)
 	RootReservations(context.Context, Scope, string) ([]Reservation, error)
 	// FenceExpired fences every unreleased reservation of the scope's root
@@ -244,7 +291,11 @@ func (c *Controller) Dispatch(ctx context.Context, scope Scope, id ReservationID
 	}
 	reservation, err := c.ledger.Reservation(ctx, scope, id)
 	now := c.clock.Now()
-	if err != nil || reservation.Released || reservation.Expired || reservation.Generation != generation || now.IsZero() || !now.Before(reservation.ExpiresAt) {
+	// A cancelled hold is refused for the same reason an expired one is: the
+	// fence withdrew its authority to dispatch. Nothing restores that
+	// authority — not a later settlement, not a restart, not a replayed
+	// durable step — so cancelled work can never dispatch again.
+	if err != nil || reservation.Released || reservation.Expired || reservation.Cancelled || reservation.Generation != generation || now.IsZero() || !now.Before(reservation.ExpiresAt) {
 		return budgetProblem("expensive dispatch lacks a current reservation")
 	}
 	current, err := c.current(ctx, reservation.Scope(), reservation.RootRunID)
@@ -340,12 +391,24 @@ func (c *Controller) Reconcile(ctx context.Context, scope Scope, id ReservationI
 	}
 	cost := reservation.UpperBoundMicros
 	if finalCost != nil {
-		if *finalCost < 0 || *finalCost > reservation.UpperBoundMicros || *finalCost < reservation.ObservedMicros {
+		if *finalCost < 0 || *finalCost > reservation.UpperBoundMicros {
 			return Reservation{}, budgetProblem("final usage is inconsistent")
+		}
+		if *finalCost < reservation.ObservedMicros {
+			// The caller computed this final cost from a read that usage has
+			// since overtaken. That is a stale view, not a rejected
+			// settlement, and the difference matters: reporting it as a
+			// refusal strands the hold at its worst-case bound, while
+			// reporting it as the conflict it is tells the caller to re-read
+			// and settle against the usage that actually landed.
+			return Reservation{}, Conflict{ReservationID: id, ObservedMicros: reservation.ObservedMicros, AttemptFinal: reservation.AttemptFinal}
 		}
 		cost = *finalCost
 	}
-	settled, err := c.ledger.Settle(ctx, Settlement{Scope: scope, ReservationID: id, Generation: generation, FinalCost: cost, Release: release, Actor: actor})
+	// The settlement states the usage and finality this decision was computed
+	// from. Usage that arrives in the meantime makes the write lose rather
+	// than overwrite it, and the caller re-reads and settles again.
+	settled, err := c.ledger.Settle(ctx, Settlement{Scope: scope, ReservationID: id, Generation: generation, FinalCost: cost, ExpectedObservedMicros: reservation.ObservedMicros, ExpectedAttemptFinal: reservation.AttemptFinal, Release: release, Actor: actor})
 	if err != nil {
 		return Reservation{}, err
 	}
@@ -482,13 +545,227 @@ func (c *Controller) settleSuperseded(ctx context.Context, scope Scope, reservat
 	}
 	// The settlement is fenced on the reservation's own generation, which is
 	// what the ledger's monotonic guard checks. Authorization to make it at
-	// all is the caller's to establish.
-	settled, err := c.ledger.Settle(ctx, Settlement{Scope: scope, ReservationID: reservation.ID, Generation: reservation.Generation, FinalCost: reservation.ObservedMicros, Release: false, Actor: actor})
+	// all is the caller's to establish. Usage that lands while the settlement
+	// is computed makes the write lose rather than overwrite it, and the loop
+	// converges on the larger, now-durable total instead of refusing the
+	// reservation the sweep was called to reconcile.
+	settled, err := c.settleObserved(ctx, scope, reservation, false, actor)
 	if err != nil {
 		return Reservation{}, false, fmt.Errorf("settle superseded reservation %s: %w", reservation.ID, err)
 	}
 	return settled, true, nil
 }
+
+// FenceCancelled withdraws one reservation's authority to dispatch because the
+// work it funds was cancelled. Cancellation may revoke dispatch authority,
+// leases, and descendant work the instant it is requested; what it may never do
+// is manufacture the physical attempt's finality or hand the hold back to root
+// headroom, because a billed model, tool, or worker operation can still be
+// running at that instant and its cost is not yet known to anybody.
+//
+// So the fence changes exactly one thing: the hold stops authorizing dispatch.
+// It keeps its worst-case bound, it keeps accepting the usage the in-flight
+// attempt reports when it finally returns, and it stays unreleased until that
+// attempt's finality is durably recorded. RecoverCancelledFinality is what
+// settles it afterwards.
+func (c *Controller) FenceCancelled(ctx context.Context, scope Scope, id ReservationID) (Reservation, error) {
+	now := c.clock.Now()
+	if !scope.Valid() || id == "" || now.IsZero() {
+		return Reservation{}, budgetProblem("cancellation fencing requires a scoped reservation and authoritative time")
+	}
+	fenced, err := c.ledger.FenceCancelled(ctx, scope, id, now)
+	if err != nil {
+		return Reservation{}, err
+	}
+	c.reportExposure(ctx, scope, fenced.RootRunID)
+	return fenced, nil
+}
+
+// FenceCancelledRun withdraws every unreleased hold of one cancelled run from
+// dispatch, and reports what it fenced. A run can hold budget on more than one
+// generation — a failed attempt's hold stays held so its replacement reserves
+// on top of it — and cancellation ends all of them at once, so every one of
+// them loses its authority to dispatch rather than only the current one.
+//
+// It settles nothing and releases nothing. Fencing is the immediate half of
+// cancellation; the accounting half waits for the physical attempts to report.
+func (c *Controller) FenceCancelledRun(ctx context.Context, scope Scope, rootRunID, runID string) ([]Reservation, error) {
+	if !scope.Valid() || rootRunID == "" || runID == "" {
+		return nil, budgetProblem("cancellation fencing requires a scoped run")
+	}
+	now := c.clock.Now()
+	if now.IsZero() {
+		return nil, budgetProblem("cancellation fencing requires a scoped run")
+	}
+	held, err := c.ledger.RootReservations(ctx, scope, rootRunID)
+	if err != nil {
+		return nil, err
+	}
+	var fenced []Reservation
+	for _, reservation := range held {
+		if reservation.RunID != runID || reservation.Released || reservation.Cancelled {
+			continue
+		}
+		value, err := c.ledger.FenceCancelled(ctx, scope, reservation.ID, now)
+		if err != nil {
+			return nil, fmt.Errorf("fence cancelled reservation %s: %w", reservation.ID, err)
+		}
+		fenced = append(fenced, value)
+	}
+	if len(fenced) > 0 {
+		c.reportExposure(ctx, scope, rootRunID)
+	}
+	return fenced, nil
+}
+
+// OutstandingCancelledHolds reports whether one root aggregate still holds
+// budget a cancellation fenced and nothing has concluded. It is the cheap
+// predicate a recovery sweep leads with for a run whose lifecycle is already
+// over: such a run needs no further reconciliation unless a hold it or one of
+// its descendants left behind is still waiting to be settled.
+func (c *Controller) OutstandingCancelledHolds(ctx context.Context, scope Scope, rootRunID string) (bool, error) {
+	if !scope.Valid() || rootRunID == "" {
+		return false, budgetProblem("outstanding cancelled hold lookup requires a scoped root run")
+	}
+	held, err := c.ledger.RootReservations(ctx, scope, rootRunID)
+	if err != nil {
+		return false, err
+	}
+	for _, reservation := range held {
+		if reservation.Cancelled && !reservation.Released {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ConcludeCancelledRun records that the physical attempts of one cancelled run
+// are final and settles the holds they left behind.
+//
+// The finality it records is not manufactured: this path runs only behind an
+// authoritative reconciliation that has already proven no provider invocation,
+// worker task, worker lease, queue delivery, tool dispatch, or artifact of this
+// run remains outstanding. Recording that proven fact is what lets the hold
+// settle; recording it without the proof is exactly the defect this design
+// exists to prevent, which is why the caller — never this package — owns the
+// reconciliation.
+//
+// It is replay-safe twice over: the finality record carries a deterministic
+// identity, so a second run of the same conclusion is deduplicated by the
+// ledger rather than counted again, and the settlement it drives is derived
+// from durable state that the settlement itself falsifies.
+func (c *Controller) ConcludeCancelledRun(ctx context.Context, scope Scope, rootRunID, runID, actor string) ([]Reservation, error) {
+	if !scope.Valid() || rootRunID == "" || runID == "" {
+		return nil, budgetProblem("cancellation settlement requires a scoped run")
+	}
+	if actor != SettlementActor {
+		return nil, budgetProblem("stale or unauthorized reservation settlement")
+	}
+	held, err := c.ledger.RootReservations(ctx, scope, rootRunID)
+	if err != nil {
+		return nil, err
+	}
+	for _, reservation := range held {
+		if reservation.RunID != runID || reservation.Released || !reservation.Cancelled || reservation.AttemptFinal {
+			continue
+		}
+		identity := CancellationFinalityObservationID(reservation.ID)
+		if err := c.ledger.Observe(ctx, Observation{
+			ID:                  identity,
+			Scope:               scope,
+			ReservationID:       reservation.ID,
+			RootRunID:           reservation.RootRunID,
+			RunID:               reservation.RunID,
+			TaskID:              cancellationTaskID,
+			AttemptID:           AttemptID(identity),
+			ExecutionGeneration: uint64(reservation.Generation),
+			Final:               true,
+		}); err != nil {
+			return nil, fmt.Errorf("record cancelled attempt finality for reservation %s: %w", reservation.ID, err)
+		}
+	}
+	return c.RecoverCancelledFinality(ctx, scope, rootRunID, actor)
+}
+
+// RecoverCancelledFinality settles the cancelled holds of one root aggregate
+// whose physical attempt has since reported finality, and reports what it
+// settled. It is the production recovery path for the window cancellation
+// deliberately leaves open: between fencing a hold and the in-flight billed
+// operation reporting what it spent, nothing else will re-drive the
+// settlement — the run is terminal, its workflow will not replay, and the
+// control command that cancelled it has already been acknowledged.
+//
+// It needs no journal of its own to be replay-safe, because the work is
+// derivable from the durable ledger: a cancelled hold is outstanding exactly
+// when its attempt is final and it is unreleased. Settling it makes that
+// predicate false, so a second run — after a crash, on the next restart, from
+// an operator path, from a background sweep — reports nothing further and
+// changes nothing. Tenant scope is required and enforced throughout.
+//
+// It settles nothing whose finality is unknown: a hold whose attempt may still
+// be running keeps its full worst-case bound, which is the entire point of
+// fencing rather than releasing at cancellation time. And settling never
+// clears the cancellation fence, so a settled hold gains no authority to
+// dispatch — cancelled work can never dispatch again.
+func (c *Controller) RecoverCancelledFinality(ctx context.Context, scope Scope, rootRunID string, actor string) ([]Reservation, error) {
+	if !scope.Valid() || rootRunID == "" {
+		return nil, budgetProblem("cancellation settlement requires a scoped root run")
+	}
+	if actor != SettlementActor {
+		return nil, budgetProblem("stale or unauthorized reservation settlement")
+	}
+	held, err := c.ledger.RootReservations(ctx, scope, rootRunID)
+	if err != nil {
+		return nil, err
+	}
+	var settled []Reservation
+	for _, reservation := range held {
+		if !reservation.Cancelled || reservation.Released || !reservation.AttemptFinal {
+			continue
+		}
+		value, err := c.settleObserved(ctx, scope, reservation, true, actor)
+		if err != nil {
+			return nil, err
+		}
+		settled = append(settled, value)
+	}
+	if len(settled) > 0 {
+		c.reportExposure(ctx, scope, rootRunID)
+	}
+	return settled, nil
+}
+
+// settleObserved settles one hold at the usage its physical attempt reported,
+// converging on usage that lands while the settlement is being computed. The
+// compare-and-set is what makes that safe: a losing write is refused rather
+// than allowed to overwrite the cost that arrived, so the retry re-reads and
+// settles at the larger, now-durable total. The bound is small because each
+// round requires a new observation to have committed.
+func (c *Controller) settleObserved(ctx context.Context, scope Scope, reservation Reservation, release bool, actor string) (Reservation, error) {
+	current := reservation
+	for attempt := 0; attempt < settlementConflictRounds; attempt++ {
+		settled, err := c.ledger.Settle(ctx, Settlement{Scope: scope, ReservationID: current.ID, Generation: current.Generation, FinalCost: current.ObservedMicros, ExpectedObservedMicros: current.ObservedMicros, ExpectedAttemptFinal: current.AttemptFinal, Release: release, Actor: actor})
+		if err == nil {
+			return settled, nil
+		}
+		var conflict Conflict
+		if !errors.As(err, &conflict) {
+			return Reservation{}, fmt.Errorf("settle reservation %s: %w", current.ID, err)
+		}
+		reread, readErr := c.ledger.Reservation(ctx, scope, current.ID)
+		if readErr != nil {
+			return Reservation{}, fmt.Errorf("re-read reservation %s after settlement conflict: %w", current.ID, readErr)
+		}
+		current = reread
+	}
+	return Reservation{}, Conflict{ReservationID: current.ID, ObservedMicros: current.ObservedMicros, AttemptFinal: current.AttemptFinal}
+}
+
+// settlementConflictRounds bounds the re-read-and-settle loop. Each round
+// costs one committed observation, so a bound this small still converges for
+// every attempt shape this service dispatches, and an unbounded loop would
+// turn a stuck writer into a spin.
+const settlementConflictRounds = 8
 
 // SettlementActor names the one authority permitted to reduce or release a
 // reservation after attempt finality.
@@ -567,6 +844,25 @@ func budgetProblem(detail string) problem.Details {
 // cost and is not final: it states that the lifetime elapsed, never what the
 // attempt spent.
 func ExpiryObservationID(id ReservationID) string { return "budget:expired:" + string(id) }
+
+// CancellationObservationID is the deterministic identity of the immutable
+// record a cancellation fence leaves behind. Both ledgers write it, so a
+// cancelled hold is auditable as an explicit fence in either topology. The
+// record carries no cost and is not final: it states that the control plane
+// withdrew the hold's authority to dispatch, never what the attempt spent.
+func CancellationObservationID(id ReservationID) string { return "budget:cancelled:" + string(id) }
+
+// CancellationFinalityObservationID is the deterministic identity of the
+// record that concludes a cancelled attempt. It carries no cost — the usage
+// the attempt reported is already additive on the hold — and states only that
+// an authoritative reconciliation proved no physical attempt of the run
+// remains outstanding.
+func CancellationFinalityObservationID(id ReservationID) string {
+	return "budget:cancelled-final:" + string(id)
+}
+
+// cancellationTaskID names the fence a cancelled reservation records.
+const cancellationTaskID = "budget-cancellation"
 
 // MemoryGenerations is the deterministic test generation authority. The
 // production authority reads the root run aggregate's execution generation.
@@ -652,12 +948,13 @@ func (l *MemoryLedger) Reserve(_ context.Context, estimate Estimate, generation 
 		if prior.RootRunID != estimate.RootRunID || prior.RunID != estimate.RunID || prior.WorkspaceID != estimate.WorkspaceID || prior.ProjectID != estimate.ProjectID || prior.PolicyVersion != estimate.PolicyVersion || prior.BudgetVersion != estimate.BudgetVersion || prior.Generation != generation || prior.UpperBoundMicros != estimate.MaximumCostMicros {
 			return Reservation{}, problem.New(problem.CodeIdempotencyConflict, "")
 		}
-		if prior.Expired || prior.Released {
+		if prior.Expired || prior.Cancelled || prior.Released {
 			// Answering this replay with the recorded reservation would tell
 			// the caller it holds budget it does not: the fence already
 			// withdrew its authority to dispatch. The replay is refused so the
-			// expiry is handled rather than skipped.
-			return Reservation{}, budgetProblem("the reservation lifetime elapsed and must reconcile to authoritative finality")
+			// fence is handled rather than skipped, and so no replayed durable
+			// operation can hand cancelled work its dispatch authority back.
+			return Reservation{}, budgetProblem("the reservation is fenced and must reconcile to authoritative finality")
 		}
 		return prior, nil
 	}
@@ -721,6 +1018,38 @@ func (l *MemoryLedger) FenceExpired(_ context.Context, scope Scope, rootRunID st
 	return l.fenceExpiredLocked(scope, rootRunID, now), nil
 }
 
+// FenceCancelled withdraws one hold's authority to dispatch and records the
+// immutable cancellation fence. It sets no observed cost, marks no attempt
+// final, and releases nothing: a cancellation request cannot witness what a
+// billed operation already in flight will report, and treating its silence as
+// a final cost of zero would both understate real exposure and take back
+// headroom the still-running attempt is entitled to.
+func (l *MemoryLedger) FenceCancelled(_ context.Context, scope Scope, id ReservationID, now time.Time) (Reservation, error) {
+	if !scope.Valid() || id == "" || now.IsZero() {
+		return Reservation{}, budgetProblem("cancellation fencing requires a scoped reservation and authoritative time")
+	}
+	l.lock.Lock()
+	defer l.lock.Unlock()
+	key := scopedKey(scope, id)
+	value, ok := l.values[key]
+	if !ok {
+		return Reservation{}, problem.New(problem.CodeResourceNotFound, "")
+	}
+	if value.Cancelled || value.Released {
+		// Already fenced, or already settled against an authoritative final
+		// cost. Either way there is no dispatch authority left to withdraw,
+		// so repetition changes nothing.
+		return value, nil
+	}
+	value.Cancelled = true
+	l.values[key] = value
+	identity := CancellationObservationID(id)
+	if _, recorded := l.observations[observationKey(scope, identity)]; !recorded {
+		l.observations[observationKey(scope, identity)] = Observation{ID: identity, Scope: scope, ReservationID: value.ID, RootRunID: value.RootRunID, RunID: value.RunID, TaskID: cancellationTaskID, AttemptID: AttemptID(identity), ExecutionGeneration: uint64(value.Generation)}
+	}
+	return value, nil
+}
+
 func (l *MemoryLedger) Observe(_ context.Context, value Observation) error {
 	if !value.Scope.Valid() {
 		return budgetProblem("observation scope is required")
@@ -739,10 +1068,11 @@ func (l *MemoryLedger) Observe(_ context.Context, value Observation) error {
 	if !ok || reservation.RootRunID != value.RootRunID {
 		return budgetProblem("observation reservation mismatch")
 	}
-	// A fenced reservation still accepts usage: the physical attempt whose
-	// lifetime elapsed can still be running, and its cost is exactly the fact
-	// the fence is waiting for. Only a released reservation — one already
-	// settled against an authoritative final cost — is closed to new usage.
+	// A fenced reservation still accepts usage, whether the clock fenced it or
+	// cancellation did: the physical attempt can still be running, and its
+	// cost is exactly the fact the fence is waiting for. Only a released
+	// reservation — one already settled against an authoritative final cost —
+	// is closed to new usage.
 	if reservation.Released || value.CostMicros > reservation.UpperBoundMicros-reservation.ObservedMicros {
 		return budgetProblem("observed usage exceeds reservation")
 	}
@@ -766,8 +1096,22 @@ func (l *MemoryLedger) Settle(_ context.Context, value Settlement) (Reservation,
 	if reservation.Generation != value.Generation || !reservation.AttemptFinal {
 		return Reservation{}, budgetProblem("settlement fence failed")
 	}
-	if reservation.Released && (reservation.ObservedMicros != value.FinalCost || reservation.UpperBoundMicros != value.FinalCost || !value.Release) {
+	// The intended outcome already standing is convergence, not a conflict:
+	// this is what makes a replayed durable settlement a no-op.
+	if reservation.ObservedMicros == value.FinalCost && reservation.UpperBoundMicros == value.FinalCost && reservation.Released == value.Release {
+		return reservation, nil
+	}
+	if reservation.Released {
 		return Reservation{}, budgetProblem("released budget reservation is immutable")
+	}
+	// The compare-and-set. Usage that landed after the caller read this
+	// reservation makes the settlement stale, so it is refused rather than
+	// written over the cost that arrived.
+	if reservation.ObservedMicros != value.ExpectedObservedMicros || reservation.AttemptFinal != value.ExpectedAttemptFinal {
+		return Reservation{}, Conflict{ReservationID: value.ReservationID, ObservedMicros: reservation.ObservedMicros, AttemptFinal: reservation.AttemptFinal}
+	}
+	if value.FinalCost < reservation.ObservedMicros || value.FinalCost > reservation.UpperBoundMicros {
+		return Reservation{}, budgetProblem("final usage is inconsistent")
 	}
 	reservation.ObservedMicros = value.FinalCost
 	reservation.UpperBoundMicros = value.FinalCost
