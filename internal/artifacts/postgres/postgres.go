@@ -63,10 +63,10 @@ func (s *Store) Create(ctx context.Context, record artifacts.Record) (artifacts.
 func (s *Store) Get(ctx context.Context, workspace, project string, id artifacts.ID) (artifacts.Record, bool, error) {
 	record := artifacts.Record{WorkspaceID: workspace, ProjectID: project, ID: id}
 	var reference, schema, lineageValue []byte
-	var actualDigest, deletionReason *string
-	var deletedAt *time.Time
-	err := s.database.QueryRow(ctx, `SELECT run_id,digest,actual_digest,state,version,security_generation,object_reference,schema_identity,lineage,legal_hold,created_at,updated_at,deleted_at,deletion_reason FROM agent_artifacts.metadata WHERE workspace_id=$1 AND project_id=$2 AND artifact_id=$3`, workspace, project, id).
-		Scan(&record.RunID, &record.Digest, &actualDigest, &record.State, &record.Version, &record.SecurityGeneration, &reference, &schema, &lineageValue, &record.LegalHold, &record.CreatedAt, &record.UpdatedAt, &deletedAt, &deletionReason)
+	var actualDigest, deletionReason, deletionClaim *string
+	var deletedAt, deletionClaimedAt *time.Time
+	err := s.database.QueryRow(ctx, `SELECT run_id,digest,actual_digest,state,version,security_generation,object_reference,schema_identity,lineage,legal_hold,created_at,updated_at,deleted_at,deletion_reason,deletion_claim,deletion_claimed_at FROM agent_artifacts.metadata WHERE workspace_id=$1 AND project_id=$2 AND artifact_id=$3`, workspace, project, id).
+		Scan(&record.RunID, &record.Digest, &actualDigest, &record.State, &record.Version, &record.SecurityGeneration, &reference, &schema, &lineageValue, &record.LegalHold, &record.CreatedAt, &record.UpdatedAt, &deletedAt, &deletionReason, &deletionClaim, &deletionClaimedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return artifacts.Record{}, false, nil
 	}
@@ -79,7 +79,11 @@ func (s *Store) Get(ctx context.Context, workspace, project string, id artifacts
 	if deletionReason != nil {
 		record.DeletionReason = *deletionReason
 	}
+	if deletionClaim != nil {
+		record.DeletionClaim = *deletionClaim
+	}
 	record.DeletedAt = deletedAt
+	record.DeletionClaimedAt = deletionClaimedAt
 	if err := json.Unmarshal(reference, &record.Reference); err != nil {
 		return artifacts.Record{}, false, fmt.Errorf("decode artifact object reference: %w", err)
 	}
@@ -111,6 +115,49 @@ func (s *Store) Update(ctx context.Context, next artifacts.Record, expectedVersi
 		return artifacts.Record{}, problem.New(problem.CodeVersionConflict, "")
 	}
 	return next, nil
+}
+
+// ClaimDeletion takes durable ownership of one artifact's destruction. The
+// whole decision is one statement: the version precondition, the absence of a
+// legal hold, the absence of another owner, the move out of every live state,
+// and the ownership marker land together or not at all. Nothing is revoked and
+// no content is removed until this row is committed, so a hold that races the
+// deletion either wins the version — and the deletion stops with the artifact
+// intact — or arrives at a record that has already left the live states, where
+// the database itself refuses it.
+func (s *Store) ClaimDeletion(ctx context.Context, workspace, project string, id artifacts.ID, expectedVersion uint64, claim artifacts.DeletionClaim) (artifacts.Record, error) {
+	if !claim.Valid() {
+		return artifacts.Record{}, problem.New(problem.CodeRequestInvalid, "")
+	}
+	tag, err := s.database.Exec(ctx, `UPDATE agent_artifacts.metadata
+		SET state=$4,version=version+1,security_generation=security_generation+1,
+		    updated_at=$5,deletion_claim=$6,deletion_claimed_at=$5
+		WHERE workspace_id=$1 AND project_id=$2 AND artifact_id=$3
+		  AND version=$7 AND legal_hold=false AND deletion_claim IS NULL`,
+		workspace, project, id, claim.Terminal, claim.At, claim.Decision, expectedVersion)
+	if err != nil {
+		return artifacts.Record{}, fmt.Errorf("claim artifact deletion: %w", err)
+	}
+	current, ok, readErr := s.Get(ctx, workspace, project, id)
+	if readErr != nil {
+		return artifacts.Record{}, readErr
+	}
+	if !ok {
+		return artifacts.Record{}, problem.New(problem.CodeResourceNotFound, "")
+	}
+	if tag.RowsAffected() == 1 {
+		return current, nil
+	}
+	// The claim did not land. Whether that is this decision meeting its own
+	// earlier claim, a standing hold, or another owner decides what the caller
+	// is told, and only the record can say which.
+	if current.DeletionClaim == claim.Decision {
+		return current, nil
+	}
+	if current.DeletionClaim == "" && current.LegalHold {
+		return artifacts.Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	return artifacts.Record{}, problem.New(problem.CodeVersionConflict, "")
 }
 
 func (s *Store) Snapshot(ctx context.Context) ([]artifacts.Record, error) {

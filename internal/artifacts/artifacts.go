@@ -3,14 +3,19 @@ package artifacts
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
+	"github.com/ancyloce/anvilkit-agent-service/internal/securityaudit"
 )
 
 type ID string
@@ -71,7 +76,35 @@ type Record struct {
 	CreatedAt, UpdatedAt          time.Time
 	DeletedAt                     *time.Time
 	DeletionReason                string
+	// DeletionClaim names the decision that durably owns this artifact's
+	// destruction, and DeletionClaimedAt when it took ownership. They are set
+	// before anything is revoked or destroyed and never change afterwards, so
+	// a destruction interrupted part-way through is resumable by the decision
+	// that owns it and closed to every other.
+	DeletionClaim     string
+	DeletionClaimedAt *time.Time
 }
+
+// DeletionClaim is the durable ownership one decision holds over an artifact's
+// destruction.
+type DeletionClaim struct {
+	// Decision is the protected-audit identity of the decision that owns the
+	// destruction. The same decision resumes its own claim; any other decision
+	// meets an artifact that is already owned and is refused.
+	Decision string
+	// Terminal is the revocable state the artifact is carried into as the
+	// claim is taken. It is quarantined or expired, never a live state and
+	// never the tombstone: the tombstone lands only once the content is gone.
+	Terminal State
+	At       time.Time
+}
+
+// Valid reports whether the claim names a decision, a revocable terminal
+// state, and the moment it was taken.
+func (c DeletionClaim) Valid() bool {
+	return c.Decision != "" && len(c.Decision) <= 128 && (c.Terminal == Quarantined || c.Terminal == Expired) && !c.At.IsZero()
+}
+
 type Create struct {
 	WorkspaceID, ProjectID, RunID string
 	ID                            ID
@@ -109,19 +142,108 @@ type Grant struct {
 	URL                string
 	ExpiresAt          time.Time
 }
+
+// ProtectedAudit is the tamper-evident record every authorization-changing
+// artifact decision is made through. The decision is recorded before it is
+// applied and its outcome is recorded after, so a decision that was taken is
+// reconstructable even when the change it authorized did not complete.
+//
+// It is a required dependency, not an option: an artifact service composed
+// without one could revoke access leaving no protected account of who revoked
+// it or why, and that is precisely the record an incident needs.
+type ProtectedAudit interface {
+	PrivilegedMutation(ctx context.Context, record securityaudit.Record, mutation securityaudit.Mutation) error
+}
+
+// CustodyCapability names one artifact-custody operation. An actor must
+// currently hold the named capability, in the grants bound to the acting
+// scope, to perform it.
+//
+// These are custody operations on the artifact record itself, and they are
+// spelled under their own prefix so they can never be confused with — or
+// satisfied by — the tool capabilities an agent runs under. A workspace that
+// grants an agent the right to scan artifacts has not thereby granted it the
+// right to destroy them.
+type CustodyCapability string
+
+const (
+	// LegalHoldCapability authorizes placing or lifting the hold that decides
+	// whether an artifact may be destroyed.
+	LegalHoldCapability CustodyCapability = "artifact-custody.legal-hold"
+	// DeleteCapability authorizes destroying an artifact's content.
+	DeleteCapability CustodyCapability = "artifact-custody.delete"
+)
+
+// Custody is the accountable identity behind one authorization-changing
+// artifact decision. Every field is required: an artifact whose access is
+// withdrawn without a named actor, a stated reason, and the change record it
+// answers to cannot be reviewed afterwards.
+type Custody struct {
+	ActorID, Workload, Reason, Ticket, Traceparent string
+}
+
+func (c Custody) valid() bool {
+	return c.ActorID != "" && len(c.ActorID) <= 128 && c.Workload != "" && len(c.Workload) <= 128 &&
+		c.Reason != "" && len(c.Reason) <= 1024 && c.Ticket != "" && len(c.Ticket) <= 128 && c.Traceparent != ""
+}
+
+// systemCustody is the identity automated retention and orphan reconciliation
+// acts under. Reconciliation revokes access on the lifecycle's own terms, so
+// it is audited exactly like an operator's revocation — the record simply
+// names the reconciler as the actor.
+func systemCustody(reason, traceparent string) Custody {
+	return Custody{ActorID: "artifact-reconciler", Workload: "artifact-lifecycle", Reason: reason, Ticket: "artifact-lifecycle-reconciliation", Traceparent: traceparent}
+}
+
 type Service struct {
 	store                Store
 	objects              ObjectStore
 	reader               Reader
 	authority            authority.Source
+	audit                ProtectedAudit
 	pendingTTL, grantTTL time.Duration
 }
 
-func New(store Store, objects ObjectStore, reader Reader, source authority.Source, pendingTTL, grantTTL time.Duration) (*Service, error) {
-	if store == nil || objects == nil || reader == nil || source == nil || pendingTTL <= 0 || grantTTL <= 0 || grantTTL > 15*time.Minute {
-		return nil, fmt.Errorf("artifact dependencies or TTLs are invalid")
+func New(store Store, objects ObjectStore, reader Reader, source authority.Source, audit ProtectedAudit, pendingTTL, grantTTL time.Duration) (*Service, error) {
+	if store == nil || objects == nil || reader == nil || source == nil || audit == nil || pendingTTL <= 0 || grantTTL <= 0 || grantTTL > 15*time.Minute {
+		return nil, fmt.Errorf("artifact dependencies, protected audit, or TTLs are invalid")
 	}
-	return &Service{store: store, objects: objects, reader: reader, authority: source, pendingTTL: pendingTTL, grantTTL: grantTTL}, nil
+	return &Service{store: store, objects: objects, reader: reader, authority: source, audit: audit, pendingTTL: pendingTTL, grantTTL: grantTTL}, nil
+}
+
+// decisionIdentity is the identity of one authorization-changing decision:
+// the action, the artifact, and the exact version being changed. Two attempts
+// at the same change under the same version are the same decision, so a retry
+// resumes what is already recorded instead of opening a second one.
+//
+// The version is named separately rather than read off a record because a
+// retry meets the artifact after its own earlier attempt already moved it. The
+// decision is still about the version it set out to change.
+func decisionIdentity(action, workspace, project string, id ID, version uint64) string {
+	identity := sha256.Sum256([]byte(action + "\x00" + workspace + "\x00" + project + "\x00" + string(id) + "\x00" + strconv.FormatUint(version, 10)))
+	return "artifact." + hex.EncodeToString(identity[:16])
+}
+
+// auditedChange runs one authorization-changing decision through the protected
+// audit under the given decision identity. The audit records the decision
+// before the change is applied and its outcome after, and resumes rather than
+// restarts when an attempt was interrupted between the two — so the change
+// itself has to be idempotent under this same identity, which is what every
+// caller below is written to be.
+func (s *Service) auditedChange(ctx context.Context, identity, action string, value Record, custody Custody, oldDigest, newDigest string, change func(context.Context) error) error {
+	record := securityaudit.Record{
+		ID:          identity,
+		Action:      action,
+		Actor:       custody.ActorID,
+		Workload:    custody.Workload,
+		Reason:      custody.Reason,
+		Ticket:      custody.Ticket,
+		OldDigest:   oldDigest,
+		NewDigest:   newDigest,
+		Traceparent: custody.Traceparent,
+		Scope:       securityaudit.Scope{WorkspaceID: value.WorkspaceID, ProjectID: value.ProjectID, ResourceID: string(value.ID)},
+	}
+	return s.audit.PrivilegedMutation(ctx, record, change)
 }
 
 // permittedByAuthority re-reads the one current-authority source for the
@@ -133,6 +255,119 @@ func (s *Service) permittedByAuthority(ctx context.Context, workspace, project, 
 		return problem.New(problem.CodeArtifactAccessDenied, "")
 	}
 	return nil
+}
+
+// permittedToChangeCustody authorizes one custody operation — the legal hold,
+// or destruction — against current authority.
+//
+// An active subject is not enough, and that is the whole point. Everything
+// that runs in a workspace runs as an active subject; if that alone admitted a
+// deletion, then every actor able to produce an artifact was also able to
+// destroy one, and the record would say the deletion was authorized because
+// the caller was logged in. Two further facts are required, and both are
+// authority's own rather than the caller's: the role the scope's subject
+// register admits this actor under, and the capability for this exact
+// operation in the grants bound to the scope. The caller names the actor it is
+// acting as; what that actor may do is not the caller's to assert.
+func (s *Service) permittedToChangeCustody(ctx context.Context, workspace, project, actor string, id ID, capability CustodyCapability) error {
+	if workspace == "" || project == "" || actor == "" || len(actor) > 128 || id == "" {
+		return problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	current, err := s.authority.Current(ctx, authority.Scope{WorkspaceID: workspace, ProjectID: project, ActorID: actor})
+	if err != nil || !current.MaterialComplete() || !current.Active() {
+		return problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	if !current.HasRole(authority.RoleArtifactCustodian) {
+		return problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	if !current.Grants.HasCapability(string(capability)) {
+		return problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	// Authority over one artifact can be withdrawn without deactivating the
+	// scope it lives in, and a custodian whose authority over this artifact
+	// was withdrawn is not one who may still decide its fate.
+	if current.TargetRevoked(string(id)) {
+		return problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	// Artifact bytes are tenant content, and custody is a decision about that
+	// content: a hold freezes it in place and a deletion destroys it. So the
+	// clearance the scope grants the actor has to reach the classification
+	// artifact content is governed under. A custodian cleared only for public
+	// or internal material holds the role and the capability and still cannot
+	// decide the fate of tenant content.
+	if !clearsDataClass(current.Grants.DataClasses, CustodyDataClass) {
+		return problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	return nil
+}
+
+// CustodyDataClass is the registered data classification a custodian must be
+// cleared for. Artifact bytes are at minimum internal material — what an agent
+// produced inside a tenant's workspace, limited to authenticated AnvilKit
+// workloads and operators — so deciding their fate is authorized at that
+// classification and not below it. An actor cleared only for public material,
+// or for nothing at all, holds no clearance over artifact content whatever
+// role and capability the register grants it.
+const CustodyDataClass = "internal"
+
+// clearsDataClass reports whether any classification the scope grants reaches
+// the one required. An unregistered value grants nothing: a clearance the
+// governed vocabulary does not name is not a clearance.
+func clearsDataClass(granted []string, required string) bool {
+	needed := classificationRank(required)
+	if needed == 0 {
+		return false
+	}
+	for _, class := range granted {
+		if classificationRank(class) >= needed {
+			return true
+		}
+	}
+	return false
+}
+
+// classificationRank orders the governed data-class registry from least to
+// most sensitive. An unregistered classification ranks nowhere.
+func classificationRank(class string) int {
+	switch class {
+	case "public":
+		return 1
+	case "internal":
+		return 2
+	case "confidential":
+		return 3
+	case "restricted":
+		return 4
+	default:
+		return 0
+	}
+}
+
+// ETag renders the strong resource revision this record stands at. A custodian
+// pins it on the decision they make, so the decision names the exact revision
+// they observed.
+func (r Record) ETag() string {
+	return fmt.Sprintf("%q", string(r.ID)+":v"+strconv.FormatUint(r.Version, 10))
+}
+
+// ParseETag reads the artifact revision a caller pinned. A missing
+// precondition and a stale one are different answers: the caller who sent
+// nothing is told the precondition is required and retries with the current
+// revision; the caller who sent a stale value is told its revision no longer
+// stands.
+func ParseETag(value string, id ID) (uint64, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, problem.New(problem.CodePreconditionRequired, "")
+	}
+	prefix := "\"" + string(id) + ":v"
+	if !strings.HasPrefix(value, prefix) || !strings.HasSuffix(value, "\"") {
+		return 0, problem.New(problem.CodeVersionConflict, "")
+	}
+	version, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimPrefix(value, prefix), "\""), 10, 64)
+	if err != nil || version == 0 {
+		return 0, problem.New(problem.CodeVersionConflict, "")
+	}
+	return version, nil
 }
 func key(workspace, project string, id ID) string {
 	return workspace + "\x00" + project + "\x00" + string(id)
@@ -260,7 +495,21 @@ func (s *Service) UseGrant(ctx context.Context, workspace, project, actor string
 	}
 	return value, nil
 }
-func (s *Service) SetLegalHold(ctx context.Context, workspace, project string, id ID, expected uint64, hold bool, now time.Time) (Record, error) {
+
+// SetLegalHold places or lifts the hold that makes an artifact undeletable. It
+// decides whether the artifact can be destroyed, so it is an authorization
+// change: it requires explicit custody authority for this operation, and it is
+// recorded in the protected audit before it is applied and again after.
+//
+// The change is idempotent under its own decision identity. An attempt that
+// applied the hold and was interrupted before its outcome could be recorded
+// leaves the artifact one version on with exactly the hold this decision was
+// making; the retry recognises its own completed work and finishes the
+// decision rather than reporting a version conflict against itself.
+func (s *Service) SetLegalHold(ctx context.Context, workspace, project string, id ID, expected uint64, hold bool, custody Custody, now time.Time) (Record, error) {
+	if !custody.valid() || now.IsZero() || expected == 0 {
+		return Record{}, problem.New(problem.CodeRequestInvalid, "")
+	}
 	value, ok, err := s.store.Get(ctx, workspace, project, id)
 	if err != nil {
 		return Record{}, fmt.Errorf("read artifact record: %w", err)
@@ -268,15 +517,68 @@ func (s *Service) SetLegalHold(ctx context.Context, workspace, project string, i
 	if !ok {
 		return Record{}, problem.New(problem.CodeResourceNotFound, "")
 	}
+	if err := s.permittedToChangeCustody(ctx, workspace, project, custody.ActorID, id, LegalHoldCapability); err != nil {
+		return Record{}, err
+	}
+	if value.DeletionClaim != "" {
+		// This artifact's destruction is already durably owned, which means it
+		// has already left every live state and its content may already be
+		// gone. A hold that arrives now cannot stop that, so it is refused
+		// rather than recorded: nothing is ever left holding an artifact whose
+		// bytes no longer exist.
+		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	alreadyApplied := false
 	if value.Version != expected {
-		return Record{}, problem.New(problem.CodeVersionConflict, "")
+		if value.Version != expected+1 || value.LegalHold != hold {
+			return Record{}, problem.New(problem.CodeVersionConflict, "")
+		}
+		alreadyApplied = true
 	}
-	value.LegalHold = hold
-	value.Version++
-	value.UpdatedAt = now
-	return s.store.Update(ctx, value, expected)
+	action := "artifact-legal-hold-lifted"
+	if hold {
+		action = "artifact-legal-hold-placed"
+	}
+	// The hold changes what may be done to the artifact, never its content, so
+	// the audit record carries the same digest on both sides.
+	if err := s.auditedChange(ctx, decisionIdentity(action, workspace, project, id, expected), action, value, custody, value.Digest, value.Digest, func(ctx context.Context) error {
+		if alreadyApplied {
+			return nil
+		}
+		next := value
+		next.LegalHold = hold
+		next.Version++
+		next.UpdatedAt = now
+		if _, err := s.store.Update(ctx, next, expected); err != nil {
+			current, found, readErr := s.store.Get(ctx, workspace, project, id)
+			if readErr == nil && found && current.Version == expected+1 && current.LegalHold == hold && current.DeletionClaim == "" {
+				return nil
+			}
+			return err
+		}
+		return nil
+	}); err != nil {
+		return Record{}, err
+	}
+	return s.Get(ctx, workspace, project, id)
 }
-func (s *Service) Delete(ctx context.Context, workspace, project string, id ID, expected uint64, reason string, now time.Time) (Record, error) {
+
+// Delete revokes every grant on an artifact and destroys its content. It is
+// the most consequential authorization change the lifecycle has, so it
+// requires explicit custody authority for destruction and is recorded in the
+// protected audit before anything is revoked or destroyed.
+//
+// A destruction that is already durably owned is resumed under the decision
+// that owns it rather than opened as a new one. Once ownership is taken the
+// version precondition has been decided and the artifact has already left
+// every live state, so there is nothing left for a caller's expectation to
+// decide — only the remaining steps to finish. Without that, an interrupted
+// deletion could never be completed by anyone: every retry would carry the
+// version the claim had already moved past.
+func (s *Service) Delete(ctx context.Context, workspace, project string, id ID, expected uint64, custody Custody, now time.Time) (Record, error) {
+	if !custody.valid() || now.IsZero() {
+		return Record{}, problem.New(problem.CodeRequestInvalid, "")
+	}
 	value, ok, err := s.store.Get(ctx, workspace, project, id)
 	if err != nil {
 		return Record{}, fmt.Errorf("read artifact record: %w", err)
@@ -284,99 +586,251 @@ func (s *Service) Delete(ctx context.Context, workspace, project string, id ID, 
 	if !ok {
 		return Record{}, problem.New(problem.CodeResourceNotFound, "")
 	}
+	if err := s.permittedToChangeCustody(ctx, workspace, project, custody.ActorID, id, DeleteCapability); err != nil {
+		return Record{}, err
+	}
+	own := decisionIdentity("artifact-deleted", workspace, project, id, expected)
+	if value.State == Deleted && value.DeletionClaim != own {
+		// The artifact is already destroyed, and not by this decision. There is
+		// nothing left to decide about content that no longer exists, so the
+		// tombstone is the answer rather than a second decision over it.
+		return value, nil
+	}
+	decision := value.DeletionClaim
+	if decision == "" {
+		if value.LegalHold {
+			return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
+		}
+		if expected == 0 || value.Version != expected {
+			return Record{}, problem.New(problem.CodeVersionConflict, "")
+		}
+		decision = own
+	}
+	// The artifact's content ceases to exist, so the audit record carries the
+	// digest that was and no digest that is.
+	if err := s.auditedChange(ctx, decision, "artifact-deleted", value, custody, value.Digest, "", func(ctx context.Context) error {
+		_, err := s.destroy(ctx, decision, value, custody.Reason, now)
+		return err
+	}); err != nil {
+		return Record{}, err
+	}
+	return s.Get(ctx, workspace, project, id)
+}
+
+// destroy takes durable ownership of the artifact's destruction and only then
+// revokes its grants, removes its content, and lands the tombstone.
+//
+// The order is the whole correctness argument. Revoking and deleting first,
+// and moving the metadata afterwards, meant the irreversible half happened
+// before the record had left its live states — so a legal hold or any other
+// version change that landed in between made the closing compare-and-set fail
+// and left a live, holdable record naming an object whose bytes were already
+// gone. Ownership is taken by one compare-and-set that carries the artifact
+// into a revocable terminal state in the same write. After it commits, a
+// concurrent hold either won the version and stopped the deletion before
+// anything was destroyed, or arrives at an artifact that has already left the
+// live states and is refused.
+//
+// Every step after the claim is idempotent, so an interrupted destruction is
+// finished by re-running it: the claim resumes for the decision that owns it,
+// revocation is a no-op once nothing is outstanding, removing an absent object
+// is a no-op, and the tombstone is recognised if it already landed.
+func (s *Service) destroy(ctx context.Context, decision string, value Record, reason string, now time.Time) (Record, error) {
 	if value.State == Deleted {
 		return value, nil
 	}
-	if value.LegalHold {
-		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
+	terminal := Expired
+	if value.State == Quarantined {
+		terminal = Quarantined
 	}
-	if value.Version != expected || reason == "" {
-		return Record{}, problem.New(problem.CodeVersionConflict, "")
+	claimed, err := s.store.ClaimDeletion(ctx, value.WorkspaceID, value.ProjectID, value.ID, value.Version, DeletionClaim{Decision: decision, Terminal: terminal, At: now})
+	if err != nil {
+		return Record{}, err
 	}
-	if err := s.reader.Revoke(ctx, value); err != nil {
+	if claimed.State == Deleted {
+		return claimed, nil
+	}
+	if err := s.reader.Revoke(ctx, claimed); err != nil {
 		return Record{}, fmt.Errorf("revoke artifact grants: %w", err)
 	}
-	if err := s.objects.Delete(ctx, value.Reference); err != nil {
+	if err := s.objects.Delete(ctx, claimed.Reference); err != nil {
 		return Record{}, fmt.Errorf("delete artifact object: %w", err)
 	}
-	// Deletion routes through the revocable terminal states the lifecycle
-	// permits: a live artifact expires first, then the tombstone lands. Each
-	// step is one CAS with one version and security-generation increment.
-	if value.State != Quarantined && value.State != Expired {
-		expiredStep := value
-		expiredStep.State = Expired
-		expiredStep.Version++
-		expiredStep.SecurityGeneration++
-		expiredStep.UpdatedAt = now
-		next, err := s.store.Update(ctx, expiredStep, value.Version)
-		if err != nil {
-			return Record{}, err
-		}
-		value = next
-	}
-	expected = value.Version
-	value.State = Deleted
-	value.Version++
-	value.SecurityGeneration++
-	value.UpdatedAt = now
+	next := claimed
+	next.State = Deleted
+	next.Version++
+	next.SecurityGeneration++
+	next.UpdatedAt = now
 	deleted := now
-	value.DeletedAt = &deleted
-	value.DeletionReason = reason
-	return s.store.Update(ctx, value, expected)
+	next.DeletedAt = &deleted
+	next.DeletionReason = reason
+	tombstoned, err := s.store.Update(ctx, next, claimed.Version)
+	if err != nil {
+		current, found, readErr := s.store.Get(ctx, value.WorkspaceID, value.ProjectID, value.ID)
+		if readErr == nil && found && current.State == Deleted && current.DeletionClaim == decision {
+			return current, nil
+		}
+		return Record{}, err
+	}
+	return tombstoned, nil
 }
-func (s *Service) Reconcile(ctx context.Context, now time.Time) error {
+
+// Reconcile applies retention and orphan handling across the live corpus.
+// Both outcomes revoke access, so both are recorded in the protected audit on
+// the same terms an operator's revocation is: the record simply names the
+// reconciler as the actor.
+//
+// One artifact never decides the fate of the others. A record whose
+// reconciliation fails — including one whose decision the protected audit has
+// already recorded — is reported and the sweep continues, so a single stuck
+// artifact cannot hold the whole corpus's retention hostage.
+func (s *Service) Reconcile(ctx context.Context, traceparent string, now time.Time) error {
+	if now.IsZero() {
+		return problem.New(problem.CodeRequestInvalid, "")
+	}
 	values, err := s.store.Snapshot(ctx)
 	if err != nil {
 		return fmt.Errorf("list artifact records: %w", err)
 	}
+	var failures []error
 	for _, value := range values {
-		exists, err := s.objects.Exists(ctx, value.Reference)
-		if err != nil {
-			return err
+		if err := s.reconcileOne(ctx, value, traceparent, now); err != nil {
+			failures = append(failures, err)
 		}
-		expire := func(record Record) (Record, error) {
-			record.State = Expired
-			record.Version++
-			record.SecurityGeneration++
-			if err := s.reader.Revoke(ctx, record); err != nil {
-				return Record{}, fmt.Errorf("revoke expired artifact grants: %w", err)
+	}
+	return errors.Join(failures...)
+}
+
+func (s *Service) reconcileOne(ctx context.Context, value Record, traceparent string, now time.Time) error {
+	exists, err := s.objects.Exists(ctx, value.Reference)
+	if err != nil {
+		return fmt.Errorf("read artifact object %s: %w", value.ID, err)
+	}
+	expire := func(record Record, reason string) (Record, error) {
+		identity := decisionIdentity("artifact-expired", record.WorkspaceID, record.ProjectID, record.ID, record.Version)
+		if err := s.auditedChange(ctx, identity, "artifact-expired", record, systemCustody(reason, traceparent), record.Digest, record.Digest, func(ctx context.Context) error {
+			next := record
+			next.State = Expired
+			next.Version++
+			next.SecurityGeneration++
+			if err := s.reader.Revoke(ctx, next); err != nil {
+				return fmt.Errorf("revoke expired artifact grants: %w", err)
 			}
-			record.UpdatedAt = now
-			return s.store.Update(ctx, record, record.Version-1)
-		}
-		if value.State == Pending && now.Sub(value.CreatedAt) >= s.pendingTTL && !value.LegalHold {
-			value, err = expire(value)
-			if err != nil {
-				return fmt.Errorf("reconcile expired artifact: %w", err)
-			}
-		}
-		if !exists && value.State != Deleted {
-			// An orphaned record routes through the revocable terminal states
-			// the lifecycle permits before its tombstone lands.
-			if value.State != Quarantined && value.State != Expired {
-				value, err = expire(value)
-				if err != nil {
-					return fmt.Errorf("reconcile orphaned artifact: %w", err)
+			next.UpdatedAt = now
+			if _, err := s.store.Update(ctx, next, record.Version); err != nil {
+				// An earlier attempt at this same decision may have applied it
+				// and been interrupted before it could record the outcome.
+				current, found, readErr := s.store.Get(ctx, record.WorkspaceID, record.ProjectID, record.ID)
+				if readErr == nil && found && current.Version == record.Version+1 && current.State == Expired {
+					return nil
 				}
+				return err
 			}
-			expected := value.Version
-			value.State = Deleted
-			value.Version++
-			value.SecurityGeneration++
-			if err := s.reader.Revoke(ctx, value); err != nil {
-				return fmt.Errorf("revoke orphaned artifact grants: %w", err)
-			}
-			value.UpdatedAt = now
-			deleted := now
-			value.DeletedAt = &deleted
-			value.DeletionReason = "orphaned-object"
-			if _, err := s.store.Update(ctx, value, expected); err != nil {
-				return fmt.Errorf("reconcile artifact record: %w", err)
-			}
+			return nil
+		}); err != nil {
+			return Record{}, err
 		}
+		expired, err := s.Get(ctx, record.WorkspaceID, record.ProjectID, record.ID)
+		if err != nil {
+			return Record{}, err
+		}
+		return expired, nil
+	}
+	if value.State == Pending && now.Sub(value.CreatedAt) >= s.pendingTTL && !value.LegalHold {
+		expired, err := expire(value, "retention-expired")
+		if err != nil {
+			return fmt.Errorf("reconcile expired artifact %s: %w", value.ID, err)
+		}
+		value = expired
+	}
+	if exists || value.State == Deleted {
+		return nil
+	}
+	// An orphaned record routes through the revocable terminal states the
+	// lifecycle permits before its tombstone lands.
+	if value.State != Quarantined && value.State != Expired {
+		expired, err := expire(value, "orphaned-object")
+		if err != nil {
+			return fmt.Errorf("reconcile orphaned artifact %s: %w", value.ID, err)
+		}
+		value = expired
+	}
+	orphaned := value
+	decision := orphaned.DeletionClaim
+	if decision == "" {
+		decision = decisionIdentity("artifact-deleted", orphaned.WorkspaceID, orphaned.ProjectID, orphaned.ID, orphaned.Version)
+	}
+	// The sweep destroys an orphaned record through exactly the same ordered,
+	// owned path an operator's deletion takes. A record whose object has
+	// vanished is still a record whose grants must be withdrawn before its
+	// tombstone lands, and the reconciler has no licence the operator lacks.
+	if err := s.auditedChange(ctx, decision, "artifact-deleted", orphaned, systemCustody("orphaned-object", traceparent), orphaned.Digest, "", func(ctx context.Context) error {
+		_, err := s.destroy(ctx, decision, orphaned, "orphaned-object", now)
+		return err
+	}); err != nil {
+		return fmt.Errorf("reconcile artifact record %s: %w", orphaned.ID, err)
 	}
 	return nil
 }
+
+// SweepClock is the time source retention reconciliation reads. It is the
+// same authoritative clock the rest of the lifecycle uses: retention decided
+// against an unverified local clock could expire an artifact early.
+type SweepClock interface{ Now() time.Time }
+
+// Sweep runs retention and orphan reconciliation until the context ends. Each
+// sweep opens its own trace: it is not continuing the trace of whatever
+// created the artifacts it is reconciling, which may have completed in another
+// process days earlier.
+func (s *Service) Sweep(ctx context.Context, clock SweepClock, interval time.Duration, observe func(error)) {
+	if interval <= 0 || interval > time.Hour {
+		interval = 15 * time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		now := clock.Now()
+		if now.IsZero() {
+			// Authoritative time is unavailable. Retention is a decision about
+			// elapsed time, so it is not one this sweep may make on a clock it
+			// cannot trust; the next sweep tries again.
+			if observe != nil {
+				observe(fmt.Errorf("artifact reconciliation skipped: authoritative time is unavailable"))
+			}
+			continue
+		}
+		traceparent, err := sweepTraceparent()
+		if err != nil {
+			if observe != nil {
+				observe(fmt.Errorf("artifact reconciliation could not open a trace: %w", err))
+			}
+			continue
+		}
+		if err := s.Reconcile(ctx, traceparent, now); err != nil && observe != nil && ctx.Err() == nil {
+			observe(err)
+		}
+	}
+}
+
+// sweepTraceparent starts a new trace for one reconciliation sweep.
+func sweepTraceparent() (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	// Both identifiers must be non-zero, which random bytes are with
+	// overwhelming probability; a leading one is set so the format holds even
+	// in the degenerate draw.
+	raw[0] |= 1
+	raw[16] |= 1
+	return "00-" + hex.EncodeToString(raw[:16]) + "-" + hex.EncodeToString(raw[16:]) + "-01", nil
+}
+
 func allowed(current, next State) bool {
 	switch current {
 	case Pending:
@@ -435,6 +889,10 @@ func clone(value Record) Record {
 		copyTime := *value.DeletedAt
 		value.DeletedAt = &copyTime
 	}
+	if value.DeletionClaimedAt != nil {
+		copyTime := *value.DeletionClaimedAt
+		value.DeletionClaimedAt = &copyTime
+	}
 	return value
 }
 func cloneLineage(value Lineage) Lineage {
@@ -446,6 +904,10 @@ type MemoryObjects struct {
 	lock       sync.Mutex
 	values     map[string][]byte
 	FailDelete bool
+	// FailExists makes the store refuse to answer for the named object keys,
+	// so a test can hold one artifact's reconciliation open while the rest of
+	// the corpus is reconciled around it.
+	FailExists map[string]bool
 }
 
 func NewMemoryObjects() *MemoryObjects { return &MemoryObjects{values: map[string][]byte{}} }
@@ -474,6 +936,9 @@ func (o *MemoryObjects) Delete(_ context.Context, ref Reference) error {
 func (o *MemoryObjects) Exists(_ context.Context, ref Reference) (bool, error) {
 	o.lock.Lock()
 	defer o.lock.Unlock()
+	if o.FailExists[ref.ObjectKey] {
+		return false, fmt.Errorf("injected object lookup failure")
+	}
 	_, ok := o.values[ref.Bucket+"/"+ref.ObjectKey]
 	return ok, nil
 }

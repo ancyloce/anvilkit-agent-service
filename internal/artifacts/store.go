@@ -15,6 +15,14 @@ type Store interface {
 	Create(context.Context, Record) (Record, bool, error)
 	Get(ctx context.Context, workspace, project string, id ID) (Record, bool, error)
 	Update(ctx context.Context, next Record, expectedVersion uint64) (Record, error)
+	// ClaimDeletion takes durable ownership of one artifact's destruction and
+	// carries the artifact out of every live state in the same compare-and-set,
+	// before any grant is revoked or any content removed. It succeeds only when
+	// the record still stands at the expected version, carries no legal hold,
+	// and is not already owned by another decision. A claim already held by the
+	// same decision is returned unchanged, which is what lets an interrupted
+	// destruction resume rather than restart.
+	ClaimDeletion(ctx context.Context, workspace, project string, id ID, expectedVersion uint64, claim DeletionClaim) (Record, error)
 	Snapshot(context.Context) ([]Record, error)
 }
 
@@ -59,6 +67,40 @@ func (s *MemoryStore) Update(_ context.Context, next Record, expectedVersion uin
 		return Record{}, problem.New(problem.CodeVersionConflict, "")
 	}
 	s.records[identity] = clone(next)
+	return clone(next), nil
+}
+
+func (s *MemoryStore) ClaimDeletion(_ context.Context, workspace, project string, id ID, expectedVersion uint64, claim DeletionClaim) (Record, error) {
+	if !claim.Valid() {
+		return Record{}, problem.New(problem.CodeRequestInvalid, "")
+	}
+	s.lock.Lock()
+	defer s.lock.Unlock()
+	value, ok := s.records[key(workspace, project, id)]
+	if !ok {
+		return Record{}, problem.New(problem.CodeResourceNotFound, "")
+	}
+	if value.DeletionClaim == claim.Decision {
+		return clone(value), nil
+	}
+	if value.DeletionClaim != "" {
+		return Record{}, problem.New(problem.CodeVersionConflict, "")
+	}
+	if value.LegalHold {
+		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	if expectedVersion == 0 || value.Version != expectedVersion {
+		return Record{}, problem.New(problem.CodeVersionConflict, "")
+	}
+	next := value
+	next.State = claim.Terminal
+	next.Version++
+	next.SecurityGeneration++
+	next.UpdatedAt = claim.At
+	next.DeletionClaim = claim.Decision
+	claimedAt := claim.At
+	next.DeletionClaimedAt = &claimedAt
+	s.records[key(workspace, project, id)] = clone(next)
 	return clone(next), nil
 }
 
