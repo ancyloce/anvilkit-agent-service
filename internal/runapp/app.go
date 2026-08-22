@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
@@ -92,7 +91,14 @@ type App struct {
 	// path answers as unavailable.
 	custodian       ArtifactCustodian
 	custodyReceipts CommandReceipts
-	custodyNow      func() time.Time
+	custodyNow      TimeAuthority
+	// The governed apply-authorization issuance path and the receipt store
+	// its idempotency is kept in, and the governed artifact metadata surface.
+	// Each is installed with what it needs or not at all; an unbound path
+	// answers as unavailable.
+	authorizations        ApplyAuthorizationIssuer
+	authorizationReceipts CommandReceipts
+	artifactMetadata      ArtifactMetadataReader
 }
 
 func (a *App) WithInterrupts(service *interrupts.Service) *App { a.interrupts = service; return a }

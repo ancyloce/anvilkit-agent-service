@@ -53,3 +53,8 @@ func randomHex(prefix string) (string, error) {
 type SystemClock struct{}
 
 func (SystemClock) Now() time.Time { return time.Now() }
+
+// Refusal is always nil: the host clock has no authority to lose, so it never
+// refuses. It exists so the host clock satisfies the same port the approved
+// time authority does in the controlled modes that are allowed to use it.
+func (SystemClock) Refusal() error { return nil }

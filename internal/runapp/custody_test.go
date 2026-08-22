@@ -15,6 +15,7 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
+	"github.com/ancyloce/anvilkit-agent-service/internal/securityaudit"
 )
 
 const custodyArtifactID = "artifact.0123456789abcdef0123456789abcdef"
@@ -74,7 +75,7 @@ func custodyApp(t *testing.T, custodian ArtifactCustodian) (*App, *MemoryCommand
 	runStore := &store{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 3}}
 	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil })), eventReader{}, events.StreamConfig{}, appAuthoritySource{}, testGuard(t), testDefinitions{})
 	receipts := NewMemoryCommandReceipts(func() time.Time { return now }, time.Minute)
-	app.WithArtifactCustody(custodian, receipts, func() time.Time { return now })
+	app.WithArtifactCustody(custodian, receipts, fixedTimeAuthority{value: now})
 	return app, receipts
 }
 
@@ -379,27 +380,57 @@ func TestConcurrentCustodyDuplicatesDecideOnce(t *testing.T) {
 	}
 }
 
+// fixedTimeAuthority is a time authority that answers one instant, or refuses
+// for one stated governed reason.
+type fixedTimeAuthority struct {
+	value   time.Time
+	refusal error
+}
+
+func (a fixedTimeAuthority) Now() time.Time { return a.value }
+func (a fixedTimeAuthority) Refusal() error { return a.refusal }
+
 // The approved time authority is what a custody decision is stamped and
-// ordered by. When it cannot be read the decision is refused as authority the
-// service cannot presently stand behind — the same answer every other governed
-// mutation gives — rather than reaching the artifact lifecycle as a zero
-// timestamp and coming back to the custodian as a malformed command.
+// ordered by. When it cannot be read the decision is refused rather than
+// reaching the artifact lifecycle as a zero timestamp and coming back to the
+// custodian as a malformed command — and what the custodian is told depends on
+// which way the clock failed, because only one of the two is worth retrying.
 func TestACustodyDecisionRefusesAnUnreadableClock(t *testing.T) {
-	custodian := &recordingCustodian{}
-	app, receipts := custodyApp(t, custodian)
-	app.WithArtifactCustody(custodian, receipts, func() time.Time { return time.Time{} })
 	raw := custodyBody(CustodyDeleted)
-	err := decideErr(app, custodianClaims(), custodyInput(t, raw, "custody-key"), raw)
-	if !isProblem(err, problem.CodeAuthorityStale) {
-		t.Fatalf("an unreadable clock = %v, want the governed authority refusal", err)
-	}
-	if holds, deletes := custodian.calls(); holds != 0 || deletes != 0 {
-		t.Fatalf("a decision was made on a clock the service could not read: holds=%d deletes=%d", holds, deletes)
-	}
-	// The key was never claimed, so the custodian can use it once the clock is
-	// readable again.
-	app.WithArtifactCustody(custodian, receipts, func() time.Time { return time.Now() })
-	if _, err := app.DecideArtifactCustody(context.Background(), custodianClaims(), custodyInput(t, raw, "custody-key"), raw); err != nil {
-		t.Fatalf("the retry could not reuse its key: %v", err)
+	for name, refusal := range map[string]struct {
+		clock fixedTimeAuthority
+		code  problem.Code
+	}{
+		"an unreachable time authority is a dependency to wait for": {
+			clock: fixedTimeAuthority{refusal: securityaudit.TimeUnavailable{Err: errors.New("dial: connection refused")}.Problem()},
+			code:  problem.CodeInfrastructureUnavailable,
+		},
+		"an answer that failed its checks is a refusal that will not change": {
+			clock: fixedTimeAuthority{refusal: securityaudit.TimeUntrusted{Err: errors.New("signature does not verify")}.Problem()},
+			code:  problem.CodeAuthorityStale,
+		},
+		"a clock that gives no instant and no reason is reported as unavailable": {
+			clock: fixedTimeAuthority{},
+			code:  problem.CodeInfrastructureUnavailable,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			custodian := &recordingCustodian{}
+			app, receipts := custodyApp(t, custodian)
+			app.WithArtifactCustody(custodian, receipts, refusal.clock)
+			err := decideErr(app, custodianClaims(), custodyInput(t, raw, "custody-key"), raw)
+			if !isProblem(err, refusal.code) {
+				t.Fatalf("an unreadable clock = %v, want %s", err, refusal.code)
+			}
+			if holds, deletes := custodian.calls(); holds != 0 || deletes != 0 {
+				t.Fatalf("a decision was made on a clock the service could not read: holds=%d deletes=%d", holds, deletes)
+			}
+			// The key was never claimed, so the custodian can use it once the
+			// clock is readable again.
+			app.WithArtifactCustody(custodian, receipts, fixedTimeAuthority{value: time.Now()})
+			if _, err := app.DecideArtifactCustody(context.Background(), custodianClaims(), custodyInput(t, raw, "custody-key"), raw); err != nil {
+				t.Fatalf("the retry could not reuse its key: %v", err)
+			}
+		})
 	}
 }

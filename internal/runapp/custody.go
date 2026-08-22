@@ -74,15 +74,32 @@ type CustodyInput struct {
 	WorkspaceID, ArtifactID, ETag, Key, Digest, Traceparent string
 }
 
+// TimeAuthority is the approved time source as this boundary reads it: an
+// instant, and — when it cannot give one — the governed reason.
+//
+// The reason is part of the port rather than an afterthought because the two
+// ways time can fail lead somewhere different. An authority that is briefly
+// unreachable says nothing about whether the caller may act; the honest answer
+// is a retryable dependency failure. An authority whose answer failed its
+// checks is a refusal that will not change, and telling a caller to retry that
+// is telling them to ask a possibly hostile answer again. A clock that could
+// only return the zero instant collapsed both into one denial.
+type TimeAuthority interface {
+	Now() time.Time
+	// Refusal answers why the last reading gave no instant, or nil when it
+	// gave one.
+	Refusal() error
+}
+
 // WithArtifactCustody publishes the artifact custody path together with the
-// receipt store its idempotency is kept in and the clock its decisions are
-// stamped from. They are bound as one because a governed mutation with no
-// durable receipt has undefined replay semantics, and a lifecycle decision
-// timed by an unverified clock is one whose ordering cannot be relied on.
-// Neither half is separately installable, and an unbound custody path answers
-// as unavailable rather than as absent.
-func (a *App) WithArtifactCustody(custodian ArtifactCustodian, receipts CommandReceipts, now func() time.Time) *App {
-	a.custodian, a.custodyReceipts, a.custodyNow = custodian, receipts, now
+// receipt store its idempotency is kept in and the time authority its
+// decisions are stamped from. They are bound as one because a governed
+// mutation with no durable receipt has undefined replay semantics, and a
+// lifecycle decision timed by an unverified clock is one whose ordering cannot
+// be relied on. Neither half is separately installable, and an unbound custody
+// path answers as unavailable rather than as absent.
+func (a *App) WithArtifactCustody(custodian ArtifactCustodian, receipts CommandReceipts, clock TimeAuthority) *App {
+	a.custodian, a.custodyReceipts, a.custodyNow = custodian, receipts, clock
 	return a
 }
 
@@ -159,9 +176,17 @@ func (a *App) DecideArtifactCustody(ctx context.Context, claims auth.Claims, inp
 	// read — and refusing here is what keeps that outage from reaching the
 	// artifact lifecycle as a zero timestamp and being reported to the
 	// custodian as a malformed command.
-	now := a.custodyNow()
+	//
+	// What the custodian is told depends on which way the clock failed. A time
+	// authority that is briefly unreachable is a dependency to wait for, and
+	// answering that as a denial sent operators looking for a revoked
+	// authority they never lost.
+	now := a.custodyNow.Now()
 	if now.IsZero() {
-		return Representation{}, problem.New(problem.CodeAuthorityStale, "")
+		if refusal := a.custodyNow.Refusal(); refusal != nil {
+			return Representation{}, refusal
+		}
+		return Representation{}, problem.New(problem.CodeInfrastructureUnavailable, "")
 	}
 	receipt := CommandReceiptRequest{
 		WorkspaceID: scope.WorkspaceID,
