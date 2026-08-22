@@ -154,6 +154,7 @@ func TestPostgresFoundations(t *testing.T) {
 	assertDurableProviderLedger(t, ctx, pool)
 	assertCancellationReconciliation(t, ctx, pool)
 	assertScopedAuthorityStore(t, ctx, authorityPool)
+	assertAuthoritySeedingIsMonotonicAtomicAndExact(t, ctx, authorityPool)
 	assertDomainRedemptionAcrossProcesses(t, ctx, pool)
 	assertDurableToolDispatch(t, ctx, authorityPool)
 	assertDomainEscalationJournal(t, ctx, pool)
@@ -1206,7 +1207,8 @@ func assertArtifactLifecycle(t *testing.T, ctx context.Context, pool *pgxpool.Po
 			Capabilities: []string{string(artifacts.LegalHoldCapability), string(artifacts.DeleteCapability)},
 			DataClasses:  []string{artifacts.CustodyDataClass},
 		}})
-	service, err := artifacts.New(store, objects, reader, activeAuthority, persistenceProtectedAudit{}, time.Hour, 5*time.Minute)
+	audit := newPersistenceProtectedAudit()
+	service, err := artifacts.New(store, objects, reader, activeAuthority, audit, time.Hour, 5*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1234,6 +1236,8 @@ func assertArtifactLifecycle(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		ExecutionGeneration: 1,
 		BuildIdentity:       sha('d'),
 		Producer:            "anvilkit-agent-runner",
+		Kind:                artifacts.WorkerResult,
+		Validation:          artifacts.Validation{ValidatedAt: now, Checks: []artifacts.Check{{Name: "schema", Result: "passed", EvidenceDigest: sha('a')}}},
 	}
 	if err := port.RecordCandidate(ctx, candidate); err != nil {
 		t.Fatal(err)
@@ -1313,7 +1317,7 @@ func assertArtifactLifecycle(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	if err != nil || string(stored) != string(candidateBytes) {
 		t.Fatalf("stored bytes mismatch err=%v", err)
 	}
-	assertDeletionOwnershipPrecedesDestruction(t, ctx, pool, store, objects, service, now)
+	assertDeletionOwnershipPrecedesDestruction(t, ctx, pool, store, objects, service, audit, now)
 }
 
 // Deletion ownership is taken by compare-and-set before anything is revoked or
@@ -1321,7 +1325,7 @@ func assertArtifactLifecycle(t *testing.T, ctx context.Context, pool *pgxpool.Po
 // hold and a deletion that race must never end with live metadata naming
 // content that is already gone, so exactly one of them can win and the loser
 // is refused rather than partially applied.
-func assertDeletionOwnershipPrecedesDestruction(t *testing.T, ctx context.Context, pool *pgxpool.Pool, store *artifactspg.Store, objects *artifactspg.Objects, service *artifacts.Service, now time.Time) {
+func assertDeletionOwnershipPrecedesDestruction(t *testing.T, ctx context.Context, pool *pgxpool.Pool, store *artifactspg.Store, objects *artifactspg.Objects, service *artifacts.Service, audit *persistenceProtectedAudit, now time.Time) {
 	t.Helper()
 	seed := func(id artifacts.ID) artifacts.Record {
 		t.Helper()
@@ -1339,7 +1343,9 @@ func assertDeletionOwnershipPrecedesDestruction(t *testing.T, ctx context.Contex
 				SchemaDigest:  "sha256:" + strings.Repeat("b", 64),
 				CatalogDigest: "sha256:" + strings.Repeat("c", 64),
 			},
-			CreatedAt: now,
+			Kind:       artifacts.WorkerResult,
+			Validation: artifacts.Validation{ValidatedAt: now, Checks: []artifacts.Check{{Name: "schema", Result: "passed", EvidenceDigest: "sha256:" + strings.Repeat("b", 64)}}},
+			CreatedAt:  now,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -1365,6 +1371,17 @@ func assertDeletionOwnershipPrecedesDestruction(t *testing.T, ctx context.Contex
 	// the same write, and a hold arriving afterwards is refused by the
 	// database itself, not only by the service above it.
 	owned := seed("artifact.ownership.claimed")
+	// The claim below stands for one an interrupted destruction left behind,
+	// so the decision that authorized it is on the record — which is the only
+	// state production can actually reach, and the only one a successor is
+	// permitted to finish.
+	audit.authorize(securityaudit.Record{
+		ID:     "artifact.ownership.decision",
+		Action: "artifact-deleted",
+		Actor:  custody.ActorID,
+		Reason: custody.Reason,
+		Scope:  securityaudit.Scope{WorkspaceID: owned.WorkspaceID, ProjectID: owned.ProjectID, ResourceID: string(owned.ID)},
+	})
 	claimed, err := store.ClaimDeletion(ctx, owned.WorkspaceID, owned.ProjectID, owned.ID, owned.Version, artifacts.DeletionClaim{Decision: "artifact.ownership.decision", Terminal: artifacts.Expired, At: now})
 	if err != nil {
 		t.Fatal(err)
@@ -3010,15 +3027,20 @@ func assertScopedAuthorityStore(t *testing.T, ctx context.Context, pool *pgxpool
 	// the binding holds, which is exactly what must not admit either of them
 	// to custody.
 	subjects := []authoritypg.Subject{
-		{WorkspaceID: "workspace-auth", ActorID: "actor-auth", Role: "agent-actor"},
-		{WorkspaceID: "workspace-auth", ActorID: "custodian-auth", Role: "agent-artifact-custodian", Grants: authority.ActorAuthority{
+		{WorkspaceID: "workspace-auth", ProjectID: "project-auth", ActorID: "actor-auth", Role: "agent-actor"},
+		{WorkspaceID: "workspace-auth", ProjectID: "project-auth", ActorID: "custodian-auth", Role: "agent-artifact-custodian", Grants: authority.ActorAuthority{
 			Capabilities: []string{"artifact-custody.legal-hold"},
 			DataClasses:  []string{"internal"},
 		}},
 	}
-	if err := store.Seed(ctx, binding, subjects); err != nil {
+	audit := seedAudit(t)
+	if _, err := seedAuthority(t, ctx, store, audit, binding, 1, subjects); err != nil {
 		t.Fatal(err)
 	}
+	// Cross-project isolation is proved before the actor-bound assertions
+	// below withdraw the custodian: an admission that is gone cannot show
+	// that it failed to cross a project boundary.
+	assertAdmissionDoesNotCrossProjects(t, ctx, store, audit, binding, subjects)
 	assertActorBoundAuthority(t, ctx, store)
 	scope := authority.Scope{WorkspaceID: "workspace-auth", ProjectID: "project-auth", ActorID: "actor-auth"}
 	current, err := store.Current(ctx, scope)
@@ -3068,7 +3090,7 @@ func assertScopedAuthorityStore(t *testing.T, ctx context.Context, pool *pgxpool
 		t.Fatalf("workspace and actor revocation=%+v err=%v", current, err)
 	}
 	// A reseed restores material but never erases the recorded revocations.
-	if err := store.Seed(ctx, binding, subjects); err != nil {
+	if _, err := seedAuthority(t, ctx, store, audit, binding, 9, subjects); err != nil {
 		t.Fatal(err)
 	}
 	if current, err = store.Current(ctx, scope); err != nil || current.Active() {
@@ -3080,6 +3102,238 @@ func assertScopedAuthorityStore(t *testing.T, ctx context.Context, pool *pgxpool
 	if _, err := pool.Exec(ctx, `UPDATE agent_control.authority_revocations SET subject='rewritten' WHERE workspace_id='workspace-auth'`); err == nil {
 		t.Fatal("the authority revocation ledger was mutable")
 	}
+}
+
+// assertAdmissionDoesNotCrossProjects proves the register admits an actor to
+// the project it was admitted in and to no other. A workspace holds many
+// projects; an actor doing one project's work is not thereby a custodian of
+// another project's artifacts, cleared for its content, or holder of any role
+// in it.
+func assertAdmissionDoesNotCrossProjects(t *testing.T, ctx context.Context, store *authoritypg.Store, audit authoritypg.SeedAudit, binding authoritypg.Binding, subjects []authoritypg.Subject) {
+	t.Helper()
+	// A sibling project in the same workspace, bound to the same material, so
+	// nothing but the project distinguishes the two observations.
+	sibling := binding
+	sibling.ProjectID = "project-auth-sibling"
+	if _, err := seedAuthority(t, ctx, store, audit, sibling, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := store.Current(ctx, authority.Scope{WorkspaceID: binding.WorkspaceID, ProjectID: binding.ProjectID, ActorID: "custodian-auth"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admitted.ActorRole != "agent-artifact-custodian" || !admitted.ActorGrants.HasCapability("artifact-custody.legal-hold") || !admitted.ActorGrants.Clears("internal") {
+		t.Fatalf("the custodian is not admitted in the project it was admitted to: %+v", admitted)
+	}
+	// The same actor, the same workspace, the next project along.
+	foreign, err := store.Current(ctx, authority.Scope{WorkspaceID: binding.WorkspaceID, ProjectID: sibling.ProjectID, ActorID: "custodian-auth"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foreign.ActorActive {
+		t.Fatalf("an admission in one project made the actor active in another: %+v", foreign)
+	}
+	if foreign.ActorRole != "" {
+		t.Fatalf("a role granted in one project was read in another: %q", foreign.ActorRole)
+	}
+	if foreign.ActorGrants.HasCapability("artifact-custody.legal-hold") {
+		t.Fatal("a custody capability granted in one project was held in another")
+	}
+	if foreign.ActorGrants.Clears("internal") || foreign.ActorGrants.Clearance() != "" {
+		t.Fatalf("an evidence clearance granted in one project was read in another: %q", foreign.ActorGrants.Clearance())
+	}
+	// Admitting the same actor to the sibling project with a narrower grant
+	// leaves the original admission exactly as it was: the two are separate
+	// records, not one record being overwritten.
+	if _, err := seedAuthority(t, ctx, store, audit, sibling, 2, []authoritypg.Subject{
+		{WorkspaceID: binding.WorkspaceID, ProjectID: sibling.ProjectID, ActorID: "custodian-auth", Role: "agent-actor"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	narrowed, err := store.Current(ctx, authority.Scope{WorkspaceID: binding.WorkspaceID, ProjectID: sibling.ProjectID, ActorID: "custodian-auth"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if narrowed.ActorRole != "agent-actor" || narrowed.ActorGrants.HasCapability("artifact-custody.legal-hold") || narrowed.ActorGrants.Clears("internal") {
+		t.Fatalf("the sibling admission carried the other project's grants: %+v", narrowed)
+	}
+	unchanged, err := store.Current(ctx, authority.Scope{WorkspaceID: binding.WorkspaceID, ProjectID: binding.ProjectID, ActorID: "custodian-auth"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.ActorRole != "agent-artifact-custodian" || !unchanged.ActorGrants.HasCapability("artifact-custody.legal-hold") {
+		t.Fatalf("admitting the actor to a sibling project changed its original admission: %+v", unchanged)
+	}
+	// A subject seeded without a project is refused: an admission with no
+	// project is the workspace-wide admission this register no longer has.
+	if _, err := seedAuthority(t, ctx, store, audit, sibling, 3, []authoritypg.Subject{
+		{WorkspaceID: binding.WorkspaceID, ActorID: "custodian-auth", Role: "agent-artifact-custodian"},
+	}); err == nil {
+		t.Fatal("a subject was admitted without naming a project")
+	}
+	// The original project's admissions are untouched by the sibling's
+	// seedings, including the withdrawal pass each of them performs.
+	if _, err := seedAuthority(t, ctx, store, audit, binding, 2, subjects); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// seedAuthority applies one authority document at a generation through the
+// real protected-audit protocol, which is how production seeds.
+func seedAuthority(t *testing.T, ctx context.Context, store *authoritypg.Store, audit authoritypg.SeedAudit, binding authoritypg.Binding, generation uint64, subjects []authoritypg.Subject) (authoritypg.Applied, error) {
+	t.Helper()
+	seeded := binding
+	seeded.Generation = generation
+	return store.Seed(ctx, seeded, subjects, audit, authoritypg.SeedDecision{
+		ActorID:     "operator.seed",
+		Workload:    "agent-service.authority-seeding",
+		Reason:      "authority seeding regression",
+		Ticket:      "CHG-AUTH-0001",
+		Traceparent: "00-" + strings.Repeat("a", 32) + "-" + strings.Repeat("b", 16) + "-01",
+	})
+}
+
+// seedAudit is the real protected audit protocol over the in-memory sink: the
+// seeding path must go through the same record validation, chaining, and
+// receipt handling production uses.
+func seedAudit(t *testing.T) *securityaudit.Service {
+	t.Helper()
+	now := time.Now().UTC()
+	clock, err := securityaudit.NewAuthoritativeClock(fixedSeedSource{now}, fixedSeedTime{now}, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, err := securityaudit.NewService(&securityaudit.MemorySink{}, clock, &securityaudit.MemoryAlerts{}, journal.NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+type fixedSeedTime struct{ value time.Time }
+
+func (t fixedSeedTime) Now() time.Time { return t.value }
+
+type fixedSeedSource struct{ value time.Time }
+
+func (t fixedSeedSource) Now(context.Context) (time.Time, error) { return t.value, nil }
+
+// assertAuthoritySeedingIsMonotonicAtomicAndExact proves the four properties
+// startup seeding has to hold, each of which is a way authority used to come
+// back: an older document is refused rather than applied, an equal one is a
+// no-op, the whole document lands or none of it does, and an admission the
+// document no longer names is withdrawn.
+func assertAuthoritySeedingIsMonotonicAtomicAndExact(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	store, err := authoritypg.New(pool, func() time.Time { return time.Now().UTC() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	audit := seedAudit(t)
+	material := json.RawMessage(`{"synthetic":true}`)
+	bom := json.RawMessage(`{"repository":"anvilkit/contracts","bomDigest":"sha256:` + strings.Repeat("c", 64) + `"}`)
+	binding := authoritypg.Binding{WorkspaceID: "workspace-seed", ProjectID: "project-seed", Definition: material, ContractBOM: bom, Policy: material, Budget: material, Grants: authority.Grants{MaximumRisk: "low"}}
+	subject := func(actor, role string, capabilities []string) authoritypg.Subject {
+		return authoritypg.Subject{WorkspaceID: binding.WorkspaceID, ProjectID: binding.ProjectID, ActorID: actor, Role: role, Grants: authority.ActorAuthority{Capabilities: capabilities, DataClasses: []string{"internal"}}}
+	}
+	custodian := subject("custodian-seed", "agent-artifact-custodian", []string{"artifact-custody.delete"})
+	assistant := subject("assistant-seed", "agent-actor", nil)
+
+	applied, err := seedAuthority(t, ctx, store, audit, binding, 2, []authoritypg.Subject{custodian, assistant})
+	if err != nil || applied.Superseded || applied.Generation != 2 {
+		t.Fatalf("the first seeding did not take: %+v err=%v", applied, err)
+	}
+	// A stale instance holding generation 1 must leave generation 2 alone,
+	// and it must leave it alone entirely: not the material, not one subject.
+	stale := binding
+	stale.Policy = json.RawMessage(`{"synthetic":"stale"}`)
+	older, err := seedAuthority(t, ctx, store, audit, stale, 1, []authoritypg.Subject{subject("attacker-seed", "agent-artifact-custodian", []string{"artifact-custody.delete"})})
+	if err != nil {
+		t.Fatalf("a superseded seeding was reported as a failure: %v", err)
+	}
+	if !older.Superseded || older.Generation != 2 {
+		t.Fatalf("an older authority document was applied over a newer one: %+v", older)
+	}
+	current, err := store.Current(ctx, authority.Scope{WorkspaceID: binding.WorkspaceID, ProjectID: binding.ProjectID, ActorID: "attacker-seed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ActorActive {
+		t.Fatal("a superseded seeding admitted a subject")
+	}
+	// The stored material is normalized jsonb, so what is asserted is that
+	// the superseded document's own material is not what is in force.
+	if strings.Contains(string(current.Policy), "stale") {
+		t.Fatalf("a superseded seeding replaced the material in force: %s", current.Policy)
+	}
+	if standing := seedGeneration(t, ctx, pool, binding); standing != 2 {
+		t.Fatalf("a superseded seeding moved the generation to %d", standing)
+	}
+	// Re-applying the generation in force changes nothing either: seeding on
+	// every restart must not be a way to reinstate what is already there over
+	// something newer, and equal is not newer.
+	equal, err := seedAuthority(t, ctx, store, audit, binding, 2, []authoritypg.Subject{custodian, assistant})
+	if err != nil || !equal.Superseded {
+		t.Fatalf("re-applying the standing generation was not a no-op: %+v err=%v", equal, err)
+	}
+	// A newer document that no longer names the custodian withdraws it. An
+	// upsert alone could only ever add, which is how a removed custodian
+	// stayed a custodian.
+	narrowed, err := seedAuthority(t, ctx, store, audit, binding, 3, []authoritypg.Subject{assistant})
+	if err != nil || narrowed.Superseded || narrowed.Generation != 3 || narrowed.WithdrawnSubjects != 1 {
+		t.Fatalf("the narrowing seeding did not withdraw the admission it dropped: %+v err=%v", narrowed, err)
+	}
+	withdrawn, err := store.Current(ctx, authority.Scope{WorkspaceID: binding.WorkspaceID, ProjectID: binding.ProjectID, ActorID: custodian.ActorID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withdrawn.ActorActive || withdrawn.ActorRole != "" || withdrawn.ActorGrants.HasCapability("artifact-custody.delete") {
+		t.Fatalf("an admission the document no longer names survived: %+v", withdrawn)
+	}
+	kept, err := store.Current(ctx, authority.Scope{WorkspaceID: binding.WorkspaceID, ProjectID: binding.ProjectID, ActorID: assistant.ActorID})
+	if err != nil || !kept.ActorActive || kept.ActorRole != "agent-actor" {
+		t.Fatalf("the admission the document still names was withdrawn: %+v err=%v", kept, err)
+	}
+	// The generation is monotonic in the database, not only in the
+	// application: a writer that gets past the compare-and-set still cannot
+	// lower it.
+	if _, err := pool.Exec(ctx, `UPDATE agent_control.authority_bindings SET seed_generation=1 WHERE workspace_id=$1 AND project_id=$2`, binding.WorkspaceID, binding.ProjectID); err == nil {
+		t.Fatal("the authority seed generation was moved backwards")
+	}
+	// A seeding with no generation, and one whose subjects belong to another
+	// scope, are refused before anything is written.
+	if _, err := seedAuthority(t, ctx, store, audit, binding, 0, []authoritypg.Subject{assistant}); err == nil {
+		t.Fatal("a seeding without a generation was accepted")
+	}
+	foreign := assistant
+	foreign.ProjectID = "project-elsewhere"
+	if _, err := seedAuthority(t, ctx, store, audit, binding, 4, []authoritypg.Subject{foreign}); err == nil {
+		t.Fatal("a seeding admitted a subject outside the scope it binds")
+	}
+	if standing := seedGeneration(t, ctx, pool, binding); standing != 3 {
+		t.Fatalf("a refused seeding moved the generation to %d", standing)
+	}
+	// And a recorded revocation still survives every seeding at every
+	// generation.
+	if err := store.Revoke(ctx, authority.Revocation{WorkspaceID: binding.WorkspaceID, ProjectID: binding.ProjectID, RevocationID: "revocation-seed", Kind: authority.RevokeActor, Subject: assistant.ActorID, Reason: "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := seedAuthority(t, ctx, store, audit, binding, 5, []authoritypg.Subject{assistant}); err != nil {
+		t.Fatal(err)
+	}
+	revoked, err := store.Current(ctx, authority.Scope{WorkspaceID: binding.WorkspaceID, ProjectID: binding.ProjectID, ActorID: assistant.ActorID})
+	if err != nil || revoked.ActorActive {
+		t.Fatalf("a reseed reinstated a revoked actor: %+v err=%v", revoked, err)
+	}
+}
+
+func seedGeneration(t *testing.T, ctx context.Context, pool *pgxpool.Pool, binding authoritypg.Binding) int64 {
+	t.Helper()
+	var generation int64
+	if err := pool.QueryRow(ctx, `SELECT seed_generation FROM agent_control.authority_bindings WHERE workspace_id=$1 AND project_id=$2`, binding.WorkspaceID, binding.ProjectID).Scan(&generation); err != nil {
+		t.Fatal(err)
+	}
+	return generation
 }
 
 // assertDomainRedemptionAcrossProcesses proves the strict domain owner over
@@ -3276,15 +3530,58 @@ func assertDurableToolDispatch(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 }
 
-// persistenceProtectedAudit records nothing: the persistence suite proves the
-// durable artifact stores behave, and the protected audit has its own suite.
-type persistenceProtectedAudit struct{}
+// persistenceProtectedAudit keeps only what the resume contract needs: which
+// decision was authorized under which identity. The persistence suite proves
+// the durable artifact stores behave, and the protected audit's own chaining,
+// receipts, and refusal semantics have their own suite — but a successor
+// finishing an interrupted destruction has to be handed the decision it is
+// adopting, so that much is real here.
+type persistenceProtectedAudit struct {
+	lock      sync.Mutex
+	decisions map[string]securityaudit.Record
+}
 
-func (persistenceProtectedAudit) PrivilegedMutation(ctx context.Context, _ securityaudit.Record, mutation securityaudit.Mutation) error {
+func newPersistenceProtectedAudit() *persistenceProtectedAudit {
+	return &persistenceProtectedAudit{decisions: map[string]securityaudit.Record{}}
+}
+
+// authorize places a decision on the record the way a first process would
+// have, so a test can reproduce the state an interrupted decision leaves.
+func (a *persistenceProtectedAudit) authorize(record securityaudit.Record) {
+	a.lock.Lock()
+	defer a.lock.Unlock()
+	a.decisions[record.ID] = record
+}
+
+func (a *persistenceProtectedAudit) PrivilegedMutation(ctx context.Context, record securityaudit.Record, mutation securityaudit.Mutation) error {
+	a.lock.Lock()
+	if a.decisions == nil {
+		a.decisions = map[string]securityaudit.Record{}
+	}
+	if _, recorded := a.decisions[record.ID]; !recorded {
+		a.decisions[record.ID] = record
+	}
+	a.lock.Unlock()
 	if mutation == nil {
 		return nil
 	}
 	return mutation(ctx)
+}
+
+func (a *persistenceProtectedAudit) ResumeMutation(ctx context.Context, id string, admit securityaudit.Admission, mutation securityaudit.AdoptedMutation) error {
+	if mutation == nil || admit == nil {
+		return nil
+	}
+	a.lock.Lock()
+	record, recorded := a.decisions[id]
+	a.lock.Unlock()
+	if !recorded {
+		return securityaudit.UnrecordedDecision{RecordID: id}
+	}
+	if err := admit(record); err != nil {
+		return err
+	}
+	return mutation(ctx, record)
 }
 
 // A restore isolates the fabric before it repairs anything: the mirrored epoch
@@ -3388,6 +3685,43 @@ func assertIsolatedFabricRefusesDispatch(t *testing.T, ctx context.Context, pool
 	}
 }
 
+// protectedAuditRuntimeLogin creates the login the service connects to the
+// protected audit as, and returns its name and a connection string for it. It
+// is deliberately an ordinary unprivileged login: what it may do to the audit
+// is exactly what the runtime role grants it and nothing else.
+func protectedAuditRuntimeLogin(t *testing.T, ctx context.Context, pool *pgxpool.Pool, databaseURL string) (string, string) {
+	t.Helper()
+	const login = "agent_audit_runtime"
+	const secret = "agent-audit-runtime-secret"
+	if _, err := pool.Exec(ctx, `DO $$ BEGIN CREATE ROLE `+login+` LOGIN PASSWORD '`+secret+`'; EXCEPTION WHEN duplicate_object THEN NULL; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		// The login is cluster-global, so it is withdrawn from this database
+		// and dropped once nothing depends on it. A drop that cannot happen —
+		// another database still granting it something — is not a test
+		// failure.
+		closing, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = pool.Exec(closing, `REVOKE ALL ON SCHEMA agent_protected_audit FROM `+login)
+		_, _ = pool.Exec(closing, `REVOKE `+securityauditpg.RuntimeRole+` FROM `+login)
+		_, _ = pool.Exec(closing, `DROP ROLE IF EXISTS `+login)
+	})
+	var database string
+	if err := pool.QueryRow(ctx, `SELECT current_database()`).Scan(&database); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `GRANT CONNECT ON DATABASE "`+database+`" TO `+login); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.User = url.UserPassword(login, secret)
+	return login, parsed.String()
+}
+
 // The protected audit is what makes a security decision reconstructable after
 // the fact, so it has to hold two properties against a real database: the
 // chain must detect any record that was altered, removed, or inserted, and the
@@ -3398,11 +3732,42 @@ func assertProtectedAuditChain(t *testing.T, ctx context.Context, pool *pgxpool.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sink.EnsureSchema(ctx); err != nil {
+	// The service connects as its own login, distinct from the one that
+	// administers the audit. Everything below is about keeping those two
+	// apart, so the runtime login exists before the schema is established and
+	// the grant is made to it by name.
+	runtimeLogin, runtimeURL := protectedAuditRuntimeLogin(t, ctx, pool, databaseURL)
+	// Nothing has been established yet, so an audit read on this connection
+	// reports exactly that. The service asks the same question at startup and
+	// refuses rather than creating what it finds missing.
+	if err := sink.RequireProvisioned(ctx); err == nil {
+		t.Fatal("an unprovisioned protected audit reported itself ready")
+	}
+	// Provisioning is the one-shot administrative path, run here exactly as
+	// the separate provisioning workload runs it.
+	if err := securityauditpg.Provision(ctx, pool, runtimeLogin, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := sink.Check(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if err := sink.RequireProvisioned(ctx); err != nil {
+		t.Fatalf("a provisioned protected audit did not report itself ready: %v", err)
+	}
+	// A table whose append-only barrier was dropped is not a protected audit,
+	// and the readiness check says so rather than passing on the table's mere
+	// existence.
+	if _, err := pool.Exec(ctx, `DROP TRIGGER protected_audit_is_append_only ON agent_protected_audit.records`); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.RequireProvisioned(ctx); err == nil {
+		t.Fatal("a protected audit with no append-only barrier reported itself ready")
+	}
+	if err := securityauditpg.Provision(ctx, pool, runtimeLogin, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.RequireProvisioned(ctx); err != nil {
+		t.Fatalf("re-provisioning did not restore the protected audit barriers: %v", err)
 	}
 	record := func(id, action string) securityaudit.Record {
 		return securityaudit.Record{
@@ -3487,10 +3852,31 @@ func assertProtectedAuditChain(t *testing.T, ctx context.Context, pool *pgxpool.
 	// the running process has no privilege to rewrite its own audit even if
 	// every trigger above it were removed. A grant widened later is exactly
 	// the change nobody notices, so it is asserted rather than assumed.
+	//
+	// Provision proves this too, on the administrative connection, before the
+	// service is ever started; it is re-asserted here directly so a change
+	// that loosens the grant fails in the place that describes it.
 	if err := sink.VerifyRuntimePrivileges(ctx); err != nil {
 		t.Fatalf("the protected audit runtime role is not least-privileged: %v", err)
 	}
-	runtimePool, err := persistence.OpenPool(ctx, persistence.PoolConfig{URL: databaseURL, Role: securityauditpg.RuntimeRole, Maximum: 2})
+	// The login the service connects as is separate from the one that
+	// administers the audit, is no superuser, and owns neither the schema nor
+	// the table. Without that, every barrier above is something the running
+	// process could remove: the trigger it would have to drop is on a table it
+	// would own.
+	if err := sink.VerifyRuntimeSeparation(ctx, runtimeLogin); err != nil {
+		t.Fatalf("the protected audit runtime login is not separated from its administration: %v", err)
+	}
+	// And the separation is a real check rather than a formality: the
+	// administrative login itself does not pass it.
+	var administrator string
+	if err := pool.QueryRow(ctx, `SELECT current_user`).Scan(&administrator); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.VerifyRuntimeSeparation(ctx, administrator); err == nil {
+		t.Fatal("the administrative login passed the runtime separation check")
+	}
+	runtimePool, err := persistence.OpenPool(ctx, persistence.PoolConfig{URL: runtimeURL, Role: securityauditpg.RuntimeRole, Maximum: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3504,6 +3890,25 @@ func assertProtectedAuditChain(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 	if records, err := runtimeSink.Read(ctx); err != nil || len(records) == 0 {
 		t.Fatalf("the runtime role cannot read its own audit: records=%d err=%v", len(records), err)
+	}
+	// Asked from inside the running connection, about the login underneath the
+	// role rather than the role it is wearing. Wearing a narrow role proves
+	// nothing on its own — RESET ROLE is one statement away — so what is
+	// checked is what the login itself may do.
+	if err := runtimeSink.VerifyRuntimeIsolation(ctx); err != nil {
+		t.Fatalf("the running audit connection is not confined to appending: %v", err)
+	}
+	if _, err := runtimePool.Exec(ctx, `RESET ROLE`); err != nil {
+		t.Fatal(err)
+	}
+	for name, statement := range map[string]string{
+		"rewrite after resetting its role":  `UPDATE agent_protected_audit.records SET record_digest='sha256:'||repeat('f',64)`,
+		"remove after resetting its role":   `DELETE FROM agent_protected_audit.records`,
+		"truncate after resetting its role": `TRUNCATE agent_protected_audit.records`,
+	} {
+		if _, err := runtimePool.Exec(ctx, statement); err == nil {
+			t.Fatalf("the protected audit runtime login could %s the chain", name)
+		}
 	}
 	for name, statement := range map[string]string{
 		"rewrite":  `UPDATE agent_protected_audit.records SET record_digest='sha256:'||repeat('f',64)`,
