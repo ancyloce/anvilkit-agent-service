@@ -378,3 +378,28 @@ func TestConcurrentCustodyDuplicatesDecideOnce(t *testing.T) {
 		t.Fatalf("concurrent duplicates decided %d times, want exactly one", holds)
 	}
 }
+
+// The approved time authority is what a custody decision is stamped and
+// ordered by. When it cannot be read the decision is refused as authority the
+// service cannot presently stand behind — the same answer every other governed
+// mutation gives — rather than reaching the artifact lifecycle as a zero
+// timestamp and coming back to the custodian as a malformed command.
+func TestACustodyDecisionRefusesAnUnreadableClock(t *testing.T) {
+	custodian := &recordingCustodian{}
+	app, receipts := custodyApp(t, custodian)
+	app.WithArtifactCustody(custodian, receipts, func() time.Time { return time.Time{} })
+	raw := custodyBody(CustodyDeleted)
+	err := decideErr(app, custodianClaims(), custodyInput(t, raw, "custody-key"), raw)
+	if !isProblem(err, problem.CodeAuthorityStale) {
+		t.Fatalf("an unreadable clock = %v, want the governed authority refusal", err)
+	}
+	if holds, deletes := custodian.calls(); holds != 0 || deletes != 0 {
+		t.Fatalf("a decision was made on a clock the service could not read: holds=%d deletes=%d", holds, deletes)
+	}
+	// The key was never claimed, so the custodian can use it once the clock is
+	// readable again.
+	app.WithArtifactCustody(custodian, receipts, func() time.Time { return time.Now() })
+	if _, err := app.DecideArtifactCustody(context.Background(), custodianClaims(), custodyInput(t, raw, "custody-key"), raw); err != nil {
+		t.Fatalf("the retry could not reuse its key: %v", err)
+	}
+}

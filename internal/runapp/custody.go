@@ -153,6 +153,16 @@ func (a *App) DecideArtifactCustody(ctx context.Context, claims auth.Claims, inp
 	if err := verifyControlDigest(input.Digest, command); err != nil {
 		return Representation{}, err
 	}
+	// The moment the decision is stamped with is resolved before the key is
+	// claimed. A custody decision is recorded and ordered by the approved time
+	// authority, so it is not one the service may make on a clock it cannot
+	// read — and refusing here is what keeps that outage from reaching the
+	// artifact lifecycle as a zero timestamp and being reported to the
+	// custodian as a malformed command.
+	now := a.custodyNow()
+	if now.IsZero() {
+		return Representation{}, problem.New(problem.CodeAuthorityStale, "")
+	}
 	receipt := CommandReceiptRequest{
 		WorkspaceID: scope.WorkspaceID,
 		ProjectID:   scope.ProjectID,
@@ -188,9 +198,9 @@ func (a *App) DecideArtifactCustody(ctx context.Context, claims auth.Claims, inp
 	var record artifacts.Record
 	switch command.Decision {
 	case CustodyLegalHoldPlaced, CustodyLegalHoldLifted:
-		record, err = a.custodian.SetLegalHold(ctx, scope.WorkspaceID, scope.ProjectID, artifacts.ID(input.ArtifactID), version, command.Decision == CustodyLegalHoldPlaced, custody, a.custodyNow())
+		record, err = a.custodian.SetLegalHold(ctx, scope.WorkspaceID, scope.ProjectID, artifacts.ID(input.ArtifactID), version, command.Decision == CustodyLegalHoldPlaced, custody, now)
 	case CustodyDeleted:
-		record, err = a.custodian.Delete(ctx, scope.WorkspaceID, scope.ProjectID, artifacts.ID(input.ArtifactID), version, custody, a.custodyNow())
+		record, err = a.custodian.Delete(ctx, scope.WorkspaceID, scope.ProjectID, artifacts.ID(input.ArtifactID), version, custody, now)
 	default:
 		// The canonical contract admits only the governed decisions, so this
 		// is unreachable through the contract guard above. It is here because
