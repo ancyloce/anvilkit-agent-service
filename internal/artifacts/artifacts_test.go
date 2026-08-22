@@ -96,9 +96,9 @@ func custodianAuthority() authority.Current {
 		Definition: material, ContractBOM: material, Policy: material, Budget: material,
 		WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true,
 		ActorRole: authority.RoleArtifactCustodian,
-		Grants: authority.Grants{
-			AllowedCapabilities: []string{string(LegalHoldCapability), string(DeleteCapability)},
-			DataClasses:         []string{CustodyDataClass},
+		ActorGrants: authority.ActorAuthority{
+			Capabilities: []string{string(LegalHoldCapability), string(DeleteCapability)},
+			DataClasses:  []string{CustodyDataClass},
 		},
 	}
 }
@@ -680,8 +680,8 @@ func TestArtifactCustodyRequiresItsOwnRoleAndCapability(t *testing.T) {
 			service, _, _ := serviceWithAuthority(t, authority.Current{
 				Definition: material, ContractBOM: material, Policy: material, Budget: material,
 				WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true,
-				ActorRole: testCase.role,
-				Grants:    authority.Grants{AllowedCapabilities: testCase.capabilities, DataClasses: []string{CustodyDataClass}},
+				ActorRole:   testCase.role,
+				ActorGrants: authority.ActorAuthority{Capabilities: testCase.capabilities, DataClasses: []string{CustodyDataClass}},
 			})
 			held := validCreate("artifact-custody-hold", artifactNow)
 			holdRecord, err := service.Create(ctx, held)
@@ -902,9 +902,9 @@ func TestArtifactCustodyRequiresClearanceAndUnrevokedAuthority(t *testing.T) {
 			Definition: material, ContractBOM: material, Policy: material, Budget: material,
 			WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true,
 			ActorRole: authority.RoleArtifactCustodian,
-			Grants: authority.Grants{
-				AllowedCapabilities: []string{string(LegalHoldCapability), string(DeleteCapability)},
-				DataClasses:         []string{CustodyDataClass},
+			ActorGrants: authority.ActorAuthority{
+				Capabilities: []string{string(LegalHoldCapability), string(DeleteCapability)},
+				DataClasses:  []string{CustodyDataClass},
 			},
 		}
 		mutate(&current)
@@ -916,10 +916,18 @@ func TestArtifactCustodyRequiresClearanceAndUnrevokedAuthority(t *testing.T) {
 		allowed bool
 	}{
 		{name: "a custodian cleared for artifact content", mutate: func(*authority.Current) {}, allowed: true},
-		{name: "a custodian cleared above artifact content", mutate: func(c *authority.Current) { c.Grants.DataClasses = []string{"restricted"} }, allowed: true},
-		{name: "a custodian with no clearance at all", mutate: func(c *authority.Current) { c.Grants.DataClasses = nil }},
-		{name: "a custodian cleared only for public material", mutate: func(c *authority.Current) { c.Grants.DataClasses = []string{"public"} }},
-		{name: "a custodian holding an unregistered clearance", mutate: func(c *authority.Current) { c.Grants.DataClasses = []string{"unbounded"} }},
+		{name: "a custodian cleared above artifact content", mutate: func(c *authority.Current) { c.ActorGrants.DataClasses = []string{"restricted"} }, allowed: true},
+		{name: "a custodian with no clearance at all", mutate: func(c *authority.Current) { c.ActorGrants.DataClasses = nil }},
+		{name: "a custodian cleared only for public material", mutate: func(c *authority.Current) { c.ActorGrants.DataClasses = []string{"public"} }},
+		{name: "a custodian holding an unregistered clearance", mutate: func(c *authority.Current) { c.ActorGrants.DataClasses = []string{"unbounded"} }},
+		{name: "a custodian whose clearance is only the scope's shared grant", mutate: func(c *authority.Current) {
+			c.ActorGrants.DataClasses = nil
+			c.Grants.DataClasses = []string{"restricted"}
+		}},
+		{name: "a custodian whose capability is only the scope's shared grant", mutate: func(c *authority.Current) {
+			c.ActorGrants.Capabilities = nil
+			c.Grants.AllowedCapabilities = []string{string(LegalHoldCapability), string(DeleteCapability)}
+		}},
 		{name: "a custodian whose authority over this artifact was revoked", mutate: func(c *authority.Current) { c.RevokedTargets = []string{"artifact-axes"} }},
 		{name: "a custodian whose scope was deactivated", mutate: func(c *authority.Current) { c.WorkspaceActive = false }},
 		{name: "a custodian whose governance material is incomplete", mutate: func(c *authority.Current) { c.Policy = nil }},
@@ -1097,3 +1105,77 @@ func TestAnUnacknowledgedCustodyRefusalConvergesOnItsOriginalResult(t *testing.T
 }
 
 func errorOf(_ Record, err error) error { return err }
+
+// An actor that may not act on artifacts learns nothing about which artifacts
+// exist. Authority is proved before the record is read, so a caller without it
+// receives the same refusal for an artifact that is really there and for an
+// identity that was never issued — the surface cannot be used to enumerate
+// what a workspace holds.
+func TestArtifactAuthorityIsProvedBeforeExistence(t *testing.T) {
+	ctx := context.Background()
+	material := json.RawMessage(`{"synthetic":true}`)
+	// A subject the register admits, in no custody role and with nothing bound
+	// to it: exactly the actor that runs agents and produces artifacts.
+	ordinary := authority.Current{
+		Definition: material, ContractBOM: material, Policy: material, Budget: material,
+		WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true,
+		ActorRole: "agent-actor",
+	}
+	service, _, _ := serviceWithAuthority(t, ordinary)
+	input := validCreate("artifact-oracle", artifactNow)
+	record, err := service.Create(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	absent := ID("artifact-never-issued")
+
+	answers := func(id ID, version uint64) []string {
+		t.Helper()
+		var codes []string
+		for _, err := range []error{
+			errorOf(service.SetLegalHold(ctx, input.WorkspaceID, input.ProjectID, id, version, true, testCustody("probe"), artifactNow)),
+			errorOf(service.Delete(ctx, input.WorkspaceID, input.ProjectID, id, version, testCustody("probe"), artifactNow)),
+		} {
+			var details problem.Details
+			if !errors.As(err, &details) {
+				t.Fatalf("err = %v, want governed problem details", err)
+			}
+			codes = append(codes, details.Code)
+		}
+		return codes
+	}
+	present, missing := answers(record.ID, record.Version), answers(absent, 1)
+	for index := range present {
+		if present[index] != string(problem.CodeArtifactAccessDenied) || missing[index] != present[index] {
+			t.Fatalf("existing artifact answered %q and an absent one %q: the refusal discloses existence", present[index], missing[index])
+		}
+	}
+
+	// Read access answers the same way: an actor whose authority no longer
+	// stands cannot tell a live artifact from an imaginary one.
+	revoked := ordinary
+	revoked.ActorActive = false
+	denied, _, _ := serviceWithAuthority(t, revoked)
+	if _, err := denied.Create(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	var live, imaginary problem.Details
+	if _, err := denied.Grant(ctx, input.WorkspaceID, input.ProjectID, record.ID, ReadAccess, "actor-01", artifactNow); !errors.As(err, &live) {
+		t.Fatalf("grant err = %v, want governed problem details", err)
+	}
+	if _, err := denied.Grant(ctx, input.WorkspaceID, input.ProjectID, absent, ReadAccess, "actor-01", artifactNow); !errors.As(err, &imaginary) {
+		t.Fatalf("grant err = %v, want governed problem details", err)
+	}
+	if live.Code != string(problem.CodeArtifactAccessDenied) || imaginary.Code != live.Code {
+		t.Fatalf("grant answered %q for a live artifact and %q for an absent one", live.Code, imaginary.Code)
+	}
+	if _, err := denied.UseGrant(ctx, input.WorkspaceID, input.ProjectID, "actor-01", Grant{ArtifactID: record.ID, ActorID: "actor-01", URL: "u", ExpiresAt: artifactNow.Add(time.Minute)}, artifactNow); !errors.As(err, &live) {
+		t.Fatalf("use err = %v, want governed problem details", err)
+	}
+	if _, err := denied.UseGrant(ctx, input.WorkspaceID, input.ProjectID, "actor-01", Grant{ArtifactID: absent, ActorID: "actor-01", URL: "u", ExpiresAt: artifactNow.Add(time.Minute)}, artifactNow); !errors.As(err, &imaginary) {
+		t.Fatalf("use err = %v, want governed problem details", err)
+	}
+	if live.Code != string(problem.CodeArtifactAccessDenied) || imaginary.Code != live.Code {
+		t.Fatalf("grant use answered %q for a live artifact and %q for an absent one", live.Code, imaginary.Code)
+	}
+}

@@ -249,6 +249,11 @@ func (s *Service) auditedChange(ctx context.Context, identity, action string, va
 // permittedByAuthority re-reads the one current-authority source for the
 // acting scope. Artifact access is an external disclosure: issuing or using a
 // grant under revoked or incomplete authority fails closed.
+//
+// Callers prove this before they read the artifact record, not after. An actor
+// that may not act on artifacts at all learns the same thing whether the
+// artifact it named exists or not, so the surface cannot be used to find out
+// which artifact identities are real.
 func (s *Service) permittedByAuthority(ctx context.Context, workspace, project, actor string) error {
 	current, err := s.authority.Current(ctx, authority.Scope{WorkspaceID: workspace, ProjectID: project, ActorID: actor})
 	if err != nil || !current.MaterialComplete() || !current.Active() {
@@ -258,7 +263,9 @@ func (s *Service) permittedByAuthority(ctx context.Context, workspace, project, 
 }
 
 // permittedToChangeCustody authorizes one custody operation — the legal hold,
-// or destruction — against current authority.
+// or destruction — against current authority. Like every other artifact
+// authorization it is proved before the record is read, so an unauthorized
+// caller cannot tell an artifact that exists from one that does not.
 //
 // An active subject is not enough, and that is the whole point. Everything
 // that runs in a workspace runs as an active subject; if that alone admitted a
@@ -267,8 +274,9 @@ func (s *Service) permittedByAuthority(ctx context.Context, workspace, project, 
 // the caller was logged in. Two further facts are required, and both are
 // authority's own rather than the caller's: the role the scope's subject
 // register admits this actor under, and the capability for this exact
-// operation in the grants bound to the scope. The caller names the actor it is
-// acting as; what that actor may do is not the caller's to assert.
+// operation, both bound to this actor by that register rather than shared with
+// everything else in the scope. The caller names the actor it is acting as;
+// what that actor may do is not the caller's to assert.
 func (s *Service) permittedToChangeCustody(ctx context.Context, workspace, project, actor string, id ID, capability CustodyCapability) error {
 	if workspace == "" || project == "" || actor == "" || len(actor) > 128 || id == "" {
 		return problem.New(problem.CodeArtifactAccessDenied, "")
@@ -280,7 +288,12 @@ func (s *Service) permittedToChangeCustody(ctx context.Context, workspace, proje
 	if !current.HasRole(authority.RoleArtifactCustodian) {
 		return problem.New(problem.CodeArtifactAccessDenied, "")
 	}
-	if !current.Grants.HasCapability(string(capability)) {
+	// The capability and the clearance are the actor's own, read from the
+	// scope's subject register. They are deliberately not the scope's dispatch
+	// grants: those are shared by every actor in the workspace, so a custody
+	// capability held there would be held by all of them at once, with only
+	// the admitted role standing between any of them and the artifact.
+	if !current.ActorGrants.HasCapability(string(capability)) {
 		return problem.New(problem.CodeArtifactAccessDenied, "")
 	}
 	// Authority over one artifact can be withdrawn without deactivating the
@@ -291,11 +304,11 @@ func (s *Service) permittedToChangeCustody(ctx context.Context, workspace, proje
 	}
 	// Artifact bytes are tenant content, and custody is a decision about that
 	// content: a hold freezes it in place and a deletion destroys it. So the
-	// clearance the scope grants the actor has to reach the classification
-	// artifact content is governed under. A custodian cleared only for public
-	// or internal material holds the role and the capability and still cannot
-	// decide the fate of tenant content.
-	if !clearsDataClass(current.Grants.DataClasses, CustodyDataClass) {
+	// clearance the register binds to this actor has to reach the
+	// classification artifact content is governed under. An actor cleared only
+	// for public material, or for nothing at all, holds the role and the
+	// capability and still cannot decide the fate of tenant content.
+	if !current.ActorGrants.Clears(CustodyDataClass) {
 		return problem.New(problem.CodeArtifactAccessDenied, "")
 	}
 	return nil
@@ -309,39 +322,6 @@ func (s *Service) permittedToChangeCustody(ctx context.Context, workspace, proje
 // or for nothing at all, holds no clearance over artifact content whatever
 // role and capability the register grants it.
 const CustodyDataClass = "internal"
-
-// clearsDataClass reports whether any classification the scope grants reaches
-// the one required. An unregistered value grants nothing: a clearance the
-// governed vocabulary does not name is not a clearance.
-func clearsDataClass(granted []string, required string) bool {
-	needed := classificationRank(required)
-	if needed == 0 {
-		return false
-	}
-	for _, class := range granted {
-		if classificationRank(class) >= needed {
-			return true
-		}
-	}
-	return false
-}
-
-// classificationRank orders the governed data-class registry from least to
-// most sensitive. An unregistered classification ranks nowhere.
-func classificationRank(class string) int {
-	switch class {
-	case "public":
-		return 1
-	case "internal":
-		return 2
-	case "confidential":
-		return 3
-	case "restricted":
-		return 4
-	default:
-		return 0
-	}
-}
 
 // ETag renders the strong resource revision this record stands at. A custodian
 // pins it on the decision they make, so the decision names the exact revision
@@ -440,6 +420,12 @@ func (s *Service) Transition(ctx context.Context, workspace, project string, id 
 	return s.store.Update(ctx, value, expected)
 }
 func (s *Service) Grant(ctx context.Context, workspace, project string, id ID, purpose Purpose, actor string, now time.Time) (Grant, error) {
+	if actor == "" || len(actor) > 128 || now.IsZero() {
+		return Grant{}, problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	if err := s.permittedByAuthority(ctx, workspace, project, actor); err != nil {
+		return Grant{}, err
+	}
 	value, ok, err := s.store.Get(ctx, workspace, project, id)
 	if err != nil {
 		return Grant{}, fmt.Errorf("read artifact record: %w", err)
@@ -447,11 +433,8 @@ func (s *Service) Grant(ctx context.Context, workspace, project string, id ID, p
 	if !ok {
 		return Grant{}, problem.New(problem.CodeResourceNotFound, "")
 	}
-	if !eligible(value.State, purpose) || actor == "" || len(actor) > 128 || now.IsZero() || now.Before(value.CreatedAt) {
+	if !eligible(value.State, purpose) || now.Before(value.CreatedAt) {
 		return Grant{}, problem.New(problem.CodeArtifactAccessDenied, "")
-	}
-	if err := s.permittedByAuthority(ctx, workspace, project, actor); err != nil {
-		return Grant{}, err
 	}
 	grant := Grant{ArtifactID: value.ID, Digest: value.Digest, SecurityGeneration: value.SecurityGeneration, Purpose: purpose, ActorID: actor, ExpiresAt: now.Add(s.grantTTL)}
 	url, err := s.reader.SignRead(ctx, value, grant, s.grantTTL)
@@ -472,6 +455,12 @@ func (s *Service) Grant(ctx context.Context, workspace, project string, id ID, p
 // durable audited record and revocation state; and the current authority for
 // the acting scope. Any failed axis denies access.
 func (s *Service) UseGrant(ctx context.Context, workspace, project, actor string, grant Grant, now time.Time) (Record, error) {
+	if actor == "" || actor != grant.ActorID || now.IsZero() || !now.Before(grant.ExpiresAt) || grant.URL == "" {
+		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	if err := s.permittedByAuthority(ctx, workspace, project, actor); err != nil {
+		return Record{}, err
+	}
 	value, ok, err := s.store.Get(ctx, workspace, project, grant.ArtifactID)
 	if err != nil {
 		return Record{}, fmt.Errorf("read artifact record: %w", err)
@@ -479,17 +468,11 @@ func (s *Service) UseGrant(ctx context.Context, workspace, project, actor string
 	if !ok {
 		return Record{}, problem.New(problem.CodeResourceNotFound, "")
 	}
-	if actor == "" || actor != grant.ActorID || now.IsZero() || !now.Before(grant.ExpiresAt) || now.Before(value.CreatedAt) || value.Digest != grant.Digest || value.SecurityGeneration != grant.SecurityGeneration || !eligible(value.State, grant.Purpose) {
-		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
-	}
-	if grant.URL == "" {
+	if now.Before(value.CreatedAt) || value.Digest != grant.Digest || value.SecurityGeneration != grant.SecurityGeneration || !eligible(value.State, grant.Purpose) {
 		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
 	}
 	if err := s.reader.Verify(ctx, value, grant); err != nil {
 		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
-	}
-	if err := s.permittedByAuthority(ctx, workspace, project, actor); err != nil {
-		return Record{}, err
 	}
 	return value, nil
 }
@@ -508,15 +491,15 @@ func (s *Service) SetLegalHold(ctx context.Context, workspace, project string, i
 	if !custody.valid() || now.IsZero() || expected == 0 {
 		return Record{}, problem.New(problem.CodeRequestInvalid, "")
 	}
+	if err := s.permittedToChangeCustody(ctx, workspace, project, custody.ActorID, id, LegalHoldCapability); err != nil {
+		return Record{}, err
+	}
 	value, ok, err := s.store.Get(ctx, workspace, project, id)
 	if err != nil {
 		return Record{}, fmt.Errorf("read artifact record: %w", err)
 	}
 	if !ok {
 		return Record{}, problem.New(problem.CodeResourceNotFound, "")
-	}
-	if err := s.permittedToChangeCustody(ctx, workspace, project, custody.ActorID, id, LegalHoldCapability); err != nil {
-		return Record{}, err
 	}
 	if value.DeletionClaim != "" {
 		// This artifact's destruction is already durably owned, which means it
@@ -577,15 +560,15 @@ func (s *Service) Delete(ctx context.Context, workspace, project string, id ID, 
 	if !custody.valid() || now.IsZero() {
 		return Record{}, problem.New(problem.CodeRequestInvalid, "")
 	}
+	if err := s.permittedToChangeCustody(ctx, workspace, project, custody.ActorID, id, DeleteCapability); err != nil {
+		return Record{}, err
+	}
 	value, ok, err := s.store.Get(ctx, workspace, project, id)
 	if err != nil {
 		return Record{}, fmt.Errorf("read artifact record: %w", err)
 	}
 	if !ok {
 		return Record{}, problem.New(problem.CodeResourceNotFound, "")
-	}
-	if err := s.permittedToChangeCustody(ctx, workspace, project, custody.ActorID, id, DeleteCapability); err != nil {
-		return Record{}, err
 	}
 	own := decisionIdentity("artifact-deleted", workspace, project, id, expected)
 	if value.State == Deleted && value.DeletionClaim != own {
