@@ -1,0 +1,62 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/decide-artifact-custody-request.schema.json",
+  "title": "DecideArtifactCustodyRequest contract",
+  "description": "Intent-only artifact custody command. It states which custody decision an authorized custodian made about one immutable artifact: placing or lifting the legal hold that decides whether the artifact may be destroyed, or destroying it. The basis is a bounded evidence reference rather than free-form prose, and the ticket names the change record the decision answers to, so the protected audit record can be reconstructed without ever carrying custodian-authored content. No identity is carried on the wire: the acting custodian, the workspace, and the project are derived by Agent Service from the verified request authority and the current authority register.",
+  "type": "object",
+  "minProperties": 5,
+  "maxProperties": 5,
+  "required": [
+    "kind",
+    "artifactId",
+    "decision",
+    "basis",
+    "ticket"
+  ],
+  "properties": {
+    "kind": {
+      "const": "DecideArtifactCustodyRequest"
+    },
+    "artifactId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "decision": {
+      "enum": [
+        "legal-hold-placed",
+        "legal-hold-lifted",
+        "deleted"
+      ]
+    },
+    "basis": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 256,
+      "pattern": "^anvilkit://evidence/[a-z0-9][a-z0-9-]{1,31}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "ticket": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "DecideArtifactCustodyRequest",
+    "componentName": "anvilkit.contract.schema.decide-artifact-custody-request",
+    "owner": "Agent Service Metadata owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/artifactId",
+      "/decision",
+      "/basis",
+      "/ticket"
+    ],
+    "maximumSerializedBytes": 4096,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json"
+    ]
+  }
+}

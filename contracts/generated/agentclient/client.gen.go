@@ -157,6 +157,15 @@ type CreateAgentRunRequest struct {
 	Target    SharedPrimitivesTargetReference   `json:"target"`
 }
 
+// DecideArtifactCustodyRequest Intent-only artifact custody command. It states which custody decision an authorized custodian made about one immutable artifact: placing or lifting the legal hold that decides whether the artifact may be destroyed, or destroying it. The basis is a bounded evidence reference rather than free-form prose, and the ticket names the change record the decision answers to, so the protected audit record can be reconstructed without ever carrying custodian-authored content. No identity is carried on the wire: the acting custodian, the workspace, and the project are derived by Agent Service from the verified request authority and the current authority register.
+type DecideArtifactCustodyRequest struct {
+	ArtifactId string      `json:"artifactId"`
+	Basis      string      `json:"basis"`
+	Decision   interface{} `json:"decision"`
+	Kind       interface{} `json:"kind"`
+	Ticket     string      `json:"ticket"`
+}
+
 // IssueApplyAuthorizationRequest Intent-only Apply Authorization issuance command governed by ADR-021. Issuer, subject, audience, key identity, times, final digest bindings, and replay protection are server-owned and structurally absent from this command.
 type IssueApplyAuthorizationRequest struct {
 	ActionDigest      SharedPrimitivesDigest `json:"actionDigest"`
@@ -344,6 +353,9 @@ type IdempotencyKey = string
 // IfMatch defines model for IfMatch.
 type IfMatch = string
 
+// IfMatchArtifact defines model for IfMatchArtifact.
+type IfMatchArtifact = string
+
 // OperationId defines model for OperationId.
 type OperationId = string
 
@@ -469,6 +481,16 @@ type GetAgentArtifactParams struct {
 	Traceparent Traceparent `json:"traceparent"`
 }
 
+// DecideAgentArtifactCustodyParams defines parameters for DecideAgentArtifactCustody.
+type DecideAgentArtifactCustodyParams struct {
+	IdempotencyKey         IdempotencyKey `json:"Idempotency-Key"`
+	XAnvilKitRequestDigest RequestDigest  `json:"X-AnvilKit-Request-Digest"`
+	Traceparent            Traceparent    `json:"traceparent"`
+
+	// IfMatch Strong ETag "<artifactId>:v<resourceRevision>". Missing returns 428; stale returns 412.
+	IfMatch IfMatchArtifact `json:"If-Match"`
+}
+
 // CreateAgentRunJSONRequestBody defines body for CreateAgentRun for application/json ContentType.
 type CreateAgentRunJSONRequestBody = CreateAgentRunRequest
 
@@ -483,6 +505,9 @@ type ResolveAgentDomainOperationJSONRequestBody = ResolveDomainOperationRequest
 
 // RespondToAgentInputJSONRequestBody defines body for RespondToAgentInput for application/json ContentType.
 type RespondToAgentInputJSONRequestBody = SubmitInputResponseRequest
+
+// DecideAgentArtifactCustodyJSONRequestBody defines body for DecideAgentArtifactCustody for application/json ContentType.
+type DecideAgentArtifactCustodyJSONRequestBody = DecideArtifactCustodyRequest
 
 // RequestEditorFn is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -671,6 +696,24 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /workspaces/{workspaceId}/artifacts/{artifactId} (the `GetAgentArtifact` operationId).
 	GetAgentArtifact(ctx context.Context, workspaceId WorkspaceId, artifactId ArtifactId, params *GetAgentArtifactParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DecideAgentArtifactCustodyWithBody Record the audited custody decision an authorized custodian made about one immutable artifact.
+	//
+	// Artifact custody is the authority to decide whether an immutable artifact survives: placing or lifting the legal hold that makes it undeletable, and destroying it. The acting custodian is derived from the verified request authority and is never carried on the wire, and neither is the workspace or project the decision is made in — the command states what is being decided, never who decides it or where. Agent Service re-reads current authority on every call and requires the caller to be admitted under the artifact-custodian role in this workspace and project, to hold the custody capability for this exact operation, to hold a clearance for the data class artifact content is governed under, and to hold authority over this artifact that has not been revoked. Every decision is written to the protected audit before anything is changed and again after, so a decision that cannot be audited is not made at all. If-Match pins the artifact revision the custodian observed, which is what the decision identity is built from: a retry converges on the outcome that revision already produced rather than opening a second decision over it.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /workspaces/{workspaceId}/artifacts/{artifactId}/custody (the `DecideAgentArtifactCustody` operationId).
+	DecideAgentArtifactCustodyWithBody(ctx context.Context, workspaceId WorkspaceId, artifactId ArtifactId, params *DecideAgentArtifactCustodyParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DecideAgentArtifactCustody Record the audited custody decision an authorized custodian made about one immutable artifact.
+	//
+	// Artifact custody is the authority to decide whether an immutable artifact survives: placing or lifting the legal hold that makes it undeletable, and destroying it. The acting custodian is derived from the verified request authority and is never carried on the wire, and neither is the workspace or project the decision is made in — the command states what is being decided, never who decides it or where. Agent Service re-reads current authority on every call and requires the caller to be admitted under the artifact-custodian role in this workspace and project, to hold the custody capability for this exact operation, to hold a clearance for the data class artifact content is governed under, and to hold authority over this artifact that has not been revoked. Every decision is written to the protected audit before anything is changed and again after, so a decision that cannot be audited is not made at all. If-Match pins the artifact revision the custodian observed, which is what the decision identity is built from: a retry converges on the outcome that revision already produced rather than opening a second decision over it.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /workspaces/{workspaceId}/artifacts/{artifactId}/custody (the `DecideAgentArtifactCustody` operationId).
+	DecideAgentArtifactCustody(ctx context.Context, workspaceId WorkspaceId, artifactId ArtifactId, params *DecideAgentArtifactCustodyParams, body DecideAgentArtifactCustodyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 // ListAgentRuns List workspace runs with bounded pagination.
@@ -957,6 +1000,44 @@ func (c *Client) GetAgentRunSnapshot(ctx context.Context, workspaceId WorkspaceI
 // Corresponds with GET /workspaces/{workspaceId}/artifacts/{artifactId} (the `GetAgentArtifact` operationId).
 func (c *Client) GetAgentArtifact(ctx context.Context, workspaceId WorkspaceId, artifactId ArtifactId, params *GetAgentArtifactParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetAgentArtifactRequest(c.Server, workspaceId, artifactId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// DecideAgentArtifactCustodyWithBody Record the audited custody decision an authorized custodian made about one immutable artifact.
+//
+// Artifact custody is the authority to decide whether an immutable artifact survives: placing or lifting the legal hold that makes it undeletable, and destroying it. The acting custodian is derived from the verified request authority and is never carried on the wire, and neither is the workspace or project the decision is made in — the command states what is being decided, never who decides it or where. Agent Service re-reads current authority on every call and requires the caller to be admitted under the artifact-custodian role in this workspace and project, to hold the custody capability for this exact operation, to hold a clearance for the data class artifact content is governed under, and to hold authority over this artifact that has not been revoked. Every decision is written to the protected audit before anything is changed and again after, so a decision that cannot be audited is not made at all. If-Match pins the artifact revision the custodian observed, which is what the decision identity is built from: a retry converges on the outcome that revision already produced rather than opening a second decision over it.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /workspaces/{workspaceId}/artifacts/{artifactId}/custody (the `DecideAgentArtifactCustody` operationId).
+func (c *Client) DecideAgentArtifactCustodyWithBody(ctx context.Context, workspaceId WorkspaceId, artifactId ArtifactId, params *DecideAgentArtifactCustodyParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDecideAgentArtifactCustodyRequestWithBody(c.Server, workspaceId, artifactId, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// DecideAgentArtifactCustody Record the audited custody decision an authorized custodian made about one immutable artifact.
+//
+// Artifact custody is the authority to decide whether an immutable artifact survives: placing or lifting the legal hold that makes it undeletable, and destroying it. The acting custodian is derived from the verified request authority and is never carried on the wire, and neither is the workspace or project the decision is made in — the command states what is being decided, never who decides it or where. Agent Service re-reads current authority on every call and requires the caller to be admitted under the artifact-custodian role in this workspace and project, to hold the custody capability for this exact operation, to hold a clearance for the data class artifact content is governed under, and to hold authority over this artifact that has not been revoked. Every decision is written to the protected audit before anything is changed and again after, so a decision that cannot be audited is not made at all. If-Match pins the artifact revision the custodian observed, which is what the decision identity is built from: a retry converges on the outcome that revision already produced rather than opening a second decision over it.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /workspaces/{workspaceId}/artifacts/{artifactId}/custody (the `DecideAgentArtifactCustody` operationId).
+func (c *Client) DecideAgentArtifactCustody(ctx context.Context, workspaceId WorkspaceId, artifactId ArtifactId, params *DecideAgentArtifactCustodyParams, body DecideAgentArtifactCustodyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDecideAgentArtifactCustodyRequest(c.Server, workspaceId, artifactId, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1998,6 +2079,100 @@ func NewGetAgentArtifactRequest(server string, workspaceId WorkspaceId, artifact
 	return req, nil
 }
 
+// NewDecideAgentArtifactCustodyRequest calls the generic DecideAgentArtifactCustody builder with application/json body
+func NewDecideAgentArtifactCustodyRequest(server string, workspaceId WorkspaceId, artifactId ArtifactId, params *DecideAgentArtifactCustodyParams, body DecideAgentArtifactCustodyJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewDecideAgentArtifactCustodyRequestWithBody(server, workspaceId, artifactId, params, "application/json", bodyReader)
+}
+
+// NewDecideAgentArtifactCustodyRequestWithBody constructs an http.Request for the DecideAgentArtifactCustody method, with any body, and a specified content type
+func NewDecideAgentArtifactCustodyRequestWithBody(server string, workspaceId WorkspaceId, artifactId ArtifactId, params *DecideAgentArtifactCustodyParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "workspaceId", workspaceId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "artifactId", artifactId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/workspaces/%s/artifacts/%s/custody", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "Idempotency-Key", params.IdempotencyKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("Idempotency-Key", headerParam0)
+
+		var headerParam1 string
+
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "X-AnvilKit-Request-Digest", params.XAnvilKitRequestDigest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-AnvilKit-Request-Digest", headerParam1)
+
+		var headerParam2 string
+
+		headerParam2, err = runtime.StyleParamWithOptions("simple", false, "traceparent", params.Traceparent, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("traceparent", headerParam2)
+
+		var headerParam3 string
+
+		headerParam3, err = runtime.StyleParamWithOptions("simple", false, "If-Match", params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("If-Match", headerParam3)
+
+	}
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -2171,6 +2346,24 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /workspaces/{workspaceId}/artifacts/{artifactId} (the `GetAgentArtifact` operationId).
 	GetAgentArtifactWithResponse(ctx context.Context, workspaceId WorkspaceId, artifactId ArtifactId, params *GetAgentArtifactParams, reqEditors ...RequestEditorFn) (*GetAgentArtifactResponse, error)
+
+	// DecideAgentArtifactCustodyWithBodyWithResponse Record the audited custody decision an authorized custodian made about one immutable artifact.
+	//
+	// Artifact custody is the authority to decide whether an immutable artifact survives: placing or lifting the legal hold that makes it undeletable, and destroying it. The acting custodian is derived from the verified request authority and is never carried on the wire, and neither is the workspace or project the decision is made in — the command states what is being decided, never who decides it or where. Agent Service re-reads current authority on every call and requires the caller to be admitted under the artifact-custodian role in this workspace and project, to hold the custody capability for this exact operation, to hold a clearance for the data class artifact content is governed under, and to hold authority over this artifact that has not been revoked. Every decision is written to the protected audit before anything is changed and again after, so a decision that cannot be audited is not made at all. If-Match pins the artifact revision the custodian observed, which is what the decision identity is built from: a retry converges on the outcome that revision already produced rather than opening a second decision over it.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /workspaces/{workspaceId}/artifacts/{artifactId}/custody (the `DecideAgentArtifactCustody` operationId).
+	DecideAgentArtifactCustodyWithBodyWithResponse(ctx context.Context, workspaceId WorkspaceId, artifactId ArtifactId, params *DecideAgentArtifactCustodyParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DecideAgentArtifactCustodyResponse, error)
+
+	// DecideAgentArtifactCustodyWithResponse Record the audited custody decision an authorized custodian made about one immutable artifact.
+	//
+	// Artifact custody is the authority to decide whether an immutable artifact survives: placing or lifting the legal hold that makes it undeletable, and destroying it. The acting custodian is derived from the verified request authority and is never carried on the wire, and neither is the workspace or project the decision is made in — the command states what is being decided, never who decides it or where. Agent Service re-reads current authority on every call and requires the caller to be admitted under the artifact-custodian role in this workspace and project, to hold the custody capability for this exact operation, to hold a clearance for the data class artifact content is governed under, and to hold authority over this artifact that has not been revoked. Every decision is written to the protected audit before anything is changed and again after, so a decision that cannot be audited is not made at all. If-Match pins the artifact revision the custodian observed, which is what the decision identity is built from: a retry converges on the outcome that revision already produced rather than opening a second decision over it.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /workspaces/{workspaceId}/artifacts/{artifactId}/custody (the `DecideAgentArtifactCustody` operationId).
+	DecideAgentArtifactCustodyWithResponse(ctx context.Context, workspaceId WorkspaceId, artifactId ArtifactId, params *DecideAgentArtifactCustodyParams, body DecideAgentArtifactCustodyJSONRequestBody, reqEditors ...RequestEditorFn) (*DecideAgentArtifactCustodyResponse, error)
 }
 
 type ListAgentRunsResponse struct {
@@ -3408,6 +3601,112 @@ func (r GetAgentArtifactResponse) ContentType() string {
 	return ""
 }
 
+// DecideAgentArtifactCustodyResponse204Headers the declared response headers of an HTTP 204 response for DecideAgentArtifactCustody
+type DecideAgentArtifactCustodyResponse204Headers struct {
+	ETag                   *string
+	IdempotencyReplayed    *bool
+	XAnvilKitRequestDigest *string
+}
+
+type DecideAgentArtifactCustodyResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *ProblemDetails
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *ProblemDetails
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *ProblemDetails
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *ProblemDetails
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *ProblemDetails
+	// ApplicationproblemJSON412 the response for an HTTP 412 `application/problem+json` response
+	ApplicationproblemJSON412 *ProblemDetails
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *ProblemDetails
+	// ApplicationproblemJSON428 the response for an HTTP 428 `application/problem+json` response
+	ApplicationproblemJSON428 *ProblemDetails
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *ProblemDetails
+	// Headers204 the parsed response headers for an HTTP 204 response
+	Headers204 *DecideAgentArtifactCustodyResponse204Headers
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r DecideAgentArtifactCustodyResponse) GetApplicationproblemJSON400() *ProblemDetails {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r DecideAgentArtifactCustodyResponse) GetApplicationproblemJSON401() *ProblemDetails {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r DecideAgentArtifactCustodyResponse) GetApplicationproblemJSON403() *ProblemDetails {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r DecideAgentArtifactCustodyResponse) GetApplicationproblemJSON404() *ProblemDetails {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r DecideAgentArtifactCustodyResponse) GetApplicationproblemJSON409() *ProblemDetails {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON412 returns the response for an HTTP 412 `application/problem+json` response
+func (r DecideAgentArtifactCustodyResponse) GetApplicationproblemJSON412() *ProblemDetails {
+	return r.ApplicationproblemJSON412
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r DecideAgentArtifactCustodyResponse) GetApplicationproblemJSON422() *ProblemDetails {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON428 returns the response for an HTTP 428 `application/problem+json` response
+func (r DecideAgentArtifactCustodyResponse) GetApplicationproblemJSON428() *ProblemDetails {
+	return r.ApplicationproblemJSON428
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r DecideAgentArtifactCustodyResponse) GetApplicationproblemJSON500() *ProblemDetails {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r DecideAgentArtifactCustodyResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r DecideAgentArtifactCustodyResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DecideAgentArtifactCustodyResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DecideAgentArtifactCustodyResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 // ListAgentRunsWithResponse List workspace runs with bounded pagination.
 //
 // Returns a wrapper object for the known response body format(s).
@@ -3644,6 +3943,36 @@ func (c *ClientWithResponses) GetAgentArtifactWithResponse(ctx context.Context, 
 		return nil, err
 	}
 	return ParseGetAgentArtifactResponse(rsp)
+}
+
+// DecideAgentArtifactCustodyWithBodyWithResponse Record the audited custody decision an authorized custodian made about one immutable artifact.
+//
+// Artifact custody is the authority to decide whether an immutable artifact survives: placing or lifting the legal hold that makes it undeletable, and destroying it. The acting custodian is derived from the verified request authority and is never carried on the wire, and neither is the workspace or project the decision is made in — the command states what is being decided, never who decides it or where. Agent Service re-reads current authority on every call and requires the caller to be admitted under the artifact-custodian role in this workspace and project, to hold the custody capability for this exact operation, to hold a clearance for the data class artifact content is governed under, and to hold authority over this artifact that has not been revoked. Every decision is written to the protected audit before anything is changed and again after, so a decision that cannot be audited is not made at all. If-Match pins the artifact revision the custodian observed, which is what the decision identity is built from: a retry converges on the outcome that revision already produced rather than opening a second decision over it.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /workspaces/{workspaceId}/artifacts/{artifactId}/custody (the `DecideAgentArtifactCustody` operationId).
+func (c *ClientWithResponses) DecideAgentArtifactCustodyWithBodyWithResponse(ctx context.Context, workspaceId WorkspaceId, artifactId ArtifactId, params *DecideAgentArtifactCustodyParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DecideAgentArtifactCustodyResponse, error) {
+	rsp, err := c.DecideAgentArtifactCustodyWithBody(ctx, workspaceId, artifactId, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDecideAgentArtifactCustodyResponse(rsp)
+}
+
+// DecideAgentArtifactCustodyWithResponse Record the audited custody decision an authorized custodian made about one immutable artifact.
+//
+// Artifact custody is the authority to decide whether an immutable artifact survives: placing or lifting the legal hold that makes it undeletable, and destroying it. The acting custodian is derived from the verified request authority and is never carried on the wire, and neither is the workspace or project the decision is made in — the command states what is being decided, never who decides it or where. Agent Service re-reads current authority on every call and requires the caller to be admitted under the artifact-custodian role in this workspace and project, to hold the custody capability for this exact operation, to hold a clearance for the data class artifact content is governed under, and to hold authority over this artifact that has not been revoked. Every decision is written to the protected audit before anything is changed and again after, so a decision that cannot be audited is not made at all. If-Match pins the artifact revision the custodian observed, which is what the decision identity is built from: a retry converges on the outcome that revision already produced rather than opening a second decision over it.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /workspaces/{workspaceId}/artifacts/{artifactId}/custody (the `DecideAgentArtifactCustody` operationId).
+func (c *ClientWithResponses) DecideAgentArtifactCustodyWithResponse(ctx context.Context, workspaceId WorkspaceId, artifactId ArtifactId, params *DecideAgentArtifactCustodyParams, body DecideAgentArtifactCustodyJSONRequestBody, reqEditors ...RequestEditorFn) (*DecideAgentArtifactCustodyResponse, error) {
+	rsp, err := c.DecideAgentArtifactCustody(ctx, workspaceId, artifactId, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDecideAgentArtifactCustodyResponse(rsp)
 }
 
 // ParseListAgentRunsResponse parses an HTTP response from a ListAgentRunsWithResponse call
@@ -4840,6 +5169,118 @@ func ParseGetAgentArtifactResponse(rsp *http.Response) (*GetAgentArtifactRespons
 		}
 		response.ApplicationproblemJSON500 = &dest
 
+	}
+
+	return response, nil
+}
+
+// ParseDecideAgentArtifactCustodyResponse parses an HTTP response from a DecideAgentArtifactCustodyWithResponse call
+func ParseDecideAgentArtifactCustodyResponse(rsp *http.Response) (*DecideAgentArtifactCustodyResponse, error) {
+	bodyBytes, err := readBoundedResponseBody(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DecideAgentArtifactCustodyResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 412:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON412 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 428:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON428 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ProblemDetails
+		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		var headers DecideAgentArtifactCustodyResponse204Headers
+		if values := rsp.Header.Values("ETag"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "ETag", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.ETag = &value
+		}
+		if values := rsp.Header.Values("Idempotency-Replayed"); len(values) > 0 {
+			var value bool
+			if err := runtime.BindStyledParameterWithOptions("simple", "Idempotency-Replayed", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.IdempotencyReplayed = &value
+		}
+		if values := rsp.Header.Values("X-AnvilKit-Request-Digest"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "X-AnvilKit-Request-Digest", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.XAnvilKitRequestDigest = &value
+		}
+		response.Headers204 = &headers
 	}
 
 	return response, nil

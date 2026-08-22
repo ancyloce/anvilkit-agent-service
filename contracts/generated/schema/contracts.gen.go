@@ -4633,6 +4633,10 @@ type ContractsBundleJson struct {
 	// "CreateAgentRunRequest".
 	CreateAgentRunRequest *CreateAgentRunRequest `json:"CreateAgentRunRequest,omitempty,omitzero" yaml:"CreateAgentRunRequest,omitempty" mapstructure:"CreateAgentRunRequest,omitempty"`
 
+	// DecideArtifactCustodyRequest corresponds to the JSON schema field
+	// "DecideArtifactCustodyRequest".
+	DecideArtifactCustodyRequest *DecideArtifactCustodyRequest `json:"DecideArtifactCustodyRequest,omitempty,omitzero" yaml:"DecideArtifactCustodyRequest,omitempty" mapstructure:"DecideArtifactCustodyRequest,omitempty"`
+
 	// ImageOperationPlan corresponds to the JSON schema field "ImageOperationPlan".
 	ImageOperationPlan *ImageOperationPlan `json:"ImageOperationPlan,omitempty,omitzero" yaml:"ImageOperationPlan,omitempty" mapstructure:"ImageOperationPlan,omitempty"`
 
@@ -4807,6 +4811,124 @@ func (j *CreateAgentRunRequest) UnmarshalJSON(value []byte) error {
 		return err
 	}
 	*j = CreateAgentRunRequest(plain)
+	return nil
+}
+
+// Intent-only artifact custody command. It states which custody decision an
+// authorized custodian made about one immutable artifact: placing or lifting the
+// legal hold that decides whether the artifact may be destroyed, or destroying it.
+// The basis is a bounded evidence reference rather than free-form prose, and the
+// ticket names the change record the decision answers to, so the protected audit
+// record can be reconstructed without ever carrying custodian-authored content. No
+// identity is carried on the wire: the acting custodian, the workspace, and the
+// project are derived by Agent Service from the verified request authority and the
+// current authority register.
+type DecideArtifactCustodyRequest struct {
+	// ArtifactId corresponds to the JSON schema field "artifactId".
+	ArtifactId string `json:"artifactId" yaml:"artifactId" mapstructure:"artifactId"`
+
+	// Basis corresponds to the JSON schema field "basis".
+	Basis string `json:"basis" yaml:"basis" mapstructure:"basis"`
+
+	// Decision corresponds to the JSON schema field "decision".
+	Decision DecideArtifactCustodyRequestDecision `json:"decision" yaml:"decision" mapstructure:"decision"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Ticket corresponds to the JSON schema field "ticket".
+	Ticket string `json:"ticket" yaml:"ticket" mapstructure:"ticket"`
+}
+
+type DecideArtifactCustodyRequestDecision string
+
+const DecideArtifactCustodyRequestDecisionDeleted DecideArtifactCustodyRequestDecision = "deleted"
+const DecideArtifactCustodyRequestDecisionLegalHoldLifted DecideArtifactCustodyRequestDecision = "legal-hold-lifted"
+const DecideArtifactCustodyRequestDecisionLegalHoldPlaced DecideArtifactCustodyRequestDecision = "legal-hold-placed"
+
+var enumValues_DecideArtifactCustodyRequestDecision = []interface{}{
+	"legal-hold-placed",
+	"legal-hold-lifted",
+	"deleted",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *DecideArtifactCustodyRequestDecision) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_DecideArtifactCustodyRequestDecision {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_DecideArtifactCustodyRequestDecision, v)
+	}
+	*j = DecideArtifactCustodyRequestDecision(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *DecideArtifactCustodyRequest) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["artifactId"]; raw != nil && !ok {
+		return fmt.Errorf("field artifactId in DecideArtifactCustodyRequest: required")
+	}
+	if _, ok := raw["basis"]; raw != nil && !ok {
+		return fmt.Errorf("field basis in DecideArtifactCustodyRequest: required")
+	}
+	if _, ok := raw["decision"]; raw != nil && !ok {
+		return fmt.Errorf("field decision in DecideArtifactCustodyRequest: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in DecideArtifactCustodyRequest: required")
+	}
+	if _, ok := raw["ticket"]; raw != nil && !ok {
+		return fmt.Errorf("field ticket in DecideArtifactCustodyRequest: required")
+	}
+	type Plain DecideArtifactCustodyRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.ArtifactId)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "artifactId", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ArtifactId)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "artifactId", 128)
+	}
+	if matched, _ := regexp.MatchString(`^anvilkit://evidence/[a-z0-9][a-z0-9-]{1,31}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, string(plain.Basis)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Basis", `^anvilkit://evidence/[a-z0-9][a-z0-9-]{1,31}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Basis)) < 24 {
+		return fmt.Errorf("field %s length: must be >= %d", "basis", 24)
+	}
+	if utf8.RuneCountInString(string(plain.Basis)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "basis", 256)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, string(plain.Ticket)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Ticket", `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Ticket)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "ticket", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Ticket)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "ticket", 128)
+	}
+	*j = DecideArtifactCustodyRequest(plain)
 	return nil
 }
 

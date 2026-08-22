@@ -47,7 +47,7 @@
     },
     "registrySet": {
       "path": "contracts/agent/registries/registry-set.json",
-      "digest": "sha256:4d1bb539e2bf8a476fa75c4cd5319f703da48465c2d49f41393f7aa900bfbb8d"
+      "digest": "sha256:9e91822737ec692e3c4e5fd115cf8ea87625b1dbfdbe62b55c4432b5c1060d19"
     },
     "registrySetSchema": {
       "path": "contracts/agent/registries/registry-set.schema.json",
@@ -56,7 +56,7 @@
     "openapi": [
       {
         "path": "contracts/agent/openapi/agent-service.openapi.json",
-        "digest": "sha256:d304c8e36204b3b50dc66edf58c4f4be97a8a2aad43319f0ad9a5ac68c48eb16"
+        "digest": "sha256:989f0f3927d7da2a9c1e2cd9d1994b2427d7507723d85646d69bf45fb4c8fe6e"
       },
       {
         "path": "contracts/agent/openapi/pagix-agent-integration.openapi.json",
@@ -75,7 +75,7 @@
     ],
     "fixtureManifest": {
       "path": "contracts/agent/fixtures/manifest.json",
-      "digest": "sha256:61869a8454e94eb0068428fb8ccb038bb482421ef5b046005a86b31905bd6668"
+      "digest": "sha256:d76abfab2544cbf608b63cc3aa8eea81e79de43cb50b7d164adfec0c3a5cb454"
     },
     "fixtureManifestSchema": {
       "path": "contracts/agent/fixtures/manifest.schema.json",
@@ -418,6 +418,22 @@
       "fixtureCoverage": [
         "minimum",
         "full",
+        "invalid",
+        "adversarial"
+      ],
+      "descriptions": [
+        "contracts/agent/openapi/agent-service.openapi.json"
+      ]
+    },
+    {
+      "logicalId": "DecideArtifactCustodyRequest",
+      "componentName": "anvilkit.contract.schema.decide-artifact-custody-request",
+      "schemaPath": "contracts/agent/schemas/decide-artifact-custody-request.schema.json",
+      "digest": "sha256:cb7411664588d1527de0ab3cb68f5f2e966fc2c2f466adfeb30dfa0c12e96c03",
+      "owner": "Agent Service Metadata owner",
+      "stability": "p0-kernel",
+      "fixtureCoverage": [
+        "minimum",
         "invalid",
         "adversarial"
       ],
