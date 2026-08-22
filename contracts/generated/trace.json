@@ -2,7 +2,7 @@
   "traceVersion": 1,
   "language": "go",
   "packageVersion": "0.1.0",
-  "sourceSetSha256": "6a8a5a38b01bfa0beb41cd9a30419c6077ccd5faf717e154e91043f397902ff5",
+  "sourceSetSha256": "4b52f59fbbe4c55ff37818c3705cfa9e76fc38f1b0f2344e672fbdbe7849a763",
   "sources": [
     {
       "path": "contracts/agent/schemas/agent-artifact.schema.json",
@@ -150,7 +150,7 @@
     },
     {
       "path": "contracts/agent/openapi/agent-service.openapi.json",
-      "sha256": "989f0f3927d7da2a9c1e2cd9d1994b2427d7507723d85646d69bf45fb4c8fe6e"
+      "sha256": "795e764aa32333659eb2dd47b6f666ea40669933a4ac4796a59f3bcf8a65f0c7"
     },
     {
       "path": "contracts/agent/openapi/pagix-agent-integration.openapi.json",
@@ -160,7 +160,7 @@
   "projections": {
     "schemaBundleSha256": "c22fb29a5601cddde2a967f4a3d5f81170774d4708000d5710192cd36e9dfe6b",
     "openapi": {
-      "agent-service": "6b6cfbb60cf93616dbb1397be599e119adff88a4d2aa1cd61d84e6945df1e9d9",
+      "agent-service": "bdf43c31ee6e8f027a564c8aab5792efc6f22ea256a56505674cb9a45135d5f7",
       "pagix-agent-integration": "11df5357ff193bb05a96cb75828c4edc6ddc7e4b35bcf28ec68e17f9c8996ca9"
     }
   },
@@ -175,15 +175,15 @@
     }
   },
   "output": {
-    "bytes": 695514,
+    "bytes": 699245,
     "files": 3,
-    "sha256": "047ec8846865d1f4a4fb15e6ba0353b1cfaa1aed115779e0ac42cf1be666fedb",
+    "sha256": "f348ce76cd14fd2a152c589e73ce4d64d7519e431f79e667365bb0933168f48c",
     "directories": [
       {
         "directory": "generated",
-        "bytes": 695514,
+        "bytes": 699245,
         "files": 3,
-        "sha256": "f0f1d69ff866084352da12eef7b4c2b7a1b638e9f45dea51f82006b621bd01bf"
+        "sha256": "e31228c78ee76adea3bb9a798b7d998b6d71bc54e633da1ab25951a280b4e645"
       }
     ]
   }

@@ -17,6 +17,72 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for ArtifactAccessPurpose.
+const (
+	ArtifactAccessPurposeApproval     ArtifactAccessPurpose = "approval"
+	ArtifactAccessPurposeCommit       ArtifactAccessPurpose = "commit"
+	ArtifactAccessPurposeFinalization ArtifactAccessPurpose = "finalization"
+	ArtifactAccessPurposeProducer     ArtifactAccessPurpose = "producer"
+	ArtifactAccessPurposeRead         ArtifactAccessPurpose = "read"
+	ArtifactAccessPurposeReview       ArtifactAccessPurpose = "review"
+	ArtifactAccessPurposeScanner      ArtifactAccessPurpose = "scanner"
+)
+
+// Valid indicates whether the value is a known member of the ArtifactAccessPurpose enum.
+func (e ArtifactAccessPurpose) Valid() bool {
+	switch e {
+	case ArtifactAccessPurposeApproval:
+		return true
+	case ArtifactAccessPurposeCommit:
+		return true
+	case ArtifactAccessPurposeFinalization:
+		return true
+	case ArtifactAccessPurposeProducer:
+		return true
+	case ArtifactAccessPurposeRead:
+		return true
+	case ArtifactAccessPurposeReview:
+		return true
+	case ArtifactAccessPurposeScanner:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetAgentArtifactParamsXAnvilKitAccessPurpose.
+const (
+	GetAgentArtifactParamsXAnvilKitAccessPurposeApproval     GetAgentArtifactParamsXAnvilKitAccessPurpose = "approval"
+	GetAgentArtifactParamsXAnvilKitAccessPurposeCommit       GetAgentArtifactParamsXAnvilKitAccessPurpose = "commit"
+	GetAgentArtifactParamsXAnvilKitAccessPurposeFinalization GetAgentArtifactParamsXAnvilKitAccessPurpose = "finalization"
+	GetAgentArtifactParamsXAnvilKitAccessPurposeProducer     GetAgentArtifactParamsXAnvilKitAccessPurpose = "producer"
+	GetAgentArtifactParamsXAnvilKitAccessPurposeRead         GetAgentArtifactParamsXAnvilKitAccessPurpose = "read"
+	GetAgentArtifactParamsXAnvilKitAccessPurposeReview       GetAgentArtifactParamsXAnvilKitAccessPurpose = "review"
+	GetAgentArtifactParamsXAnvilKitAccessPurposeScanner      GetAgentArtifactParamsXAnvilKitAccessPurpose = "scanner"
+)
+
+// Valid indicates whether the value is a known member of the GetAgentArtifactParamsXAnvilKitAccessPurpose enum.
+func (e GetAgentArtifactParamsXAnvilKitAccessPurpose) Valid() bool {
+	switch e {
+	case GetAgentArtifactParamsXAnvilKitAccessPurposeApproval:
+		return true
+	case GetAgentArtifactParamsXAnvilKitAccessPurposeCommit:
+		return true
+	case GetAgentArtifactParamsXAnvilKitAccessPurposeFinalization:
+		return true
+	case GetAgentArtifactParamsXAnvilKitAccessPurposeProducer:
+		return true
+	case GetAgentArtifactParamsXAnvilKitAccessPurposeRead:
+		return true
+	case GetAgentArtifactParamsXAnvilKitAccessPurposeReview:
+		return true
+	case GetAgentArtifactParamsXAnvilKitAccessPurposeScanner:
+		return true
+	default:
+		return false
+	}
+}
+
 // AgentArtifact Bounded AgentArtifact wire contract governed by PRD 0012.
 type AgentArtifact struct {
 	ArtifactId   SharedPrimitivesArtifactId          `json:"artifactId"`
@@ -344,6 +410,9 @@ type SubmitInputResponseRequest struct {
 	ResponsePayload SharedPrimitivesBoundedStringMap `json:"responsePayload"`
 }
 
+// ArtifactAccessPurpose defines model for ArtifactAccessPurpose.
+type ArtifactAccessPurpose string
+
 // ArtifactId defines model for ArtifactId.
 type ArtifactId = string
 
@@ -479,7 +548,13 @@ type GetAgentRunSnapshotParams struct {
 // GetAgentArtifactParams defines parameters for GetAgentArtifact.
 type GetAgentArtifactParams struct {
 	Traceparent Traceparent `json:"traceparent"`
+
+	// XAnvilKitAccessPurpose Why this artifact is being read, drawn from the governed access vocabulary. It is recorded in the protected audit together with the verified accessor, the tenant, the artifact, the decision outcome, and the trace before anything is disclosed; a disclosure that cannot be recorded does not happen.
+	XAnvilKitAccessPurpose GetAgentArtifactParamsXAnvilKitAccessPurpose `json:"X-AnvilKit-Access-Purpose"`
 }
+
+// GetAgentArtifactParamsXAnvilKitAccessPurpose defines parameters for GetAgentArtifact.
+type GetAgentArtifactParamsXAnvilKitAccessPurpose string
 
 // DecideAgentArtifactCustodyParams defines parameters for DecideAgentArtifactCustody.
 type DecideAgentArtifactCustodyParams struct {
@@ -2073,6 +2148,15 @@ func NewGetAgentArtifactRequest(server string, workspaceId WorkspaceId, artifact
 		}
 
 		req.Header.Set("traceparent", headerParam0)
+
+		var headerParam1 string
+
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "X-AnvilKit-Access-Purpose", params.XAnvilKitAccessPurpose, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-AnvilKit-Access-Purpose", headerParam1)
 
 	}
 

@@ -3,7 +3,7 @@
   "description": "Canonical Agent contract lock (ADR-018). Regenerate with check-agent-profile.ts --update after a coordinated atomic refactor; CI verifies byte equality.",
   "profile": {
     "path": "contracts/agent/profile/p0-kernel-profile.json",
-    "sha256": "sha256:fb0cbe4b4934f1caeb562cf8a32f7e78237931dc9507576365cb95b040e4fb59"
+    "sha256": "sha256:bbf82b992602f12f8b27b7edbdf10f4533788ce96c9102eaa7470b21ff70ed20"
   },
   "sources": {
     "contracts/agent/asyncapi/agent-events.asyncapi.json": "sha256:3543383bb8cd39b1aee8416d36f213ef751414be6bd28276b7f543a2606cd1ba",
@@ -184,7 +184,7 @@
     "contracts/agent/fixtures/valid/worker-result.full.json": "sha256:5023cab48e731cd5e80ff5a92f57983fe12edfc940061494ea3e6bfd8e84737a",
     "contracts/agent/fixtures/valid/worker-result.maximum-bound.json": "sha256:c451f610dabc2131a877eda01e898c585b39adee464bd58a7e4629318fe5f125",
     "contracts/agent/fixtures/valid/worker-result.minimum.json": "sha256:27f62619891d79a3c08ec82933409025b9c9b7abf3c1544848dc8af9e9a7f2ed",
-    "contracts/agent/openapi/agent-service.openapi.json": "sha256:989f0f3927d7da2a9c1e2cd9d1994b2427d7507723d85646d69bf45fb4c8fe6e",
+    "contracts/agent/openapi/agent-service.openapi.json": "sha256:795e764aa32333659eb2dd47b6f666ea40669933a4ac4796a59f3bcf8a65f0c7",
     "contracts/agent/openapi/pagix-agent-integration.openapi.json": "sha256:df7beaa77c923a5444b1da3115a1ff208126b07bd30aa8d6c216870ac03b17e6",
     "contracts/agent/registries/registry-set.json": "sha256:9e91822737ec692e3c4e5fd115cf8ea87625b1dbfdbe62b55c4432b5c1060d19",
     "contracts/agent/registries/registry-set.schema.json": "sha256:dd3b6cc4952cd8df1ffb1bfd060765deed51f230674dc5e88581c29eebc09ab3",
@@ -239,15 +239,15 @@
   "generated": {
     "goTrace": {
       "path": "packages/contracts-go/generated/trace.json",
-      "sha256": "sha256:f32a5fc1023d244599f9511aff82e3806344012c5afd551d5d8770eec92a3d80"
+      "sha256": "sha256:4893bab5d2752403965ffe2d28ab83461f1c795aacf46cd0fe5b83ffdd357ce2"
     },
     "typescriptTrace": {
       "path": "packages/contracts-typescript/src/generated/trace.json",
-      "sha256": "sha256:e562210b1b4a1c16d3d8e53defefc62a8947428faaca94ce635e649acf7e1daf"
+      "sha256": "sha256:adfa8f45e214a92e6baf50d6ae2e1463a3daa3af4110ccd2d4a628a5c364ee4b"
     },
     "agentServiceIntakeTrace": {
       "path": "services/agent-service/contracts/generated/trace.json",
-      "sha256": "sha256:f32a5fc1023d244599f9511aff82e3806344012c5afd551d5d8770eec92a3d80"
+      "sha256": "sha256:4893bab5d2752403965ffe2d28ab83461f1c795aacf46cd0fe5b83ffdd357ce2"
     }
   },
   "legacyExportLock": {

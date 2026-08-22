@@ -56,7 +56,7 @@
     "openapi": [
       {
         "path": "contracts/agent/openapi/agent-service.openapi.json",
-        "digest": "sha256:989f0f3927d7da2a9c1e2cd9d1994b2427d7507723d85646d69bf45fb4c8fe6e"
+        "digest": "sha256:795e764aa32333659eb2dd47b6f666ea40669933a4ac4796a59f3bcf8a65f0c7"
       },
       {
         "path": "contracts/agent/openapi/pagix-agent-integration.openapi.json",
