@@ -26,7 +26,17 @@ type Record struct {
 	// account of a refusal whose reason was not kept. It is empty on every
 	// other outcome, and omitted from the authenticated bytes when it is, so
 	// records written before a result was recorded chain exactly as they did.
-	Result                 string `json:",omitempty"`
+	Result string `json:",omitempty"`
+	// Purpose is why a disclosure was made, as the accessor declared it. It
+	// belongs to decisions that disclose rather than change: a read has no
+	// before-and-after state to account for, so the account of it is who
+	// asked, for what, and what they were told. It is drawn from a governed
+	// vocabulary at the boundary that records it rather than being free text.
+	//
+	// Like Result it is omitted from the authenticated bytes when empty, so
+	// records written before disclosures were audited chain exactly as they
+	// did.
+	Purpose                string `json:",omitempty"`
 	Scope                  Scope
 	UTC                    time.Time
 	PreviousDigest, Digest string
@@ -95,14 +105,95 @@ func (s *Service) PrivilegedMutation(ctx context.Context, record Record, mutatio
 	if err != nil {
 		return err
 	}
+	return s.finish(ctx, authorized, func(ctx context.Context, _ Record) error { return mutation(ctx) })
+}
+
+// AdoptedMutation is a mutation that runs under a decision somebody else
+// already authorized. It receives that recorded decision, because a successor
+// finishing an interrupted change needs the terms the change was authorized
+// on — who decided it and for what stated reason — and those live on the
+// record rather than in the successor's own configuration.
+type AdoptedMutation func(context.Context, Record) error
+
+// Admission proves that a recorded decision is the one a successor means to
+// finish. It is separate from the mutation because it has to be answered even
+// when there is no mutation left to run: a decision whose outcome is already
+// recorded still has to be the right decision before its receipt is closed
+// under a successor's hand.
+type Admission func(Record) error
+
+// UnrecordedDecision reports that nothing is authorized under an identity a
+// caller asked to resume. It is a distinct answer from a refusal: there is no
+// decision to finish, so the caller must not invent one.
+type UnrecordedDecision struct{ RecordID string }
+
+func (e UnrecordedDecision) Error() string {
+	return "no protected audit decision is recorded under " + e.RecordID
+}
+
+// ResumeMutation finishes a privileged mutation whose authorization is already
+// on the record, and authorizes nothing itself.
+//
+// It exists because the process that authorized a change is not always the
+// process that gets to finish it. A destruction that was authorized, claimed,
+// and interrupted has to converge afterwards, and the only account of what was
+// authorized is the record the first process wrote. A successor that composed
+// its own authorization would be making a second decision under a name that is
+// taken — the recorded actor, reason, and ticket would be its own, and the
+// original decision would either conflict or be quietly replaced.
+//
+// So this adopts. The recorded decision is handed to the mutation unchanged,
+// the outcome is recorded against the same identity, and the receipt closes
+// the same decision. Nothing here re-derives authority: the authority question
+// was answered when the decision was authorized, and answering it again from a
+// successor's configuration is exactly the drift this avoids.
+func (s *Service) ResumeMutation(ctx context.Context, id string, admit Admission, mutation AdoptedMutation) error {
+	if mutation == nil || admit == nil || !opaque(id, 120) {
+		return problem.New(problem.CodeRequestInvalid, "")
+	}
+	retained, found, err := s.sink.Lookup(ctx, id)
+	if err != nil {
+		return fmt.Errorf("protected audit unavailable: %w", err)
+	}
+	if !found {
+		return UnrecordedDecision{RecordID: id}
+	}
+	// What stands under the identity is proved before anything is finished.
+	// An identity is a name, and a caller arriving with a name is not thereby
+	// authorized for whatever that name happens to hold: the successor has to
+	// recognise the decision as the one it means to complete. This runs before
+	// the outcome is even looked up, so a decision that is already closed —
+	// where there is nothing left to apply and every later step would succeed
+	// silently — is refused just as firmly as one that is still open.
+	if err := admit(retained); err != nil {
+		return err
+	}
+	if retained.Outcome != "authorized-to-apply" {
+		// The identity names something other than an authorization — an
+		// outcome record, or a decision recorded under a shape this cannot
+		// resume. Adopting it would mean applying a change under a record
+		// that never authorized one.
+		return problem.New(problem.CodeIdempotencyConflict, "")
+	}
+	return s.finish(ctx, retained, mutation)
+}
+
+// finish carries one authorized decision through its remaining steps: apply
+// the mutation if no outcome is recorded yet, record the outcome, and close
+// the receipt.
+func (s *Service) finish(ctx context.Context, authorized Record, mutation AdoptedMutation) error {
+	record := authorized
 	outcomeID := record.ID + ":outcome"
+	if mutation == nil {
+		return problem.New(problem.CodeRequestInvalid, "")
+	}
 	retained, found, err := s.sink.Lookup(ctx, outcomeID)
 	if err != nil {
 		return fmt.Errorf("privileged mutation outcome is unknown: %w", err)
 	}
 	var mutationErr error
 	if !found {
-		mutationErr = mutation(ctx)
+		mutationErr = mutation(ctx, authorized)
 		if mutationErr != nil && !determinate(mutationErr) {
 			return mutationErr
 		}
@@ -302,6 +393,11 @@ func (s *Service) Verify(ctx context.Context) error {
 
 func complete(record Record) bool {
 	if record.UTC != (time.Time{}) || record.Outcome != "" || record.Result != "" || record.PreviousDigest != "" || record.Digest != "" || !opaque(record.ID, 120) || !opaque(record.Action, 128) || !opaque(record.Actor, 128) || !opaque(record.Workload, 128) || !opaque(record.Ticket, 128) || !opaque(record.Scope.WorkspaceID, 128) || !opaque(record.Scope.ProjectID, 128) || !opaque(record.Scope.ResourceID, 128) || len(record.Reason) < 1 || len(record.Reason) > 1024 || !printable(record.Reason) || !trace(record.Traceparent) {
+		return false
+	}
+	// A purpose is optional — a change has none — but a stated one is bounded
+	// on the same terms as every other identity the record carries.
+	if record.Purpose != "" && !opaque(record.Purpose, 64) {
 		return false
 	}
 	if record.OldDigest == "" && record.NewDigest == "" {

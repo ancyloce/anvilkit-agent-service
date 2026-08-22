@@ -50,9 +50,78 @@ func New(database *pgxpool.Pool) (*Sink, error) {
 
 var _ securityaudit.ProtectedSink = (*Sink)(nil)
 
+// Provision establishes the protected audit on an administrative connection
+// and proves the runtime role ended up confined to append and read.
+//
+// It is deliberately not reachable from the running service. Schema
+// management needs a credential that owns the table, and a long-running
+// process that holds such a credential owns the account of its own security
+// decisions for as long as it runs — whether it uses the credential or not.
+// So the administrative credential belongs to a one-shot provisioning run that
+// exits, and the service is left with a login that can only add to the chain.
+//
+// requireSeparation asks for the further proof that the administering login
+// and the runtime login are two different identities. A controlled stack
+// administers the audit with the credential it also runs as, so the
+// separation cannot hold there and is not claimed; a deployment that means it
+// asks for it.
+func Provision(ctx context.Context, admin *pgxpool.Pool, runtimeLogin string, requireSeparation bool) error {
+	sink, err := New(admin)
+	if err != nil {
+		return err
+	}
+	if err := sink.EnsureSchema(ctx, runtimeLogin); err != nil {
+		return err
+	}
+	if err := sink.VerifyRuntimePrivileges(ctx); err != nil {
+		return err
+	}
+	if !requireSeparation {
+		return nil
+	}
+	return sink.VerifyRuntimeSeparation(ctx, runtimeLogin)
+}
+
+// RequireProvisioned proves the protected audit was established before the
+// service starts appending to it, on the connection the service will use.
+//
+// The service cannot create the chain it is audited in — that is the whole
+// point of provisioning it separately — so it has to be able to tell an audit
+// that is not there from one that is. Both barriers are asked for by name: a
+// table that exists with its append-only trigger dropped is not a protected
+// audit, and starting on one would produce records that look exactly like
+// records that mean something.
+func (s *Sink) RequireProvisioned(ctx context.Context) error {
+	var table, appendOnly, columnGuard bool
+	err := s.database.QueryRow(ctx, `SELECT
+	 to_regclass('agent_protected_audit.records') IS NOT NULL,
+	 EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass('agent_protected_audit.records') AND tgname='protected_audit_is_append_only' AND NOT tgisinternal),
+	 EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass('agent_protected_audit.records') AND tgname='protected_audit_columns_match_payload' AND NOT tgisinternal)`).
+		Scan(&table, &appendOnly, &columnGuard)
+	if err != nil {
+		return fmt.Errorf("read protected audit provisioning state: %w", err)
+	}
+	if !table {
+		return fmt.Errorf("the protected audit is not provisioned: establish it with the protected-audit provisioner before starting the service")
+	}
+	if !appendOnly || !columnGuard {
+		return fmt.Errorf("the protected audit is provisioned without its append-only and payload barriers")
+	}
+	var appends, reads bool
+	if err := s.database.QueryRow(ctx, `SELECT
+	 has_table_privilege(session_user,'agent_protected_audit.records','INSERT'),
+	 has_table_privilege(session_user,'agent_protected_audit.records','SELECT')`).Scan(&appends, &reads); err != nil {
+		return fmt.Errorf("read protected audit runtime standing: %w", err)
+	}
+	if !appends || !reads {
+		return fmt.Errorf("the protected audit runtime login cannot append and read the chain it is granted")
+	}
+	return nil
+}
+
 // EnsureSchema prepares the protected audit table. It is schema management,
-// not runtime work: it is run once at startup on an administrative connection
-// and never on the connection the service then appends through.
+// not runtime work: it is run once by the provisioner on an administrative
+// connection and never on the connection the service then appends through.
 //
 // Three barriers are established here, and they are independent on purpose.
 // The table is append-only: a trigger raises on every update, delete, and
@@ -64,7 +133,10 @@ var _ securityaudit.ProtectedSink = (*Sink)(nil)
 // even if a barrier above it were removed. None of these is the evidence —
 // the chain digests are what make a rewrite that got past all three
 // detectable afterwards.
-func (s *Sink) EnsureSchema(ctx context.Context) error {
+func (s *Sink) EnsureSchema(ctx context.Context, runtimeLogin string) error {
+	if !identifier(runtimeLogin) {
+		return fmt.Errorf("protected audit schema: the runtime login role must be named so the grant can be made to it and to nothing else")
+	}
 	_, err := s.database.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS agent_protected_audit;
 CREATE SEQUENCE IF NOT EXISTS agent_protected_audit.record_order_seq;
 CREATE TABLE IF NOT EXISTS agent_protected_audit.records (
@@ -111,12 +183,44 @@ REVOKE ALL ON SEQUENCE agent_protected_audit.record_order_seq FROM PUBLIC;
 REVOKE ALL ON SEQUENCE agent_protected_audit.record_order_seq FROM agent_protected_audit_rw;
 GRANT USAGE ON SCHEMA agent_protected_audit TO agent_protected_audit_rw;
 GRANT SELECT, INSERT ON agent_protected_audit.records TO agent_protected_audit_rw;
-GRANT USAGE, SELECT ON SEQUENCE agent_protected_audit.record_order_seq TO agent_protected_audit_rw;
-GRANT agent_protected_audit_rw TO CURRENT_USER;`)
+GRANT USAGE, SELECT ON SEQUENCE agent_protected_audit.record_order_seq TO agent_protected_audit_rw;`)
 	if err != nil {
 		return fmt.Errorf("ensure protected audit schema: %w", err)
 	}
+	// The runtime role is granted to the login the service connects as, and to
+	// nobody else. It used to be granted to CURRENT_USER — the administrative
+	// login — which meant the account that owns the table, can drop its
+	// triggers, and can rewrite any row was also the account the service ran
+	// as. Everything below it was then decoration: the append-only trigger,
+	// the column guard, and the narrow role were all things the running
+	// process could have removed.
+	//
+	// The identifier is validated above rather than escaped here because a
+	// role name is not a parameter position in GRANT, and a check that admits
+	// only ordinary identifiers is a smaller thing to be sure of than an
+	// escaping routine.
+	if _, err := s.database.Exec(ctx, `GRANT `+RuntimeRole+` TO "`+runtimeLogin+`"`); err != nil {
+		return fmt.Errorf("grant the protected audit runtime role to %q: %w", runtimeLogin, err)
+	}
 	return nil
+}
+
+// identifier admits an ordinary lower-case SQL identifier: a letter or
+// underscore, then letters, digits, underscores, or dollars, bounded to what
+// PostgreSQL will accept.
+func identifier(value string) bool {
+	if len(value) < 1 || len(value) > 63 {
+		return false
+	}
+	for index, character := range value {
+		switch {
+		case character >= 'a' && character <= 'z', character == '_':
+		case index > 0 && (character >= '0' && character <= '9' || character == '$'):
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // VerifyRuntimePrivileges proves the separation the schema establishes is
@@ -126,22 +230,86 @@ GRANT agent_protected_audit_rw TO CURRENT_USER;`)
 // own audit. Startup refuses rather than running on a privilege set nobody
 // intended.
 func (s *Sink) VerifyRuntimePrivileges(ctx context.Context) error {
+	return s.verifyNoRewrite(ctx, RuntimeRole, "runtime role")
+}
+
+// VerifyRuntimeSeparation proves the login the service connects as is not the
+// login that administers the audit, and holds nothing beyond append and read.
+//
+// The separation is checked from the administrative side because that is where
+// both identities are visible at once. Three things are asked, and each is a
+// way the separation quietly stops being one: the two logins must differ, so
+// the process that appends is not the process that owns the table; the runtime
+// login must not be a superuser, because a superuser's privileges are not
+// governed by grants at all; and it must not own the audit schema or its
+// table, because an owner can drop the triggers and rewrite the rows whatever
+// the grants say.
+func (s *Sink) VerifyRuntimeSeparation(ctx context.Context, runtimeLogin string) error {
+	if !identifier(runtimeLogin) {
+		return fmt.Errorf("protected audit separation: the runtime login role must be named")
+	}
+	var administrator string
+	if err := s.database.QueryRow(ctx, `SELECT current_user`).Scan(&administrator); err != nil {
+		return fmt.Errorf("read protected audit administrative identity: %w", err)
+	}
+	if administrator == runtimeLogin {
+		return fmt.Errorf("the protected audit is administered by the same login %q the service runs as", runtimeLogin)
+	}
+	var superuser, ownsSchema, ownsTable bool
+	err := s.database.QueryRow(ctx, `SELECT
+	 coalesce((SELECT rolsuper FROM pg_roles WHERE rolname=$1), false),
+	 pg_has_role($1, (SELECT nspowner FROM pg_namespace WHERE nspname='agent_protected_audit'), 'USAGE'),
+	 pg_has_role($1, (SELECT relowner FROM pg_class WHERE oid='agent_protected_audit.records'::regclass), 'USAGE')`, runtimeLogin).
+		Scan(&superuser, &ownsSchema, &ownsTable)
+	if err != nil {
+		return fmt.Errorf("read protected audit runtime login standing: %w", err)
+	}
+	if superuser {
+		return fmt.Errorf("the protected audit runtime login %q is a superuser, so no grant confines it", runtimeLogin)
+	}
+	if ownsSchema || ownsTable {
+		return fmt.Errorf("the protected audit runtime login %q owns the audit schema or table it must only append to", runtimeLogin)
+	}
+	return s.verifyNoRewrite(ctx, runtimeLogin, "runtime login")
+}
+
+// VerifyRuntimeIsolation is the same proof taken from inside the running
+// service, on the connection it will actually append through.
+//
+// It asks about session_user rather than current_user deliberately. The pool
+// sets the narrow role on every connection, so current_user answers for the
+// role the service is wearing — but wearing a role is not the same as being
+// confined to it, and RESET ROLE is one statement away. session_user is the
+// login underneath, and what it may do is what the process may do.
+func (s *Sink) VerifyRuntimeIsolation(ctx context.Context) error {
+	var login string
+	if err := s.database.QueryRow(ctx, `SELECT session_user`).Scan(&login); err != nil {
+		return fmt.Errorf("read protected audit session identity: %w", err)
+	}
+	return s.verifyNoRewrite(ctx, login, "running process")
+}
+
+// verifyNoRewrite proves one identity may append and read the audit and may do
+// nothing else to it. Privileges held through role membership count, which is
+// the point: a login that reaches UPDATE through some other role it belongs to
+// can rewrite the audit exactly as if it had been granted UPDATE directly.
+func (s *Sink) verifyNoRewrite(ctx context.Context, identity, description string) error {
 	var appends, reads, rewrites, removes, truncates bool
 	err := s.database.QueryRow(ctx, `SELECT
 	 has_table_privilege($1,'agent_protected_audit.records','INSERT'),
 	 has_table_privilege($1,'agent_protected_audit.records','SELECT'),
 	 has_table_privilege($1,'agent_protected_audit.records','UPDATE'),
 	 has_table_privilege($1,'agent_protected_audit.records','DELETE'),
-	 has_table_privilege($1,'agent_protected_audit.records','TRUNCATE')`, RuntimeRole).
+	 has_table_privilege($1,'agent_protected_audit.records','TRUNCATE')`, identity).
 		Scan(&appends, &reads, &rewrites, &removes, &truncates)
 	if err != nil {
-		return fmt.Errorf("read protected audit runtime privileges: %w", err)
+		return fmt.Errorf("read protected audit %s privileges: %w", description, err)
 	}
 	if !appends || !reads {
-		return fmt.Errorf("protected audit runtime role %q cannot append and read its own records", RuntimeRole)
+		return fmt.Errorf("protected audit %s %q cannot append and read its own records", description, identity)
 	}
 	if rewrites || removes || truncates {
-		return fmt.Errorf("protected audit runtime role %q holds rewrite privileges it must never have", RuntimeRole)
+		return fmt.Errorf("protected audit %s %q holds rewrite privileges it must never have", description, identity)
 	}
 	return nil
 }

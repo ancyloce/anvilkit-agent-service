@@ -447,3 +447,119 @@ func TestAuditBindingAndStrictExpiryValidation(t *testing.T) {
 		t.Fatal("expiry was extended by skew allowance")
 	}
 }
+
+// A decision can outlive the process that authorized it. What a successor may
+// do with it is bounded: it finishes what is recorded, it proves the record is
+// the decision it means to finish, and it never authorizes anything itself.
+func TestResumingADecisionAdoptsItRatherThanAuthorizingASecondOne(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a successor finishes an authorized decision under its recorded terms", func(t *testing.T) {
+		service, sink := auditService(t)
+		decision := authorizedDecision("decision.resume.applied")
+		// The first process authorized the decision and stopped before its
+		// outcome could be recorded.
+		if err := service.PrivilegedMutation(ctx, decision, func(context.Context) error {
+			return errStoppedHere
+		}); !errors.Is(err, errStoppedHere) {
+			t.Fatalf("the interruption did not land where it was meant to: %v", err)
+		}
+		var adopted Record
+		if err := service.ResumeMutation(ctx, decision.ID, admitAnything, func(_ context.Context, record Record) error {
+			adopted = record
+			return nil
+		}); err != nil {
+			t.Fatalf("a successor could not finish an authorized decision: %v", err)
+		}
+		// The successor acted under the original decision's terms, not its own.
+		if adopted.Actor != decision.Actor || adopted.Reason != decision.Reason || adopted.Ticket != decision.Ticket {
+			t.Fatalf("the successor did not adopt the recorded decision: %#v", adopted)
+		}
+		// Exactly two records stand: the original authorization and its
+		// outcome. A successor that authorized its own decision would have
+		// added a third, or conflicted with the first.
+		outcome, found, err := sink.Lookup(ctx, decision.ID+":outcome")
+		if err != nil || !found {
+			t.Fatalf("the outcome was not recorded: found=%v err=%v", found, err)
+		}
+		if outcome.Outcome != "applied" || outcome.Actor != decision.Actor {
+			t.Fatalf("the outcome does not belong to the original decision: %#v", outcome)
+		}
+		authorization, _, err := sink.Lookup(ctx, decision.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if authorization.Actor != decision.Actor || authorization.Reason != decision.Reason {
+			t.Fatalf("the recorded authorization was rewritten: %#v", authorization)
+		}
+	})
+
+	t.Run("a successor cannot resume what was never authorized", func(t *testing.T) {
+		service, _ := auditService(t)
+		err := service.ResumeMutation(ctx, "decision.resume.absent", admitAnything, func(context.Context, Record) error {
+			t.Fatal("a mutation ran under no recorded decision")
+			return nil
+		})
+		var unrecorded UnrecordedDecision
+		if !errors.As(err, &unrecorded) || unrecorded.RecordID != "decision.resume.absent" {
+			t.Fatalf("an unrecorded decision was resumed: %v", err)
+		}
+	})
+
+	t.Run("a successor must recognise the decision it is finishing", func(t *testing.T) {
+		service, _ := auditService(t)
+		decision := authorizedDecision("decision.resume.unrelated")
+		if err := service.PrivilegedMutation(ctx, decision, func(context.Context) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+		refused := errors.New("this is not the decision I am finishing")
+		err := service.ResumeMutation(ctx, decision.ID, func(Record) error { return refused }, func(context.Context, Record) error {
+			t.Fatal("a mutation ran under a decision the successor refused")
+			return nil
+		})
+		// The admission is answered even though the decision is already
+		// closed and there was nothing left to apply: a closed decision is
+		// exactly where a silent success would otherwise hide.
+		if !errors.Is(err, refused) {
+			t.Fatalf("an unrecognised decision was adopted: %v", err)
+		}
+	})
+}
+
+// errStoppedHere is an indeterminate failure: it carries no governed problem
+// details, so no outcome is recorded and the decision stays open, which is
+// what a crash leaves behind.
+var errStoppedHere = errors.New("the process stopped here")
+
+func admitAnything(Record) error { return nil }
+
+func authorizedDecision(id string) Record {
+	return Record{
+		ID:          id,
+		Action:      "artifact-deleted",
+		Actor:       "operator-01",
+		Workload:    "agent-service.artifact-custody",
+		Reason:      "court-ordered-destruction",
+		Ticket:      "change-0007",
+		OldDigest:   "sha256:" + strings.Repeat("a", 64),
+		Traceparent: "00-" + strings.Repeat("1", 32) + "-" + strings.Repeat("2", 16) + "-01",
+		Scope:       Scope{WorkspaceID: "workspace-01", ProjectID: "project-01", ResourceID: "artifact-01"},
+	}
+}
+
+// auditService is the real protected audit protocol over an in-memory sink and
+// a fixed authoritative clock.
+func auditService(t *testing.T) (*Service, *MemorySink) {
+	t.Helper()
+	now := time.Unix(700, 0).UTC()
+	clock, err := NewAuthoritativeClock(&testTime{value: now}, &localTime{value: now}, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &MemorySink{}
+	service, err := NewService(sink, clock, &MemoryAlerts{}, journal.NewMemoryStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service, sink
+}
