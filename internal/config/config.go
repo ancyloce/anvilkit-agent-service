@@ -135,17 +135,82 @@ type Config struct {
 	DwellDeadline        time.Duration
 	CircuitFailures      int
 	EgressAllowlist      []string
+	// EgressMaximumBytes and EgressTimeout bound one outbound exchange, and
+	// MemoryAdmissionBytes bounds the untrusted content one tool may place in
+	// a run's carried memory.
+	EgressMaximumBytes   int64
+	EgressTimeout        time.Duration
+	MemoryAdmissionBytes int
 	SigningKey           SecretRef
 	EncryptionKey        SecretRef
 	RecoveryRegister     Endpoint
 	ReceiptJournal       Endpoint
 	AuthoritativeTime    Endpoint
 	MaximumClockSkew     time.Duration
-	ProtectedAudit       Endpoint
-	OTelEndpoint         string
-	OTelSampleRatio      float64
-	FeatureGates         map[string]bool
-	Limits               Limits
+	// AuthoritativeTimeTrustRoot is the operator-distributed trust root the
+	// time authority's signed statements are authenticated against. It is
+	// separate from the endpoint on purpose: material that authenticates a
+	// source must not be fetched from that source.
+	AuthoritativeTimeTrustRoot string
+	// ProtectedAudit is the endpoint the service appends its security
+	// decisions to. It is the only protected-audit credential the running
+	// process is given, and it connects as a login that holds append and read
+	// and nothing else.
+	//
+	// The credential that establishes the chain, its barriers, and that grant
+	// is deliberately absent from this surface. It belongs to the one-shot
+	// provisioner in cmd/protected-audit-provisioner, which exits: a
+	// long-running process configured with an administrative credential owns
+	// the account of its own security decisions for as long as it runs,
+	// whether it ever uses the credential or not.
+	ProtectedAudit  Endpoint
+	OTelEndpoint    string
+	OTelSampleRatio float64
+	FeatureGates    map[string]bool
+	Limits          Limits
+}
+
+// ProtectedAuditProvisioning is the whole configuration of the one-shot
+// protected-audit provisioner, and it is a separate surface from the service's
+// own on purpose: the two are meant to be delivered to different workloads,
+// and a shared configuration type is a shared configuration in practice.
+//
+// It names the runtime login as a role rather than as a connection string, so
+// the provisioner holds no credential the service connects with, exactly as
+// the service holds none the provisioner administers with.
+type ProtectedAuditProvisioning struct {
+	Environment  Environment
+	AdminURL     string
+	RuntimeLogin string
+}
+
+// LoadProtectedAuditProvisioning reads the provisioner's configuration.
+func LoadProtectedAuditProvisioning() (ProtectedAuditProvisioning, error) {
+	value := ProtectedAuditProvisioning{
+		Environment:  Environment(env("ANVILKIT_ENVIRONMENT", "development")),
+		AdminURL:     os.Getenv("ANVILKIT_PROTECTED_AUDIT_ADMIN_URL"),
+		RuntimeLogin: os.Getenv("ANVILKIT_PROTECTED_AUDIT_RUNTIME_LOGIN"),
+	}
+	switch value.Environment {
+	case EnvironmentDevelopment, EnvironmentTest, EnvironmentStaging, EnvironmentProduction:
+	default:
+		return ProtectedAuditProvisioning{}, problem.InvalidConfiguration("ANVILKIT_ENVIRONMENT", "must be development, test, staging, or production")
+	}
+	if value.AdminURL == "" || !validURL(value.AdminURL) {
+		return ProtectedAuditProvisioning{}, problem.InvalidConfiguration("ANVILKIT_PROTECTED_AUDIT_ADMIN_URL", "must be the absolute URL of the administratively credentialed audit endpoint")
+	}
+	if value.RuntimeLogin == "" || len(value.RuntimeLogin) > 63 {
+		return ProtectedAuditProvisioning{}, problem.InvalidConfiguration("ANVILKIT_PROTECTED_AUDIT_RUNTIME_LOGIN", "must name the login role the service connects as")
+	}
+	return value, nil
+}
+
+// RequiresSeparateLogins reports whether the provisioner must prove the
+// administering login and the runtime login are two identities. Production is
+// where the separation is the control; a controlled stack has one credential
+// and administers the audit with it.
+func (p ProtectedAuditProvisioning) RequiresSeparateLogins() bool {
+	return p.Environment == EnvironmentProduction
 }
 
 // Load reads the complete typed configuration surface. No other package may
@@ -193,6 +258,7 @@ func Load() (Config, error) {
 		RecoveryRegister:              endpoint("ANVILKIT_RECOVERY_REGISTER"),
 		ReceiptJournal:                endpoint("ANVILKIT_RECEIPT_JOURNAL"),
 		AuthoritativeTime:             endpoint("ANVILKIT_AUTHORITATIVE_TIME"),
+		AuthoritativeTimeTrustRoot:    env("ANVILKIT_AUTHORITATIVE_TIME_TRUST_ROOT", ""),
 		ProtectedAudit:                endpoint("ANVILKIT_PROTECTED_AUDIT"),
 		OTelEndpoint:                  os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 	}
@@ -259,6 +325,15 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.ApplyAuthorizationTTL, err = duration("ANVILKIT_APPLY_AUTHORIZATION_TTL", 2*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.EgressTimeout, err = duration("ANVILKIT_EGRESS_TIMEOUT", 5*time.Second); err != nil {
+		return Config{}, err
+	}
+	if cfg.EgressMaximumBytes, err = integer64("ANVILKIT_EGRESS_MAXIMUM_BYTES", 1<<20); err != nil {
+		return Config{}, err
+	}
+	if cfg.MemoryAdmissionBytes, err = integer("ANVILKIT_MEMORY_ADMISSION_BYTES", 64*1024); err != nil {
 		return Config{}, err
 	}
 	if cfg.ArtifactPendingTTL, err = duration("ANVILKIT_ARTIFACT_PENDING_TTL", time.Hour); err != nil {
@@ -341,7 +416,7 @@ func (c Config) Validate() error {
 				return problem.InvalidConfiguration("ANVILKIT_PROVIDER_PRIORITY", "fake and mock providers are forbidden in production")
 			}
 		}
-		for name, target := range map[string]string{"ANVILKIT_AUTH_TRUST_SNAPSHOT": c.AuthTrustSnapshot, "ANVILKIT_AUTH_ISSUERS": strings.Join(c.AuthIssuers, ","), "ANVILKIT_MIGRATION_DATABASE_URL": c.MigrationDatabase, "ANVILKIT_CONTROL_DATABASE_URL": c.ControlDatabase, "ANVILKIT_WORKFLOW_DATABASE_URL": c.WorkflowDatabase, "ANVILKIT_EVENTS_DATABASE_URL": c.EventsDatabase, "ANVILKIT_ARTIFACTS_DATABASE_URL": c.ArtifactsDatabase, "ANVILKIT_EVALUATION_DATABASE_URL": c.EvaluationDatabase, "ANVILKIT_RECEIPT_JOURNAL_URL": c.ReceiptJournal.URL, "ANVILKIT_RECOVERY_REGISTER_URL": c.RecoveryRegister.URL, "ANVILKIT_AUTHORITATIVE_TIME_URL": c.AuthoritativeTime.URL, "ANVILKIT_PROTECTED_AUDIT_URL": c.ProtectedAudit.URL, "ANVILKIT_POLICY_SNAPSHOT": c.PolicySnapshot, "ANVILKIT_CAPABILITY_SNAPSHOT": c.CapabilitySnapshot,
+		for name, target := range map[string]string{"ANVILKIT_AUTH_TRUST_SNAPSHOT": c.AuthTrustSnapshot, "ANVILKIT_AUTH_ISSUERS": strings.Join(c.AuthIssuers, ","), "ANVILKIT_MIGRATION_DATABASE_URL": c.MigrationDatabase, "ANVILKIT_CONTROL_DATABASE_URL": c.ControlDatabase, "ANVILKIT_WORKFLOW_DATABASE_URL": c.WorkflowDatabase, "ANVILKIT_EVENTS_DATABASE_URL": c.EventsDatabase, "ANVILKIT_ARTIFACTS_DATABASE_URL": c.ArtifactsDatabase, "ANVILKIT_EVALUATION_DATABASE_URL": c.EvaluationDatabase, "ANVILKIT_RECEIPT_JOURNAL_URL": c.ReceiptJournal.URL, "ANVILKIT_RECOVERY_REGISTER_URL": c.RecoveryRegister.URL, "ANVILKIT_AUTHORITATIVE_TIME_URL": c.AuthoritativeTime.URL, "ANVILKIT_AUTHORITATIVE_TIME_TRUST_REF": c.AuthoritativeTime.TrustRef, "ANVILKIT_AUTHORITATIVE_TIME_TRUST_ROOT": c.AuthoritativeTimeTrustRoot, "ANVILKIT_PROTECTED_AUDIT_URL": c.ProtectedAudit.URL, "ANVILKIT_POLICY_SNAPSHOT": c.PolicySnapshot, "ANVILKIT_CAPABILITY_SNAPSHOT": c.CapabilitySnapshot,
 			// The approved Agent definition catalog must be authenticated
 			// against an operator-distributed trust root in production. The
 			// repository ships no signing key, so production cannot fall back
@@ -367,6 +442,19 @@ func (c Config) Validate() error {
 	}
 	if c.OTelSampleRatio < 0 || c.OTelSampleRatio > 1 {
 		return problem.InvalidConfiguration("ANVILKIT_OTEL_SAMPLE_RATIO", "must be between 0 and 1")
+	}
+	// A deployment that serves agent runs runs tools, and a tool that reaches
+	// outside does so under this policy. An empty allowlist is a deployment
+	// with no destination any tool may reach, which is a valid and closed
+	// posture; what is refused is a policy whose bounds make no sense.
+	if c.EgressMaximumBytes < 1 || c.EgressMaximumBytes > 1<<30 {
+		return problem.InvalidConfiguration("ANVILKIT_EGRESS_MAXIMUM_BYTES", "the bounded egress response size must be between one byte and one gibibyte")
+	}
+	if c.EgressTimeout <= 0 || c.EgressTimeout > 30*time.Second {
+		return problem.InvalidConfiguration("ANVILKIT_EGRESS_TIMEOUT", "the bounded egress exchange must be positive and at most thirty seconds")
+	}
+	if c.MemoryAdmissionBytes < 1 || c.MemoryAdmissionBytes > 1<<20 {
+		return problem.InvalidConfiguration("ANVILKIT_MEMORY_ADMISSION_BYTES", "the untrusted memory admission bound must be between one byte and one mebibyte")
 	}
 	if c.Limits.Tools < 3 || c.Limits.Tools > 7 {
 		return problem.InvalidConfiguration("ANVILKIT_TOOL_LIMIT", "must be between 3 and 7")

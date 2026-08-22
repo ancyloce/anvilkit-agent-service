@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -150,24 +151,26 @@ func TestProductionRequiresAnOperatorDistributedDefinitionTrustRoot(t *testing.T
 // needs before the definition trust material is the only thing left to check.
 func requiredProductionSettings() map[string]string {
 	return map[string]string{
-		"ANVILKIT_ENVIRONMENT":             "production",
-		"ANVILKIT_AUTH_TRUST_SNAPSHOT":     "/etc/anvilkit/trust.json",
-		"ANVILKIT_STREAM_CURSOR_SPOOL":     "/var/lib/anvilkit/stream-cursors",
-		"ANVILKIT_AUTH_ISSUERS":            "urn:anvilkit:issuer:platform",
-		"ANVILKIT_MIGRATION_DATABASE_URL":  "postgres://owner@db.internal:5432/anvilkit",
-		"ANVILKIT_CONTROL_DATABASE_URL":    "postgres://owner@db.internal:5432/anvilkit",
-		"ANVILKIT_WORKFLOW_DATABASE_URL":   "postgres://owner@db.internal:5432/anvilkit",
-		"ANVILKIT_EVENTS_DATABASE_URL":     "postgres://owner@db.internal:5432/anvilkit",
-		"ANVILKIT_ARTIFACTS_DATABASE_URL":  "postgres://owner@db.internal:5432/anvilkit",
-		"ANVILKIT_EVALUATION_DATABASE_URL": "postgres://owner@db.internal:5432/anvilkit",
-		"ANVILKIT_RECEIPT_JOURNAL_URL":     "https://journal.internal",
-		"ANVILKIT_RECOVERY_REGISTER_URL":   "https://register.internal",
-		"ANVILKIT_AUTHORITATIVE_TIME_URL":  "https://time.internal",
-		"ANVILKIT_PROTECTED_AUDIT_URL":     "https://audit.internal",
-		"ANVILKIT_POLICY_SNAPSHOT":         "/etc/anvilkit/policy.json",
-		"ANVILKIT_CAPABILITY_SNAPSHOT":     "/etc/anvilkit/capability.json",
-		"ANVILKIT_DEFINITION_TRUST_ROOT":   "/etc/anvilkit/definition-trust-root.json",
-		"ANVILKIT_DEFINITION_ATTESTATION":  "/etc/anvilkit/definition-catalog.dsse.json",
+		"ANVILKIT_ENVIRONMENT":                   "production",
+		"ANVILKIT_AUTH_TRUST_SNAPSHOT":           "/etc/anvilkit/trust.json",
+		"ANVILKIT_STREAM_CURSOR_SPOOL":           "/var/lib/anvilkit/stream-cursors",
+		"ANVILKIT_AUTH_ISSUERS":                  "urn:anvilkit:issuer:platform",
+		"ANVILKIT_MIGRATION_DATABASE_URL":        "postgres://owner@db.internal:5432/anvilkit",
+		"ANVILKIT_CONTROL_DATABASE_URL":          "postgres://owner@db.internal:5432/anvilkit",
+		"ANVILKIT_WORKFLOW_DATABASE_URL":         "postgres://owner@db.internal:5432/anvilkit",
+		"ANVILKIT_EVENTS_DATABASE_URL":           "postgres://owner@db.internal:5432/anvilkit",
+		"ANVILKIT_ARTIFACTS_DATABASE_URL":        "postgres://owner@db.internal:5432/anvilkit",
+		"ANVILKIT_EVALUATION_DATABASE_URL":       "postgres://owner@db.internal:5432/anvilkit",
+		"ANVILKIT_RECEIPT_JOURNAL_URL":           "https://journal.internal",
+		"ANVILKIT_RECOVERY_REGISTER_URL":         "https://register.internal",
+		"ANVILKIT_AUTHORITATIVE_TIME_URL":        "https://time.internal",
+		"ANVILKIT_AUTHORITATIVE_TIME_TRUST_REF":  "urn:anvilkit:issuer:time-authority",
+		"ANVILKIT_AUTHORITATIVE_TIME_TRUST_ROOT": "/etc/anvilkit/time-trust-root.json",
+		"ANVILKIT_PROTECTED_AUDIT_URL":           "https://audit.internal",
+		"ANVILKIT_POLICY_SNAPSHOT":               "/etc/anvilkit/policy.json",
+		"ANVILKIT_CAPABILITY_SNAPSHOT":           "/etc/anvilkit/capability.json",
+		"ANVILKIT_DEFINITION_TRUST_ROOT":         "/etc/anvilkit/definition-trust-root.json",
+		"ANVILKIT_DEFINITION_ATTESTATION":        "/etc/anvilkit/definition-catalog.dsse.json",
 	}
 }
 
@@ -224,5 +227,135 @@ func TestServingEventStreamsRequiresADurableCursorSpool(t *testing.T) {
 	t.Setenv("ANVILKIT_STREAM_CURSOR_SPOOL", "/var/lib/anvilkit/stream-cursors")
 	if _, err := Load(); err != nil {
 		t.Fatalf("a deployment declaring a durable spool was refused: %v", err)
+	}
+}
+
+// The service's configuration surface carries no protected-audit
+// administrative credential at all, and cannot be made to carry one.
+//
+// Requiring the two credentials to be different logins was not enough. The
+// running process was still configured with the administrative one for its
+// entire lifetime, which means it held the standing to drop the append-only
+// trigger and rewrite the account of its own security decisions — it simply
+// chose not to after startup. A control that depends on the process not using
+// what it was given is not a control.
+//
+// So the credential is not delivered to this workload. The whole environment
+// is loaded with an administrative URL present and the resulting configuration
+// is walked field by field: the value must appear nowhere in it, which is a
+// statement about the surface rather than about one field somebody remembered
+// to remove. Establishing the audit belongs to the one-shot provisioner, which
+// reads its own configuration and exits.
+func TestTheServiceConfigurationCarriesNoProtectedAuditAdministrativeCredential(t *testing.T) {
+	const administrative = "postgres://audit-owner:owner-secret@audit-admin.internal:5432/anvilkit"
+	for name, value := range requiredProductionSettings() {
+		t.Setenv(name, value)
+	}
+	t.Setenv("ANVILKIT_SIGNING_KEY", "production-signing-material-0123456789")
+	t.Setenv("ANVILKIT_ENCRYPTION_KEY", "production-encryption-material-0123456789")
+	t.Setenv("ANVILKIT_PROTECTED_AUDIT_ADMIN_URL", administrative)
+	loaded, err := Load()
+	if err != nil {
+		t.Fatalf("a production deployment without an administrative audit credential was refused: %v", err)
+	}
+	if found := stringFieldContaining(reflect.ValueOf(loaded), "audit-admin.internal"); found != "" {
+		t.Fatalf("the service configuration carries the protected audit administrative credential at %s", found)
+	}
+	if found := stringFieldContaining(reflect.ValueOf(loaded), "owner-secret"); found != "" {
+		t.Fatalf("the service configuration carries the protected audit administrative secret at %s", found)
+	}
+}
+
+// stringFieldContaining reports the first path within a value whose string
+// holds the needle, so a credential cannot hide in a field nobody named.
+func stringFieldContaining(value reflect.Value, needle string) string {
+	switch value.Kind() {
+	case reflect.String:
+		if strings.Contains(value.String(), needle) {
+			return "the value itself"
+		}
+	case reflect.Struct:
+		for index := 0; index < value.NumField(); index++ {
+			if inner := stringFieldContaining(value.Field(index), needle); inner != "" {
+				return value.Type().Field(index).Name + "." + inner
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			if inner := stringFieldContaining(value.Index(index), needle); inner != "" {
+				return fmt.Sprintf("[%d].%s", index, inner)
+			}
+		}
+	case reflect.Map:
+		for _, key := range value.MapKeys() {
+			if inner := stringFieldContaining(value.MapIndex(key), needle); inner != "" {
+				return fmt.Sprintf("[%v].%s", key.Interface(), inner)
+			}
+		}
+	case reflect.Pointer, reflect.Interface:
+		if !value.IsNil() {
+			return stringFieldContaining(value.Elem(), needle)
+		}
+	}
+	return ""
+}
+
+// The provisioner reads its own configuration, and it is the only surface the
+// administrative credential appears on. It names the runtime login as a role
+// rather than as a connection string, so neither workload holds what the other
+// connects with.
+func TestTheProtectedAuditProvisionerReadsItsOwnCredential(t *testing.T) {
+	t.Setenv("ANVILKIT_ENVIRONMENT", "production")
+	t.Setenv("ANVILKIT_PROTECTED_AUDIT_ADMIN_URL", "postgres://audit-owner@audit-admin.internal:5432/anvilkit")
+	t.Setenv("ANVILKIT_PROTECTED_AUDIT_RUNTIME_LOGIN", "agent_protected_audit_login")
+	settings, err := LoadProtectedAuditProvisioning()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.AdminURL == "" || settings.RuntimeLogin != "agent_protected_audit_login" {
+		t.Fatalf("provisioning settings = %+v", settings)
+	}
+	if !settings.RequiresSeparateLogins() {
+		t.Fatal("production provisioning must prove the administering and runtime logins differ")
+	}
+	for _, missing := range []string{"ANVILKIT_PROTECTED_AUDIT_ADMIN_URL", "ANVILKIT_PROTECTED_AUDIT_RUNTIME_LOGIN"} {
+		t.Run(missing, func(t *testing.T) {
+			t.Setenv(missing, "")
+			if _, err := LoadProtectedAuditProvisioning(); err == nil {
+				t.Fatalf("provisioning was accepted without %s", missing)
+			}
+		})
+	}
+	t.Setenv("ANVILKIT_ENVIRONMENT", "development")
+	relaxed, err := LoadProtectedAuditProvisioning()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relaxed.RequiresSeparateLogins() {
+		t.Fatal("a controlled stack administers the audit with the credential it runs as; the separation must not be claimed there")
+	}
+}
+
+// Time is the input to every stamp, ordering, and expiry the service records.
+// A deployment that names a time endpoint but no trust material for it would
+// believe whatever answered on that address, so production requires both the
+// authority it expects to hear from and the operator's material that proves it.
+func TestProductionRequiresAnAuthenticatedTimeAuthority(t *testing.T) {
+	for _, missing := range []string{"ANVILKIT_AUTHORITATIVE_TIME_TRUST_REF", "ANVILKIT_AUTHORITATIVE_TIME_TRUST_ROOT"} {
+		t.Run(missing, func(t *testing.T) {
+			settings := requiredProductionSettings()
+			delete(settings, missing)
+			for name, value := range settings {
+				t.Setenv(name, value)
+			}
+			t.Setenv(missing, "")
+			t.Setenv("ANVILKIT_SIGNING_KEY", "production-signing-material-0123456789")
+			t.Setenv("ANVILKIT_ENCRYPTION_KEY", "production-encryption-material-0123456789")
+			_, err := Load()
+			var details problem.Details
+			if !errors.As(err, &details) || details.Fields[missing] == "" {
+				t.Fatalf("production configuration without %s was accepted: %v", missing, err)
+			}
+		})
 	}
 }

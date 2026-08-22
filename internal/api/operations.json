@@ -1,0 +1,75 @@
+{
+  "servedPrefix": "/v1",
+  "operations": [
+    {
+      "operationId": "listAgentRuns",
+      "method": "GET",
+      "template": "/workspaces/{workspaceId}/agent-runs"
+    },
+    {
+      "operationId": "createAgentRun",
+      "method": "POST",
+      "template": "/workspaces/{workspaceId}/agent-runs"
+    },
+    {
+      "operationId": "getAgentRun",
+      "method": "GET",
+      "template": "/workspaces/{workspaceId}/agent-runs/{runId}"
+    },
+    {
+      "operationId": "getAgentRunSnapshot",
+      "method": "GET",
+      "template": "/workspaces/{workspaceId}/agent-runs/{runId}/snapshot"
+    },
+    {
+      "operationId": "streamAgentRunEvents",
+      "method": "GET",
+      "template": "/workspaces/{workspaceId}/agent-runs/{runId}/events"
+    },
+    {
+      "operationId": "cancelAgentRun",
+      "method": "POST",
+      "template": "/workspaces/{workspaceId}/agent-runs/{runId}/cancel"
+    },
+    {
+      "operationId": "retryAgentRun",
+      "method": "POST",
+      "template": "/workspaces/{workspaceId}/agent-runs/{runId}/retry"
+    },
+    {
+      "operationId": "discardAgentRun",
+      "method": "POST",
+      "template": "/workspaces/{workspaceId}/agent-runs/{runId}/discard"
+    },
+    {
+      "operationId": "respondToAgentInput",
+      "method": "POST",
+      "template": "/workspaces/{workspaceId}/agent-runs/{runId}/inputs/{requestId}/responses"
+    },
+    {
+      "operationId": "decideAgentApproval",
+      "method": "POST",
+      "template": "/workspaces/{workspaceId}/agent-runs/{runId}/approvals/{requestId}/decisions"
+    },
+    {
+      "operationId": "resolveAgentDomainOperation",
+      "method": "POST",
+      "template": "/workspaces/{workspaceId}/agent-runs/{runId}/domain-operations/{operationId}/resolution"
+    },
+    {
+      "operationId": "issueApplyAuthorization",
+      "method": "POST",
+      "template": "/workspaces/{workspaceId}/agent-runs/{runId}/apply-authorizations"
+    },
+    {
+      "operationId": "getAgentArtifact",
+      "method": "GET",
+      "template": "/workspaces/{workspaceId}/artifacts/{artifactId}"
+    },
+    {
+      "operationId": "decideAgentArtifactCustody",
+      "method": "POST",
+      "template": "/workspaces/{workspaceId}/artifacts/{artifactId}/custody"
+    }
+  ]
+}

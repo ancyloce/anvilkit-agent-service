@@ -45,8 +45,12 @@ func (s *Store) Create(ctx context.Context, record artifacts.Record) (artifacts.
 	if err != nil {
 		return artifacts.Record{}, false, err
 	}
-	tag, err := s.database.Exec(ctx, `INSERT INTO agent_artifacts.metadata(workspace_id,project_id,artifact_id,run_id,digest,actual_digest,state,version,security_generation,object_reference,schema_identity,lineage,legal_hold,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT (workspace_id,project_id,artifact_id) DO NOTHING`,
-		record.WorkspaceID, record.ProjectID, record.ID, record.RunID, record.Digest, record.ActualDigest, record.State, record.Version, record.SecurityGeneration, reference, schema, lineageValue, record.LegalHold, record.CreatedAt, record.UpdatedAt)
+	validationValue, err := json.Marshal(record.Validation)
+	if err != nil {
+		return artifacts.Record{}, false, fmt.Errorf("encode artifact validation: %w", err)
+	}
+	tag, err := s.database.Exec(ctx, `INSERT INTO agent_artifacts.metadata(workspace_id,project_id,artifact_id,run_id,kind,digest,actual_digest,state,version,security_generation,object_reference,schema_identity,lineage,validation,legal_hold,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (workspace_id,project_id,artifact_id) DO NOTHING`,
+		record.WorkspaceID, record.ProjectID, record.ID, record.RunID, string(record.Kind), record.Digest, record.ActualDigest, record.State, record.Version, record.SecurityGeneration, reference, schema, lineageValue, validationValue, record.LegalHold, record.CreatedAt, record.UpdatedAt)
 	if err != nil {
 		return artifacts.Record{}, false, fmt.Errorf("record artifact metadata: %w", err)
 	}
@@ -62,11 +66,11 @@ func (s *Store) Create(ctx context.Context, record artifacts.Record) (artifacts.
 
 func (s *Store) Get(ctx context.Context, workspace, project string, id artifacts.ID) (artifacts.Record, bool, error) {
 	record := artifacts.Record{WorkspaceID: workspace, ProjectID: project, ID: id}
-	var reference, schema, lineageValue []byte
-	var actualDigest, deletionReason, deletionClaim *string
+	var reference, schema, lineageValue, validationValue []byte
+	var actualDigest, deletionReason, deletionClaim, kind *string
 	var deletedAt, deletionClaimedAt *time.Time
-	err := s.database.QueryRow(ctx, `SELECT run_id,digest,actual_digest,state,version,security_generation,object_reference,schema_identity,lineage,legal_hold,created_at,updated_at,deleted_at,deletion_reason,deletion_claim,deletion_claimed_at FROM agent_artifacts.metadata WHERE workspace_id=$1 AND project_id=$2 AND artifact_id=$3`, workspace, project, id).
-		Scan(&record.RunID, &record.Digest, &actualDigest, &record.State, &record.Version, &record.SecurityGeneration, &reference, &schema, &lineageValue, &record.LegalHold, &record.CreatedAt, &record.UpdatedAt, &deletedAt, &deletionReason, &deletionClaim, &deletionClaimedAt)
+	err := s.database.QueryRow(ctx, `SELECT run_id,kind,digest,actual_digest,state,version,security_generation,object_reference,schema_identity,lineage,validation,legal_hold,created_at,updated_at,deleted_at,deletion_reason,deletion_claim,deletion_claimed_at FROM agent_artifacts.metadata WHERE workspace_id=$1 AND project_id=$2 AND artifact_id=$3`, workspace, project, id).
+		Scan(&record.RunID, &kind, &record.Digest, &actualDigest, &record.State, &record.Version, &record.SecurityGeneration, &reference, &schema, &lineageValue, &validationValue, &record.LegalHold, &record.CreatedAt, &record.UpdatedAt, &deletedAt, &deletionReason, &deletionClaim, &deletionClaimedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return artifacts.Record{}, false, nil
 	}
@@ -92,6 +96,14 @@ func (s *Store) Get(ctx context.Context, workspace, project string, id artifacts
 	}
 	if err := json.Unmarshal(lineageValue, &record.Lineage); err != nil {
 		return artifacts.Record{}, false, fmt.Errorf("decode artifact lineage: %w", err)
+	}
+	if kind != nil {
+		record.Kind = artifacts.Kind(*kind)
+	}
+	if len(validationValue) > 0 {
+		if err := json.Unmarshal(validationValue, &record.Validation); err != nil {
+			return artifacts.Record{}, false, fmt.Errorf("decode artifact validation: %w", err)
+		}
 	}
 	return record, true, nil
 }

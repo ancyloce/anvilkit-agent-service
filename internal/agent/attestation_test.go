@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/ancyloce/anvilkit-agent-service/internal/trust"
 	"strings"
 	"testing"
 	"time"
@@ -70,7 +71,7 @@ func statementEnvelope(t *testing.T, key ed25519.PrivateKey, keyID, digest, medi
 	envelope := Envelope{
 		PayloadType: CatalogStatementType,
 		Payload:     base64.StdEncoding.EncodeToString(payload),
-		Signatures:  []envelopeSignature{{KeyID: keyID, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(key, encodePAE(CatalogStatementType, payload)))}},
+		Signatures:  []trust.Signature{{KeyID: keyID, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(key, trust.EncodePAE(CatalogStatementType, payload)))}},
 	}
 	raw, err := json.Marshal(envelope)
 	if err != nil {

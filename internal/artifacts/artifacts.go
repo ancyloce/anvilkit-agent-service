@@ -44,7 +44,91 @@ const (
 	ReadAccess         Purpose = "read"
 )
 
+// ValidPurpose reports whether a purpose is one the governed vocabulary names.
+// It is the same vocabulary the canonical description offers callers as the
+// declared access purpose, so a purpose that reaches the audit is one the
+// contract already admitted.
+func ValidPurpose(value Purpose) bool {
+	switch value {
+	case ProducerAccess, ScannerAccess, ReviewAccess, ApprovalAccess, FinalizationAccess, CommitAccess, ReadAccess:
+		return true
+	}
+	return false
+}
+
 type SchemaIdentity struct{ Component, Version, Digest string }
+
+// Kind is what an artifact is, drawn from the governed vocabulary. It is
+// decided when the artifact is produced and never changes: an artifact is not
+// reclassified, it is superseded by another one.
+type Kind string
+
+const (
+	CompiledContext  Kind = "compiled-context"
+	TargetSnapshot   Kind = "target-snapshot"
+	AgentPlan        Kind = "agent-plan"
+	WorkerResult     Kind = "worker-result"
+	ValidationReport Kind = "validation-report"
+)
+
+// ValidKind reports whether a kind is one the governed vocabulary names.
+func ValidKind(value Kind) bool {
+	switch value {
+	case CompiledContext, TargetSnapshot, AgentPlan, WorkerResult, ValidationReport:
+		return true
+	}
+	return false
+}
+
+// Check is one thing that was proved about an artifact's content, and the
+// evidence that proves it. The evidence digest is what makes the check
+// answerable afterwards: a recorded "passed" with nothing behind it is an
+// assertion, not a check.
+type Check struct {
+	Name           string `json:"name"`
+	Result         string `json:"result"`
+	EvidenceDigest string `json:"evidenceDigest"`
+}
+
+// Validation is what was checked about an artifact's content and when. It is
+// recorded with the artifact because it is a fact about that content at that
+// moment; recomputing it later would answer about whatever the content is now.
+type Validation struct {
+	ValidatedAt time.Time `json:"validatedAt"`
+	Checks      []Check   `json:"checks"`
+}
+
+// Valid reports whether the validation names at least one bounded check with
+// a governed result and the evidence behind it.
+func (v Validation) Valid() bool {
+	if v.ValidatedAt.IsZero() || len(v.Checks) < 1 || len(v.Checks) > 32 {
+		return false
+	}
+	for _, check := range v.Checks {
+		if !checkName(check.Name) || (check.Result != "passed" && check.Result != "failed") || !digest(check.EvidenceDigest) {
+			return false
+		}
+	}
+	return true
+}
+
+// checkName bounds a check's name to the governed shape: a lower-case
+// identifier a person can read in an audit.
+func checkName(value string) bool {
+	if len(value) < 1 || len(value) > 64 || value[0] < 'a' || value[0] > 'z' {
+		return false
+	}
+	for _, character := range value {
+		switch {
+		case character >= 'a' && character <= 'z', character >= '0' && character <= '9':
+		case character == '.' || character == '_' || character == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 type Producer struct {
 	TaskID                             string
 	RecoveryEpoch, ExecutionGeneration uint64
@@ -66,16 +150,19 @@ type Reference struct {
 type Record struct {
 	WorkspaceID, ProjectID, RunID string
 	ID                            ID
+	Kind                          Kind
 	Digest, ActualDigest          string
 	Reference                     Reference
 	Schema                        SchemaIdentity
 	Lineage                       Lineage
-	State                         State
-	Version, SecurityGeneration   uint64
-	LegalHold                     bool
-	CreatedAt, UpdatedAt          time.Time
-	DeletedAt                     *time.Time
-	DeletionReason                string
+	// Validation is what was proved about this content when it was recorded.
+	Validation                  Validation
+	State                       State
+	Version, SecurityGeneration uint64
+	LegalHold                   bool
+	CreatedAt, UpdatedAt        time.Time
+	DeletedAt                   *time.Time
+	DeletionReason              string
 	// DeletionClaim names the decision that durably owns this artifact's
 	// destruction, and DeletionClaimedAt when it took ownership. They are set
 	// before anything is revoked or destroyed and never change afterwards, so
@@ -108,11 +195,13 @@ func (c DeletionClaim) Valid() bool {
 type Create struct {
 	WorkspaceID, ProjectID, RunID string
 	ID                            ID
+	Kind                          Kind
 	Bytes                         []byte
 	ClaimedDigest                 string
 	Reference                     Reference
 	Schema                        SchemaIdentity
 	Lineage                       Lineage
+	Validation                    Validation
 	CreatedAt                     time.Time
 }
 type ObjectStore interface {
@@ -153,6 +242,13 @@ type Grant struct {
 // it or why, and that is precisely the record an incident needs.
 type ProtectedAudit interface {
 	PrivilegedMutation(ctx context.Context, record securityaudit.Record, mutation securityaudit.Mutation) error
+	// ResumeMutation finishes a decision that is already authorized on the
+	// record without authorizing a second one. Destruction is the case it
+	// exists for: the process that authorized and claimed a deletion is not
+	// necessarily the process that gets to finish it, and a successor that
+	// composed its own authorization would replace the audited decision with
+	// its own rather than complete it.
+	ResumeMutation(ctx context.Context, id string, admit securityaudit.Admission, mutation securityaudit.AdoptedMutation) error
 }
 
 // CustodyCapability names one artifact-custody operation. An actor must
@@ -354,6 +450,14 @@ func (s *Service) Create(ctx context.Context, input Create) (Record, error) {
 	if input.WorkspaceID == "" || input.ProjectID == "" || input.RunID == "" || input.ID == "" || len(input.Bytes) == 0 || input.Reference.Bucket == "" || input.Reference.ObjectKey == "" || input.Reference.SizeBytes != int64(len(input.Bytes)) || input.Reference.MediaType == "" || !digest(input.ClaimedDigest) || input.CreatedAt.IsZero() || !schema(input.Schema) || !lineage(input.Lineage, input.RunID) {
 		return Record{}, problem.New(problem.CodeRequestInvalid, "")
 	}
+	// What the artifact is, and what was checked about it, are recorded with
+	// it or it is not recorded. Both are known at this moment and at no later
+	// one: an artifact whose kind is decided afterwards was classified by
+	// something other than what produced it, and validation recomputed later
+	// answers about whatever the content is then.
+	if !ValidKind(input.Kind) || !input.Validation.Valid() {
+		return Record{}, problem.New(problem.CodeRequestInvalid, "")
+	}
 	actual := sha256.Sum256(input.Bytes)
 	actualDigest := "sha256:" + hex.EncodeToString(actual[:])
 	state := Pending
@@ -371,7 +475,7 @@ func (s *Service) Create(ctx context.Context, input Create) (Record, error) {
 	if err := s.objects.PutOnce(ctx, input.Reference, append([]byte(nil), input.Bytes...)); err != nil {
 		return Record{}, fmt.Errorf("write immutable artifact: %w", err)
 	}
-	record := Record{WorkspaceID: input.WorkspaceID, ProjectID: input.ProjectID, RunID: input.RunID, ID: input.ID, Digest: input.ClaimedDigest, ActualDigest: actualDigest, Reference: input.Reference, Schema: input.Schema, Lineage: cloneLineage(input.Lineage), State: state, Version: 1, SecurityGeneration: 1, CreatedAt: input.CreatedAt, UpdatedAt: input.CreatedAt}
+	record := Record{WorkspaceID: input.WorkspaceID, ProjectID: input.ProjectID, RunID: input.RunID, ID: input.ID, Kind: input.Kind, Digest: input.ClaimedDigest, ActualDigest: actualDigest, Reference: input.Reference, Schema: input.Schema, Lineage: cloneLineage(input.Lineage), Validation: cloneValidation(input.Validation), State: state, Version: 1, SecurityGeneration: 1, CreatedAt: input.CreatedAt, UpdatedAt: input.CreatedAt}
 	winner, created, err := s.store.Create(ctx, record)
 	if err != nil {
 		return Record{}, fmt.Errorf("record artifact identity: %w", err)
@@ -577,20 +681,29 @@ func (s *Service) Delete(ctx context.Context, workspace, project string, id ID, 
 		// tombstone is the answer rather than a second decision over it.
 		return value, nil
 	}
-	decision := value.DeletionClaim
-	if decision == "" {
-		if value.LegalHold {
-			return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
+	if value.DeletionClaim != "" {
+		// The destruction is already owned. This request does not open a
+		// second decision over it — it finishes the one that owns it, under
+		// the terms that decision was audited on. Composing a fresh
+		// authorization here would put this caller's actor, reason, and trace
+		// on an identity another decision already holds, which the protected
+		// audit refuses as a conflicting decision and which would, if it did
+		// not, quietly rewrite who authorized the destruction.
+		if err := s.ConvergeDeletion(ctx, value, now); err != nil {
+			return Record{}, err
 		}
-		if expected == 0 || value.Version != expected {
-			return Record{}, problem.New(problem.CodeVersionConflict, "")
-		}
-		decision = own
+		return s.Get(ctx, workspace, project, id)
+	}
+	if value.LegalHold {
+		return Record{}, problem.New(problem.CodeArtifactAccessDenied, "")
+	}
+	if expected == 0 || value.Version != expected {
+		return Record{}, problem.New(problem.CodeVersionConflict, "")
 	}
 	// The artifact's content ceases to exist, so the audit record carries the
 	// digest that was and no digest that is.
-	if err := s.auditedChange(ctx, decision, "artifact-deleted", value, custody, value.Digest, "", func(ctx context.Context) error {
-		_, err := s.destroy(ctx, decision, value, custody.Reason, now)
+	if err := s.auditedChange(ctx, own, "artifact-deleted", value, custody, value.Digest, "", func(ctx context.Context) error {
+		_, err := s.destroy(ctx, own, value, custody.Reason, now)
 		return err
 	}); err != nil {
 		return Record{}, err
@@ -656,6 +769,68 @@ func (s *Service) destroy(ctx context.Context, decision string, value Record, re
 	return tombstoned, nil
 }
 
+// ConvergeDeletion finishes a destruction that some earlier process claimed
+// and did not complete.
+//
+// Taking the claim is the point of no return: the artifact has left every live
+// state, its grants are about to be withdrawn, and its bytes are about to
+// stop existing. A process that crashes anywhere after that leaves a record
+// that is neither usable nor destroyed, and nothing about that state says who
+// may finish it. The original caller may never return, and its authority may
+// have been withdrawn in the meantime — which would be an odd thing to require,
+// since the decision to destroy was already made, audited, and acted on.
+//
+// So the successor adopts the recorded decision instead of making one. The
+// protected audit hands back the authorization the first process wrote, this
+// proves that authorization really was a destruction of this artifact in this
+// scope, and the remaining steps run under it in their original order:
+// revoke, then remove the content, then land the tombstone. Nothing here
+// re-reads current authority, because current authority is not what authorized
+// this — the recorded decision is, and it is preserved exactly as written.
+//
+// The steps are individually idempotent, so convergence is safe to attempt as
+// often as it takes: the claim resumes for the decision that owns it,
+// revocation is a no-op once nothing is outstanding, removing an absent object
+// is a no-op, and a tombstone that already landed is recognised.
+func (s *Service) ConvergeDeletion(ctx context.Context, value Record, now time.Time) error {
+	if value.DeletionClaim == "" || value.State == Deleted {
+		return nil
+	}
+	if now.IsZero() {
+		return problem.New(problem.CodeRequestInvalid, "")
+	}
+	// The claim names an audit identity, and an identity is only as good as
+	// what stands under it. A decision that is not this artifact's
+	// destruction, in this artifact's scope, is not one this convergence may
+	// act on — otherwise a claim carrying any recorded identity would be
+	// enough to destroy content that decision never covered.
+	admit := func(decision securityaudit.Record) error {
+		if decision.Action != "artifact-deleted" || decision.Scope.WorkspaceID != value.WorkspaceID || decision.Scope.ProjectID != value.ProjectID || decision.Scope.ResourceID != string(value.ID) {
+			denied := problem.New(problem.CodeArtifactAccessDenied, "")
+			denied.Detail = "the claimed decision does not authorize destroying this artifact"
+			return denied
+		}
+		return nil
+	}
+	err := s.audit.ResumeMutation(ctx, value.DeletionClaim, admit, func(ctx context.Context, decision securityaudit.Record) error {
+		_, err := s.destroy(ctx, value.DeletionClaim, value, decision.Reason, now)
+		return err
+	})
+	if err != nil {
+		var unrecorded securityaudit.UnrecordedDecision
+		if errors.As(err, &unrecorded) {
+			// The claim stands on the record with no audited decision behind
+			// it. That is not something to converge past: destroying content
+			// on an unrecorded authorization is exactly what the protected
+			// audit exists to prevent, so it is reported and left for an
+			// operator.
+			return fmt.Errorf("artifact %s holds a deletion claim with no recorded decision: %w", value.ID, err)
+		}
+		return fmt.Errorf("converge claimed artifact deletion %s: %w", value.ID, err)
+	}
+	return nil
+}
+
 // Reconcile applies retention and orphan handling across the live corpus.
 // Both outcomes revoke access, so both are recorded in the protected audit on
 // the same terms an operator's revocation is: the record simply names the
@@ -683,6 +858,16 @@ func (s *Service) Reconcile(ctx context.Context, traceparent string, now time.Ti
 }
 
 func (s *Service) reconcileOne(ctx context.Context, value Record, traceparent string, now time.Time) error {
+	// A destruction that is already owned is finished under the decision that
+	// owns it, before anything else about this record is considered. It is
+	// checked first and without regard to whether the object still exists,
+	// because the interruption this recovers from is most likely to have
+	// landed between taking the claim and removing the content — which is
+	// exactly the state that still has an object, and exactly the state a
+	// sweep keyed on missing objects would walk past forever.
+	if value.DeletionClaim != "" && value.State != Deleted {
+		return s.ConvergeDeletion(ctx, value, now)
+	}
 	exists, err := s.objects.Exists(ctx, value.Reference)
 	if err != nil {
 		return fmt.Errorf("read artifact object %s: %w", value.ID, err)
@@ -866,6 +1051,7 @@ func digest(value string) bool {
 }
 func clone(value Record) Record {
 	value.Lineage = cloneLineage(value.Lineage)
+	value.Validation = cloneValidation(value.Validation)
 	if value.DeletedAt != nil {
 		copyTime := *value.DeletedAt
 		value.DeletedAt = &copyTime
@@ -876,6 +1062,13 @@ func clone(value Record) Record {
 	}
 	return value
 }
+
+// cloneValidation copies the recorded validation so a caller holding the
+// input cannot alter what the record says was checked.
+func cloneValidation(value Validation) Validation {
+	return Validation{ValidatedAt: value.ValidatedAt, Checks: append([]Check(nil), value.Checks...)}
+}
+
 func cloneLineage(value Lineage) Lineage {
 	value.Inputs = append([]ID(nil), value.Inputs...)
 	return value

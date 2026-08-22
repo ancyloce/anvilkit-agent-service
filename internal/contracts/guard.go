@@ -39,10 +39,20 @@ const (
 	// documented recovery path cannot answer with a shape the contract does
 	// not describe.
 	SnapshotOut Boundary = "snapshot-out"
+	// AuthorizationOut is the issued apply-authorization boundary: the
+	// representation carrying a signed capability is proved against its
+	// canonical contract before it leaves, because a capability served in a
+	// shape no generated client accepts is a capability nobody can redeem.
+	AuthorizationOut Boundary = "authorization-out"
+	// ArtifactOut is the governed artifact metadata boundary: an artifact's
+	// representation is proved against its canonical contract before it
+	// leaves, so a record that cannot be represented is refused rather than
+	// served in a shape the contract does not describe.
+	ArtifactOut Boundary = "artifact-out"
 )
 
 func RequiredBoundaries() []Boundary {
-	return []Boundary{APIIn, ProviderOut, ProviderIn, WorkerIn, PagixOut, PagixIn, ContractRuntimeOut, ContractRuntimeIn, EventIn, EvidenceIn, DeltaOut, SnapshotOut}
+	return []Boundary{APIIn, ProviderOut, ProviderIn, WorkerIn, PagixOut, PagixIn, ContractRuntimeOut, ContractRuntimeIn, EventIn, EvidenceIn, DeltaOut, SnapshotOut, AuthorizationOut, ArtifactOut}
 }
 
 type Guard struct {

@@ -161,7 +161,7 @@ func bytesDigest(value []byte) string {
 }
 func validCreate(id ID, now time.Time) Create {
 	value := []byte("immutable artifact bytes")
-	return Create{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ID: id, Bytes: value, ClaimedDigest: bytesDigest(value), Reference: Reference{Bucket: "artifacts", ObjectKey: string(id), SizeBytes: int64(len(value)), MediaType: "application/json"}, Schema: SchemaIdentity{Component: "plan", Version: "1.0.0", Digest: "sha256:" + strings.Repeat("e", 64)}, Lineage: Lineage{RunID: "run-01", TaskID: "task-01", PhysicalAttemptID: "attempt-01", Producer: Producer{TaskID: "task-01", PhysicalAttemptID: "attempt-01", RecoveryEpoch: 1, ExecutionGeneration: 1, LeaseEpoch: 1, BuildIdentity: "worker-build-01", Provider: "fake-worker"}, BOMDigest: "sha256:" + strings.Repeat("a", 64), SchemaDigest: "sha256:" + strings.Repeat("b", 64), CatalogDigest: "sha256:" + strings.Repeat("c", 64)}, CreatedAt: now}
+	return Create{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ID: id, Bytes: value, ClaimedDigest: bytesDigest(value), Reference: Reference{Bucket: "artifacts", ObjectKey: string(id), SizeBytes: int64(len(value)), MediaType: "application/json"}, Schema: SchemaIdentity{Component: "plan", Version: "1.0.0", Digest: "sha256:" + strings.Repeat("e", 64)}, Lineage: Lineage{RunID: "run-01", TaskID: "task-01", PhysicalAttemptID: "attempt-01", Producer: Producer{TaskID: "task-01", PhysicalAttemptID: "attempt-01", RecoveryEpoch: 1, ExecutionGeneration: 1, LeaseEpoch: 1, BuildIdentity: "worker-build-01", Provider: "fake-worker"}, BOMDigest: "sha256:" + strings.Repeat("a", 64), SchemaDigest: "sha256:" + strings.Repeat("b", 64), CatalogDigest: "sha256:" + strings.Repeat("c", 64)}, Kind: WorkerResult, Validation: Validation{ValidatedAt: now, Checks: []Check{{Name: "schema", Result: "passed", EvidenceDigest: "sha256:" + strings.Repeat("b", 64)}}}, CreatedAt: now}
 }
 
 func TestLifecycleCASMatrixAndDigestMismatchQuarantine(t *testing.T) {
@@ -801,9 +801,10 @@ func TestADeletionRacingALegalHoldNeverDestroysContentItStillPointsAt(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The deletion took ownership and was interrupted before it finished.
-		decision := decisionIdentity("artifact-deleted", input.WorkspaceID, input.ProjectID, input.ID, record.Version)
-		claimed, err := store.ClaimDeletion(ctx, input.WorkspaceID, input.ProjectID, input.ID, record.Version, DeletionClaim{Decision: decision, Terminal: Expired, At: artifactNow})
+		// The deletion was authorized, took ownership, and was interrupted
+		// before it finished.
+		decision := interruptedDeletion(t, service, store, record, testCustody("destroy"), artifactNow)
+		claimed, err := service.Get(ctx, input.WorkspaceID, input.ProjectID, input.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -868,10 +869,7 @@ func TestAnInterruptedCustodyChangeConvergesOnRetry(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		decision := decisionIdentity("artifact-deleted", input.WorkspaceID, input.ProjectID, input.ID, record.Version)
-		if _, err := store.ClaimDeletion(ctx, input.WorkspaceID, input.ProjectID, input.ID, record.Version, DeletionClaim{Decision: decision, Terminal: Expired, At: artifactNow}); err != nil {
-			t.Fatal(err)
-		}
+		decision := interruptedDeletion(t, service, store, record, testCustody("destroy"), artifactNow)
 		final, err := service.Delete(ctx, input.WorkspaceID, input.ProjectID, input.ID, record.Version, testCustody("destroy"), artifactNow.Add(time.Minute))
 		if err != nil {
 			t.Fatalf("the retry could not finish an owned destruction: %v", err)
@@ -1177,5 +1175,339 @@ func TestArtifactAuthorityIsProvedBeforeExistence(t *testing.T) {
 	}
 	if live.Code != string(problem.CodeArtifactAccessDenied) || imaginary.Code != live.Code {
 		t.Fatalf("grant use answered %q for a live artifact and %q for an absent one", live.Code, imaginary.Code)
+	}
+}
+
+// errInterruptedHere is what a process that stopped mid-decision looks like to
+// the protected audit: an indeterminate failure, which records no outcome and
+// leaves the decision open exactly as a crash would.
+var errInterruptedHere = errors.New("the process stopped here")
+
+// interruptedDeletion reproduces the durable state a destruction that was
+// authorized and claimed, and then interrupted, actually leaves behind: the
+// authorization standing in the protected audit, the claim taken on the
+// record, no outcome, and nothing revoked or destroyed. Placing the claim
+// directly on the store would produce a state production cannot reach — a
+// claim with no audited decision behind it — and convergence deliberately
+// refuses that one.
+func interruptedDeletion(t *testing.T, service *Service, store *MemoryStore, record Record, custody Custody, now time.Time) string {
+	t.Helper()
+	decision := decisionIdentity("artifact-deleted", record.WorkspaceID, record.ProjectID, record.ID, record.Version)
+	err := service.auditedChange(context.Background(), decision, "artifact-deleted", record, custody, record.Digest, "", func(ctx context.Context) error {
+		terminal := Expired
+		if record.State == Quarantined {
+			terminal = Quarantined
+		}
+		if _, err := store.ClaimDeletion(ctx, record.WorkspaceID, record.ProjectID, record.ID, record.Version, DeletionClaim{Decision: decision, Terminal: terminal, At: now}); err != nil {
+			return err
+		}
+		return errInterruptedHere
+	})
+	if !errors.Is(err, errInterruptedHere) {
+		t.Fatalf("the interruption did not land where it was meant to: %v", err)
+	}
+	return decision
+}
+
+// orderedLifecycle records the order in which a destruction's irreversible
+// steps happen. The order is the correctness argument, not an implementation
+// detail: withdrawing access has to precede destroying the bytes, and the
+// tombstone has to land last, or a reader holding a live grant meets content
+// that is already gone, or a record says its content is destroyed while the
+// bytes are still there to be read.
+type orderedLifecycle struct {
+	lock  sync.Mutex
+	steps []string
+}
+
+func (o *orderedLifecycle) record(step string) {
+	o.lock.Lock()
+	defer o.lock.Unlock()
+	o.steps = append(o.steps, step)
+}
+
+// reset forgets what has been observed so far, so a test can set up a durable
+// state and then observe only the steps the recovery itself takes.
+func (o *orderedLifecycle) reset() {
+	o.lock.Lock()
+	defer o.lock.Unlock()
+	o.steps = nil
+}
+
+func (o *orderedLifecycle) observed() []string {
+	o.lock.Lock()
+	defer o.lock.Unlock()
+	return append([]string(nil), o.steps...)
+}
+
+// orderedReader and orderedObjects are the real in-memory doubles with one
+// added responsibility: they say when they were called.
+type orderedReader struct {
+	memoryReader
+	order *orderedLifecycle
+}
+
+func (r *orderedReader) Revoke(ctx context.Context, value Record) error {
+	r.order.record("revoke")
+	return r.memoryReader.Revoke(ctx, value)
+}
+
+type orderedObjects struct {
+	*MemoryObjects
+	order *orderedLifecycle
+}
+
+func (o *orderedObjects) Delete(ctx context.Context, ref Reference) error {
+	o.order.record("destroy-content")
+	return o.MemoryObjects.Delete(ctx, ref)
+}
+
+type orderedStore struct {
+	*MemoryStore
+	order *orderedLifecycle
+}
+
+func (s *orderedStore) Update(ctx context.Context, next Record, expected uint64) (Record, error) {
+	if next.State == Deleted {
+		s.order.record("tombstone")
+	}
+	return s.MemoryStore.Update(ctx, next, expected)
+}
+
+func (s *orderedStore) ClaimDeletion(ctx context.Context, workspace, project string, id ID, expected uint64, claim DeletionClaim) (Record, error) {
+	s.order.record("claim")
+	return s.MemoryStore.ClaimDeletion(ctx, workspace, project, id, expected, claim)
+}
+
+// orderedLifecycleService is the artifact lifecycle over stores that report
+// the order of the steps a destruction takes, together with the authority and
+// the protected audit sink the test drives it against.
+type orderedLifecycleService struct {
+	service   *Service
+	store     *orderedStore
+	objects   *orderedObjects
+	order     *orderedLifecycle
+	authority *authority.Static
+	sink      *securityaudit.MemorySink
+}
+
+func orderedService(t *testing.T) orderedLifecycleService {
+	t.Helper()
+	order := &orderedLifecycle{}
+	store := &orderedStore{MemoryStore: NewMemoryStore(), order: order}
+	objects := &orderedObjects{MemoryObjects: NewMemoryObjects(), order: order}
+	source := testAuthority()
+	audit, sink := testAuditWithSink(t)
+	service, err := New(store, objects, &orderedReader{order: order}, source, audit, time.Hour, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return orderedLifecycleService{service: service, store: store, objects: objects, order: order, authority: source, sink: sink}
+}
+
+// auditRecordOf reads exactly what the protected audit holds under one
+// identity. The test asserts against the record itself rather than against the
+// lifecycle's report of it: whether the successor preserved the original
+// decision is a question about the record.
+func auditRecordOf(t *testing.T, sink *securityaudit.MemorySink, id string) securityaudit.Record {
+	t.Helper()
+	record, found, err := sink.Lookup(context.Background(), id)
+	if err != nil || !found {
+		t.Fatalf("no protected audit record stands under %q: found=%v err=%v", id, found, err)
+	}
+	return record
+}
+
+// A destruction destroys nothing a reader could still reach, and records
+// nothing as destroyed that still exists. Both are properties of one ordering,
+// so the ordering is asserted directly rather than inferred from the end state.
+func TestADestructionRevokesBeforeDestroyingAndTombstonesLast(t *testing.T) {
+	ctx := context.Background()
+	fixture := orderedService(t)
+	input := validCreate("artifact-ordering", artifactNow)
+	record, err := fixture.service.Create(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.Delete(ctx, input.WorkspaceID, input.ProjectID, input.ID, record.Version, testCustody("destroy"), artifactNow.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	observed := fixture.order.observed()
+	want := []string{"claim", "revoke", "destroy-content", "tombstone"}
+	if len(observed) != len(want) {
+		t.Fatalf("the destruction took %v, expected %v", observed, want)
+	}
+	for index := range want {
+		if observed[index] != want[index] {
+			t.Fatalf("the destruction took %v, expected %v", observed, want)
+		}
+	}
+}
+
+// The successor is the whole point. A destruction interrupted at any step
+// after the claim has to converge under a process that holds none of the
+// original caller's authority — the reconciler holds no custody capability at
+// all — and it has to finish the decision that was audited rather than record
+// a new one.
+func TestAClaimedDestructionConvergesUnderASuccessorWithoutTheOriginalAuthority(t *testing.T) {
+	ctx := context.Background()
+	traceparent := "00-" + strings.Repeat("3", 32) + "-" + strings.Repeat("4", 16) + "-01"
+
+	// Each case is a durable state one crash point leaves behind. The claim is
+	// taken in every one of them; what differs is how far the irreversible
+	// work had got.
+	for _, interruption := range []struct {
+		name            string
+		contentSurvives bool
+	}{
+		{name: "interrupted after the claim, before anything was revoked", contentSurvives: true},
+		{name: "interrupted after the content was destroyed, before the tombstone", contentSurvives: false},
+	} {
+		t.Run(interruption.name, func(t *testing.T) {
+			fixture := orderedService(t)
+			input := validCreate("artifact-successor", artifactNow)
+			record, err := fixture.service.Create(ctx, input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := testCustody("court-ordered-destruction")
+			decision := interruptedDeletion(t, fixture.service, fixture.store.MemoryStore, record, original, artifactNow)
+			if !interruption.contentSurvives {
+				if err := fixture.objects.Delete(ctx, input.Reference); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fixture.order.reset()
+			// Authority is withdrawn entirely before the successor runs. A
+			// convergence that re-read current authority would stop here, and
+			// the artifact would stay claimed and unfinished forever.
+			fixture.authority.Revoke()
+
+			// The successor is the reconciliation sweep, which acts under the
+			// reconciler's own identity and holds no custody capability.
+			if err := fixture.service.Reconcile(ctx, traceparent, artifactNow.Add(time.Hour)); err != nil {
+				t.Fatalf("the successor could not converge the claimed destruction: %v", err)
+			}
+			final, err := fixture.service.Get(ctx, input.WorkspaceID, input.ProjectID, input.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if final.State != Deleted || final.DeletedAt == nil || final.DeletionClaim != decision {
+				t.Fatalf("the destruction did not converge on its owning decision: %#v", final)
+			}
+			if exists, err := fixture.objects.Exists(ctx, input.Reference); err != nil || exists {
+				t.Fatalf("the content survived convergence: exists=%v err=%v", exists, err)
+			}
+			// The original audited decision is preserved: the successor
+			// finished it, it did not replace it. The reason the record
+			// carries is the operator's, never the reconciler's.
+			if final.DeletionReason != original.Reason {
+				t.Fatalf("convergence rewrote the decision's stated reason: %q", final.DeletionReason)
+			}
+			authorization := auditRecordOf(t, fixture.sink, decision)
+			if authorization.Actor != original.ActorID || authorization.Reason != original.Reason || authorization.Ticket != original.Ticket {
+				t.Fatalf("the successor replaced the audited decision: %#v", authorization)
+			}
+			outcome := auditRecordOf(t, fixture.sink, decision+":outcome")
+			if outcome.Outcome != "applied" || outcome.Actor != original.ActorID {
+				t.Fatalf("the outcome was not recorded against the original decision: %#v", outcome)
+			}
+			// Whatever the crash point, the steps that still had to happen
+			// happened in the governed order.
+			observed := fixture.order.observed()
+			if err := provesOrdering(observed); err != nil {
+				t.Fatalf("%v: %v", err, observed)
+			}
+		})
+	}
+}
+
+// provesOrdering checks that whatever subset of the destruction steps ran, the
+// ones that ran kept their order: nothing is destroyed before access is
+// withdrawn, and the tombstone is last.
+func provesOrdering(observed []string) error {
+	position := map[string]int{}
+	for index, step := range observed {
+		if _, seen := position[step]; !seen {
+			position[step] = index
+		}
+	}
+	revoke, revoked := position["revoke"]
+	destroy, destroyed := position["destroy-content"]
+	tombstone, tombstoned := position["tombstone"]
+	if !tombstoned {
+		return errors.New("the tombstone never landed")
+	}
+	if revoked && destroyed && revoke > destroy {
+		return errors.New("content was destroyed before access was withdrawn")
+	}
+	if revoked && revoke > tombstone {
+		return errors.New("the tombstone landed before access was withdrawn")
+	}
+	if destroyed && destroy > tombstone {
+		return errors.New("the tombstone landed before the content was destroyed")
+	}
+	return nil
+}
+
+// A claim standing on a record with nothing audited behind it is not a
+// destruction anyone authorized. Convergence refuses it rather than
+// completing it, because completing it would destroy tenant content on an
+// authorization that does not exist.
+func TestAClaimWithNoRecordedDecisionIsNeverConverged(t *testing.T) {
+	ctx := context.Background()
+	service, store, objects := testService(t)
+	input := validCreate("artifact-unrecorded-claim", artifactNow)
+	record, err := service.Create(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimDeletion(ctx, input.WorkspaceID, input.ProjectID, input.ID, record.Version, DeletionClaim{Decision: "artifact.unrecorded", Terminal: Expired, At: artifactNow}); err != nil {
+		t.Fatal(err)
+	}
+	err = service.Reconcile(ctx, "00-"+strings.Repeat("5", 32)+"-"+strings.Repeat("6", 16)+"-01", artifactNow.Add(time.Hour))
+	if err == nil {
+		t.Fatal("an unrecorded destruction claim was converged")
+	}
+	var unrecorded securityaudit.UnrecordedDecision
+	if !errors.As(err, &unrecorded) {
+		t.Fatalf("the refusal did not name the missing decision: %v", err)
+	}
+	if exists, existsErr := objects.Exists(ctx, input.Reference); existsErr != nil || !exists {
+		t.Fatalf("content was destroyed on an unrecorded decision: exists=%v err=%v", exists, existsErr)
+	}
+}
+
+// A claim whose recorded decision authorized something else — another
+// artifact, another scope, or another action entirely — is refused for the
+// same reason: an audit identity is only authority for what stands under it.
+func TestAClaimNamingAnUnrelatedDecisionIsRefused(t *testing.T) {
+	ctx := context.Background()
+	service, store, objects := testService(t)
+	input := validCreate("artifact-foreign-claim", artifactNow)
+	record, err := service.Create(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A legal hold on this same artifact is a real audited decision. It is
+	// not a destruction, so it may not be used as one.
+	held, err := service.SetLegalHold(ctx, input.WorkspaceID, input.ProjectID, input.ID, record.Version, true, testCustody("litigation-hold"), artifactNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holdDecision := decisionIdentity("artifact-legal-hold-placed", input.WorkspaceID, input.ProjectID, input.ID, record.Version)
+	lifted, err := service.SetLegalHold(ctx, input.WorkspaceID, input.ProjectID, input.ID, held.Version, false, testCustody("hold-lifted"), artifactNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimDeletion(ctx, input.WorkspaceID, input.ProjectID, input.ID, lifted.Version, DeletionClaim{Decision: holdDecision, Terminal: Expired, At: artifactNow}); err != nil {
+		t.Fatal(err)
+	}
+	err = service.Reconcile(ctx, "00-"+strings.Repeat("7", 32)+"-"+strings.Repeat("8", 16)+"-01", artifactNow.Add(time.Hour))
+	if err == nil {
+		t.Fatal("a claim naming a decision that authorized no destruction was converged")
+	}
+	if exists, existsErr := objects.Exists(ctx, input.Reference); existsErr != nil || !exists {
+		t.Fatalf("content was destroyed under an unrelated decision: exists=%v err=%v", exists, existsErr)
 	}
 }

@@ -81,7 +81,17 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 		return
 	}
 	parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
-	if len(parts) < 4 || parts[0] != "v1" || parts[1] != "workspaces" {
+	// Every request is resolved against the production routing table before
+	// it is dispatched. The table is what a conformance gate can check the
+	// canonical description against, and resolving through it is what keeps
+	// the table honest: a path the table does not name reaches no handler,
+	// so a table that drifted from the router would stop serving rather than
+	// quietly describe something else.
+	if _, routed := routedOperation(request.Method, parts); !routed {
+		writeProblem(response, problem.New(problem.CodeResourceNotFound, request.Header.Get("traceparent")), request.Header.Get("traceparent"))
+		return
+	}
+	if len(parts) < 4 || parts[1] != "workspaces" {
 		writeProblem(response, problem.New(problem.CodeResourceNotFound, request.Header.Get("traceparent")), request.Header.Get("traceparent"))
 		return
 	}
@@ -89,7 +99,7 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 	// run: an artifact outlives the run that produced it, and its custody is
 	// decided long after that run is gone.
 	if parts[3] == "artifacts" {
-		h.serveArtifactCustody(response, request, claims, parts)
+		h.serveArtifact(response, request, claims, parts)
 		return
 	}
 	if parts[3] != "agent-runs" {
@@ -204,6 +214,27 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 			h.writeRepresentation(response, result, err, request)
 			return
 		}
+		// Apply-authorization issuance. The command is intent only: what the
+		// signed capability ends up asserting is resolved inward from the run,
+		// the approval, and current authority, so transport reads the
+		// addressed run and the concurrency, idempotency, digest, and trace
+		// headers and decides nothing else.
+		if len(parts) == 6 && parts[5] == "apply-authorizations" {
+			raw, err := readBoundedCommand(response, request)
+			if err != nil {
+				writeProblem(response, err, request.Header.Get("traceparent"))
+				return
+			}
+			result, err := h.core.IssueApplyAuthorization(request.Context(), claims, input, raw)
+			// A newly issued capability is a created resource; a replayed key
+			// answers the recorded outcome on its original terms.
+			if err == nil && !result.Replayed {
+				h.writeRepresentationStatus(response, result, err, request, http.StatusCreated)
+				return
+			}
+			h.writeRepresentation(response, result, err, request)
+			return
+		}
 		if len(parts) == 8 && parts[5] == "approvals" && parts[7] == "decisions" {
 			raw, err := readBoundedCommand(response, request)
 			if err != nil {
@@ -215,10 +246,21 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 			return
 		}
 	}
-	writeProblem(response, problem.New(problem.CodeResourceNotFound, request.Header.Get("traceparent")), request.Header.Get("traceparent"))
+	// The routing table named this operation and no branch above answered it.
+	// That is a gap between what the service says it serves and what it
+	// serves, so it is distinguishable from an ordinary absent resource: the
+	// conformance gate asserts no declared operation reaches this line.
+	unhandled := problem.New(problem.CodeResourceNotFound, request.Header.Get("traceparent"))
+	unhandled.Detail = unroutedDetail
+	writeProblem(response, unhandled, request.Header.Get("traceparent"))
 }
 
-// serveArtifactCustody carries one artifact custody decision inward. Transport
+// unroutedDetail marks the answer a declared operation gets when the router
+// names it and nothing handles it.
+const unroutedDetail = "the addressed operation is declared but no production handler answered it"
+
+// serveArtifact carries the artifact surface inward: reading one artifact's
+// governed metadata, and deciding its custody. Transport
 // reads the addressed workspace and artifact out of the path and the
 // concurrency, idempotency, digest, and trace headers off the request, and
 // decides nothing else: who is deciding, in which project, and whether they
@@ -227,9 +269,28 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 // The decision changes what may be done to the artifact rather than producing
 // a representation of it, so a successful decision answers 204 with the
 // revision it produced in ETag.
-func (h *Handler) serveArtifactCustody(response http.ResponseWriter, request *http.Request, claims auth.Claims, parts []string) {
+func (h *Handler) serveArtifact(response http.ResponseWriter, request *http.Request, claims auth.Claims, parts []string) {
+	// Reading an artifact's governed metadata. It is a disclosure rather than
+	// a decision, so it carries no precondition and no idempotency key: what
+	// it needs is the addressed artifact and proof of who is asking.
+	if len(parts) == 5 && request.Method == http.MethodGet {
+		result, err := h.core.GetArtifact(request.Context(), claims, runapp.ArtifactInput{
+			WorkspaceID: parts[2],
+			ArtifactID:  parts[4],
+			// Why the artifact is being read. The canonical description makes
+			// it a required header, and it is carried inward untouched:
+			// transport does not choose a purpose on a caller's behalf, and a
+			// purpose the service supplied is not one anybody declared.
+			Purpose:     request.Header.Get("X-AnvilKit-Access-Purpose"),
+			Traceparent: request.Header.Get("traceparent"),
+		})
+		h.writeRepresentation(response, result, err, request)
+		return
+	}
 	if len(parts) != 6 || parts[5] != "custody" || request.Method != http.MethodPost {
-		writeProblem(response, problem.New(problem.CodeResourceNotFound, request.Header.Get("traceparent")), request.Header.Get("traceparent"))
+		unhandled := problem.New(problem.CodeResourceNotFound, request.Header.Get("traceparent"))
+		unhandled.Detail = unroutedDetail
+		writeProblem(response, unhandled, request.Header.Get("traceparent"))
 		return
 	}
 	raw, err := readBoundedCommand(response, request)
