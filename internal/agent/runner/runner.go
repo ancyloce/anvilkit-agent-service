@@ -243,7 +243,12 @@ func (r *Runner) Turn(ctx context.Context, request TurnRequest) (TurnOutcome, er
 	if planErr != nil {
 		var details problem.Details
 		if !errors.As(planErr, &details) {
-			return TurnOutcome{}, fmt.Errorf("plan turn: %w", planErr)
+			// The turn failed, but the physical provider attempts it already
+			// made were still billed. Their usage travels with the error so
+			// the caller can account a failed attempt: a turn that never
+			// reaches a decision is exactly the case where dropping the
+			// outcome would drop real spend with it.
+			return TurnOutcome{Usage: usage}, fmt.Errorf("plan turn: %w", planErr)
 		}
 		if details.Code == string(problem.CodeBudgetDenied) {
 			// The pinned budget ran out inside bounded repair. The stop is a
