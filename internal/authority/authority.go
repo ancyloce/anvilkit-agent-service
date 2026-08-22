@@ -37,22 +37,6 @@ type Grants struct {
 	ApprovalDecisionVersion uint64
 }
 
-// HasCapability reports whether the actor currently holds the named
-// capability. Boundaries that authorize a specific operation ask for the
-// capability that operation needs rather than reading the whole set, so a
-// grant of one capability can never be mistaken for a grant of another.
-func (g Grants) HasCapability(name string) bool {
-	if name == "" {
-		return false
-	}
-	for _, granted := range g.AllowedCapabilities {
-		if granted == name {
-			return true
-		}
-	}
-	return false
-}
-
 func (g Grants) clone() Grants {
 	return Grants{
 		AllowedTools:            append([]string(nil), g.AllowedTools...),
@@ -61,6 +45,103 @@ func (g Grants) clone() Grants {
 		MaximumRisk:             g.MaximumRisk,
 		DataClasses:             append([]string(nil), g.DataClasses...),
 		ApprovalDecisionVersion: g.ApprovalDecisionVersion,
+	}
+}
+
+// ActorAuthority is what the scope's subject register binds to one actor
+// personally: the capabilities that actor holds and the data classifications
+// it is cleared for.
+//
+// It is deliberately separate from Grants. Grants is dispatch authority bound
+// to the scope as a whole — what any run in this workspace and project may
+// direct a tool to do — and every actor in the scope reads the same value.
+// That is the right shape for dispatch and the wrong shape for a decision that
+// answers for one person: if the right to destroy an artifact lived in Grants,
+// admitting a single custodian would hand that right to every actor in the
+// workspace, and only the admitted role would still be standing between them
+// and the artifact. Operations that answer for one person's authority read
+// this instead.
+//
+// An actor with no admitted subject record, or one the register no longer
+// admits, has no actor authority at all.
+type ActorAuthority struct {
+	// Capabilities are the named operations this actor may perform. They are
+	// spelled under their operation's own prefix, so a capability granted for
+	// one operation can never satisfy another.
+	Capabilities []string
+	// DataClasses are the registered classifications this actor is cleared
+	// for.
+	DataClasses []string
+}
+
+// HasCapability reports whether the actor personally holds the named
+// capability. Boundaries ask for the capability their exact operation needs
+// rather than reading the whole set, so a grant of one can never be mistaken
+// for a grant of another.
+func (a ActorAuthority) HasCapability(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, granted := range a.Capabilities {
+		if granted == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Clears reports whether any classification the actor holds reaches the one
+// required.
+func (a ActorAuthority) Clears(classification string) bool {
+	needed := ClassificationRank(classification)
+	if needed == 0 {
+		return false
+	}
+	for _, held := range a.DataClasses {
+		if ClassificationRank(held) >= needed {
+			return true
+		}
+	}
+	return false
+}
+
+// Clearance is the highest registered classification the actor holds, or the
+// empty string when it holds none.
+func (a ActorAuthority) Clearance() string {
+	clearance, rank := "", 0
+	for _, held := range a.DataClasses {
+		if candidate := ClassificationRank(held); candidate > rank {
+			clearance, rank = held, candidate
+		}
+	}
+	return clearance
+}
+
+func (a ActorAuthority) clone() ActorAuthority {
+	return ActorAuthority{
+		Capabilities: append([]string(nil), a.Capabilities...),
+		DataClasses:  append([]string(nil), a.DataClasses...),
+	}
+}
+
+// ClassificationRank orders the governed data-class registry from least to
+// most sensitive. It is the one ranking the whole runtime reads: a clearance
+// compared one way here and another way there would be two different rules
+// wearing one name. An unregistered classification ranks zero and therefore
+// never satisfies a requirement — a clearance the governed vocabulary does not
+// name is not a clearance.
+func ClassificationRank(classification string) int {
+	switch classification {
+	case "public":
+		return 1
+	case "internal":
+		return 2
+	case "confidential":
+		return 3
+	case "restricted":
+		return 4
+	default:
+		return 0
 	}
 }
 
@@ -86,6 +167,11 @@ type Current struct {
 	// require a role without trusting the request that asks for it. An actor
 	// with no admitted subject record has no role.
 	ActorRole string
+
+	// ActorGrants is what the subject register binds to this actor
+	// personally. Grants below is the scope's dispatch authority; the two are
+	// never interchangeable.
+	ActorGrants ActorAuthority
 
 	Grants Grants
 
@@ -165,6 +251,7 @@ func (c Current) Clone() Current {
 		PermissionActive: c.PermissionActive,
 		PolicyActive:     c.PolicyActive,
 		ActorRole:        c.ActorRole,
+		ActorGrants:      c.ActorGrants.clone(),
 		Grants:           c.Grants.clone(),
 		RevokedTargets:   append([]string(nil), c.RevokedTargets...),
 		RevokedApprovals: append([]string(nil), c.RevokedApprovals...),
@@ -257,6 +344,13 @@ func (s *Static) Current(_ context.Context, scope Scope) (Current, error) {
 	value := s.value.Clone()
 	if s.revoked {
 		value.WorkspaceActive, value.ActorActive, value.PermissionActive, value.PolicyActive = false, false, false, false
+	}
+	// An actor the register no longer admits reads back holding nothing. The
+	// durable source does exactly this, and a stand-in that left a withdrawn
+	// actor's role and grants legible would be a looser contract than the one
+	// it imitates — which is the difference a test would never catch.
+	if !value.ActorActive {
+		value.ActorRole, value.ActorGrants = "", ActorAuthority{}
 	}
 	return value, nil
 }

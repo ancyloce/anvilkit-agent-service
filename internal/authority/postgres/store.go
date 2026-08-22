@@ -48,6 +48,9 @@ type Subject struct {
 	WorkspaceID string
 	ActorID     string
 	Role        string
+	// Grants is what the register binds to this actor personally, beside the
+	// role it admits them under.
+	Grants authority.ActorAuthority
 }
 
 // grantsWire is the stored shape of the dispatch grants.
@@ -87,9 +90,9 @@ func (s *Store) Seed(ctx context.Context, binding Binding, subjects []Subject) e
 		if subject.WorkspaceID == "" || subject.ActorID == "" || subject.Role == "" {
 			return fmt.Errorf("authority store: a complete subject identity is required")
 		}
-		if _, err := s.database.Exec(ctx, `INSERT INTO agent_control.authority_subjects(workspace_id,actor_id,role,status,updated_at) VALUES($1,$2,$3,'active',$4)
-			ON CONFLICT (workspace_id,actor_id) DO UPDATE SET role=excluded.role,updated_at=excluded.updated_at`,
-			subject.WorkspaceID, subject.ActorID, subject.Role, s.clock().UTC()); err != nil {
+		if _, err := s.database.Exec(ctx, `INSERT INTO agent_control.authority_subjects(workspace_id,actor_id,role,status,capabilities,data_classes,updated_at) VALUES($1,$2,$3,'active',$4,$5,$6)
+			ON CONFLICT (workspace_id,actor_id) DO UPDATE SET role=excluded.role,capabilities=excluded.capabilities,data_classes=excluded.data_classes,updated_at=excluded.updated_at`,
+			subject.WorkspaceID, subject.ActorID, subject.Role, nonNil(subject.Grants.Capabilities), nonNil(subject.Grants.DataClasses), s.clock().UTC()); err != nil {
 			return fmt.Errorf("seed authority subject: %w", err)
 		}
 	}
@@ -153,7 +156,9 @@ func (s *Store) Current(ctx context.Context, scope authority.Scope) (authority.C
 		},
 	}
 	var role, status string
-	err = s.database.QueryRow(ctx, `SELECT role,status FROM agent_control.authority_subjects WHERE workspace_id=$1 AND actor_id=$2`, scope.WorkspaceID, scope.ActorID).Scan(&role, &status)
+	var capabilities, dataClasses []string
+	err = s.database.QueryRow(ctx, `SELECT role,status,capabilities,data_classes FROM agent_control.authority_subjects WHERE workspace_id=$1 AND actor_id=$2`, scope.WorkspaceID, scope.ActorID).
+		Scan(&role, &status, &capabilities, &dataClasses)
 	if errors.Is(err, pgx.ErrNoRows) {
 		current.ActorActive = false
 	} else if err != nil {
@@ -161,10 +166,12 @@ func (s *Store) Current(ctx context.Context, scope authority.Scope) (authority.C
 	} else if status != "active" {
 		current.ActorActive = false
 	} else {
-		// The admitted role is authority-owned material: it is read from the
-		// scope's subject register, so a role requirement is checked against
-		// the register rather than against anything the caller presented.
+		// The admitted role and the actor's own capabilities and clearance are
+		// authority-owned material: they are read from the scope's subject
+		// register, so an operation that requires them checks the register
+		// rather than anything the caller presented.
 		current.ActorRole = role
+		current.ActorGrants = authority.ActorAuthority{Capabilities: capabilities, DataClasses: dataClasses}
 	}
 	// Workspace, actor, and role withdrawals apply workspace-wide; material,
 	// target, and approval withdrawals apply to the project they were recorded
@@ -210,7 +217,23 @@ func (s *Store) Current(ctx context.Context, scope authority.Scope) (authority.C
 	if err := rows.Err(); err != nil {
 		return authority.Current{}, fmt.Errorf("read authority revocations: %w", err)
 	}
+	// An actor the register no longer admits holds nothing. Clearing this here
+	// rather than relying on every consumer to check activation first is what
+	// makes a withdrawn actor's capabilities and clearance unreadable instead
+	// of merely unusable.
+	if !current.ActorActive {
+		current.ActorRole, current.ActorGrants = "", authority.ActorAuthority{}
+	}
 	return current, nil
+}
+
+// nonNil renders a nil slice as an empty array so a column that does not admit
+// null never receives one.
+func nonNil(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }
 
 // PinnedBOMDigest answers the Contract BOM digest the scope's current binding
