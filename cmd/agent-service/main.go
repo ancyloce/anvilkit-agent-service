@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -65,6 +67,7 @@ import (
 	runpg "github.com/ancyloce/anvilkit-agent-service/internal/runs/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/scheduler"
 	schedulerpg "github.com/ancyloce/anvilkit-agent-service/internal/scheduler/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/security"
 	"github.com/ancyloce/anvilkit-agent-service/internal/securityaudit"
 	securityauditpg "github.com/ancyloce/anvilkit-agent-service/internal/securityaudit/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/telemetry"
@@ -435,7 +438,7 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 	var authoritySource authority.Source = authority.NewStatic(authority.Current{Grants: grants})
 	var bomAuthority execution.BOMAuthority = execution.StaticBOMAuthority{}
 	if cfg.RunAuthorityFile != "" {
-		durableAuthority, err := seedDurableAuthority(ctx, cfg.RunAuthorityFile, guard, grants, pools.Authority, clock)
+		durableAuthority, err := seedDurableAuthority(ctx, cfg.RunAuthorityFile, guard, grants, pools.Authority, clock, protectedAudit, slog.Default())
 		if err != nil {
 			return nil, execution.Config{}, err
 		}
@@ -659,25 +662,47 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
+	// The guards that stand between untrusted content and the next prompt,
+	// and between a proposed tool call and the address it names. They are
+	// composed here, from the deployment's own policy, and passed into the
+	// pipeline as required dependencies: a build that forgets them does not
+	// start.
+	memoryGuard, err := security.NewMemoryGuard(cfg.MemoryAdmissionBytes, clockOf{clock}.Now)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	egressGuard, err := buildEgressGuard(cfg)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
 	executionConfig := execution.Config{
-		Registry:          registry,
-		Runner:            agentRunner,
-		Runs:              runStore,
-		InterruptWriter:   interruptService,
-		InterruptReader:   interruptStore,
-		InterruptExpirer:  interruptStore,
-		Authority:         authoritySource,
-		Tools:             fencedTools,
-		ToolMaterial:      toolMaterial,
-		Artifacts:         artifactPort,
-		Domain:            domainPort,
-		Submissions:       submissions,
-		CommitAuthority:   commitAuthority,
-		Contracts:         contractsValidator,
-		Evidence:          evidenceStore,
-		Deltas:            deltaBroker,
-		Decisions:         receipts,
-		Budget:            budgetController,
+		Registry:         registry,
+		Runner:           agentRunner,
+		Runs:             runStore,
+		InterruptWriter:  interruptService,
+		InterruptReader:  interruptStore,
+		InterruptExpirer: interruptStore,
+		Authority:        authoritySource,
+		Tools:            fencedTools,
+		ToolMaterial:     toolMaterial,
+		Artifacts:        artifactPort,
+		Domain:           domainPort,
+		Submissions:      submissions,
+		CommitAuthority:  commitAuthority,
+		Contracts:        contractsValidator,
+		Evidence:         evidenceStore,
+		Deltas:           deltaBroker,
+		Decisions:        receipts,
+		Budget:           budgetController,
+		Memory:           memoryGuard,
+		Egress:           egressGuard,
+		ArtifactMetadata: artifactService,
+		// A governed metadata read is a disclosure, and it is recorded in the
+		// same tamper-evident chain the artifact lifecycle records its
+		// authorization changes in. Who was told what about a tenant's
+		// artifacts belongs beside who changed access to them; an incident
+		// reads one account rather than two.
+		DisclosureAudit:   protectedAudit,
 		Clock:             clockOf{clock},
 		InputTTL:          cfg.InputRequestTTL,
 		ApprovalTTL:       cfg.ApprovalRequestTTL,
@@ -1236,7 +1261,17 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	// looser custody path: an artifact service that could not be built — for
 	// want of its durable store, its grant-signing secret, or its protected
 	// audit — takes the whole composition down long before this line.
-	application.WithArtifactCustody(core.artifacts, commandReceipts, clockOf{core.clock}.Now)
+	application.WithArtifactCustody(core.artifacts, commandReceipts, core.clock)
+	// Apply-authorization issuance and governed artifact metadata are the
+	// same production capabilities the execution pipeline already owns,
+	// reached from the API. Issuance is composed over the executor, which
+	// holds the run aggregate, the approval record, the current-authority
+	// source, and the durable issuance audit — every part of the decision is
+	// proved where those live, not here. Metadata is composed over the same
+	// executor for the same reason: the disclosure is authorized against the
+	// authority read the rest of the artifact lifecycle uses.
+	application.WithApplyAuthorization(core.executor, commandReceipts)
+	application.WithArtifactMetadata(core.executor)
 	policies := make(map[runs.State]interrupts.DwellPolicy)
 	for _, state := range []runs.State{runs.Created, runs.Preparing, runs.Planning, runs.AwaitingInput, runs.Executing, runs.Validating, runs.AwaitingReview, runs.AwaitingApproval, runs.Committing, runs.AwaitingDomainConfirmation, runs.Conflict, runs.Cancelling, runs.Failed} {
 		policies[state] = interrupts.DwellPolicy{Deadline: cfg.DwellDeadline, Owner: "agent-service-oncall"}
@@ -1272,7 +1307,14 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	return []api.Option{api.WithAgentCore(application, verifier)}, nil
 }
 
-type applicationTime interface{ Now() time.Time }
+// applicationTime is the clock the service runs on. It reports why it has no
+// instant as well as that it has none: an unreachable time authority and an
+// answer that failed its checks both stop a decision, and only the first is
+// something a caller should be told to retry.
+type applicationTime interface {
+	Now() time.Time
+	Refusal() error
+}
 
 // applicationClock returns the clock the service runs on and, with it, the
 // authoritative clock the protected audit stamps its records from. They are
@@ -1301,7 +1343,12 @@ func applicationClock(cfg config.Config) (applicationTime, *securityaudit.Author
 			return http.ErrUseLastResponse
 		},
 	}
-	source, err := securityaudit.NewHTTPTimeSource(cfg.AuthoritativeTime.URL, client)
+	// The authority signs its answer and the service verifies it against the
+	// operator's own trust material. Which authority this deployment is
+	// talking to is the operator's declaration, not the endpoint's claim: a
+	// key the trust root holds is not by itself permission to be this
+	// deployment's time authority.
+	source, err := securityaudit.NewHTTPTimeSource(cfg.AuthoritativeTime.URL, cfg.AuthoritativeTimeTrustRoot, cfg.AuthoritativeTime.TrustRef, client, local)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1309,7 +1356,7 @@ func applicationClock(cfg config.Config) (applicationTime, *securityaudit.Author
 	if err != nil {
 		return nil, nil, err
 	}
-	return securityaudit.FailClosedClock{Authority: authority}, authority, nil
+	return securityaudit.NewFailClosedClock(authority), authority, nil
 }
 
 // runtimeSignals bridges the interrupts control surface onto the canonical
@@ -1379,6 +1426,24 @@ type authoritySeed struct {
 		WorkspaceID string `json:"workspaceId"`
 		ProjectID   string `json:"projectId"`
 	} `json:"scope"`
+	// Change is the operator's accountable account of this document: which
+	// generation of the scope's authority it is, who authorized it, why, and
+	// under what change record.
+	//
+	// The generation is what makes a document orderable, and orderable is
+	// what stops authority coming back. Instances seed on startup from
+	// whatever document they hold, and they do not all restart at once or
+	// from the same content: without an ordinal, an instance still holding
+	// last week's document reinstates it simply by being the last to start.
+	// The rest is the audit's: seeding writes the authority every later
+	// decision is answered against, so it is an authorization change and is
+	// recorded as one.
+	Change struct {
+		Generation   uint64 `json:"generation"`
+		AuthorizedBy string `json:"authorizedBy"`
+		Reason       string `json:"reason"`
+		Ticket       string `json:"ticket"`
+	} `json:"change"`
 	Subjects []struct {
 		ActorID string `json:"actorId"`
 		Role    string `json:"role"`
@@ -1417,6 +1482,15 @@ func loadAuthoritySeed(path string, guard *contractguard.Guard) (authoritySeed, 
 	}
 	if payload.Scope.WorkspaceID == "" || payload.Scope.ProjectID == "" {
 		return authoritySeed{}, fmt.Errorf("run authority requires the workspace and project scope it binds")
+	}
+	if payload.Change.Generation == 0 {
+		return authoritySeed{}, fmt.Errorf("run authority requires a positive change generation so a stale document cannot reinstate superseded authority")
+	}
+	if !auditIdentifier(payload.Change.AuthorizedBy) || !auditIdentifier(payload.Change.Ticket) {
+		return authoritySeed{}, fmt.Errorf("run authority requires a bounded authorizing identity and change ticket")
+	}
+	if !auditReason(payload.Change.Reason) {
+		return authoritySeed{}, fmt.Errorf("run authority requires a bounded printable change reason")
 	}
 	if len(payload.Subjects) == 0 {
 		return authoritySeed{}, fmt.Errorf("run authority requires at least one admitted subject")
@@ -1462,12 +1536,15 @@ func loadAuthoritySeed(path string, guard *contractguard.Guard) (authoritySeed, 
 // seeds the durable scoped authority store with it. The store — not the file —
 // answers every later read, so revocations recorded against the scope are
 // observed by every boundary on its next re-read.
-func seedDurableAuthority(ctx context.Context, path string, guard *contractguard.Guard, grants authority.Grants, pool *pgxpool.Pool, clock applicationTime) (*authoritypg.Store, error) {
+func seedDurableAuthority(ctx context.Context, path string, guard *contractguard.Guard, grants authority.Grants, pool *pgxpool.Pool, clock applicationTime, audit authoritypg.SeedAudit, logger *slog.Logger) (*authoritypg.Store, error) {
 	if guard == nil {
 		return nil, fmt.Errorf("the durable authority source requires the contract guard")
 	}
 	if pool == nil {
 		return nil, fmt.Errorf("the durable authority source requires the authority database")
+	}
+	if audit == nil {
+		return nil, fmt.Errorf("the durable authority source requires the protected audit")
 	}
 	seed, err := loadAuthoritySeed(path, guard)
 	if err != nil {
@@ -1485,15 +1562,26 @@ func seedDurableAuthority(ctx context.Context, path string, guard *contractguard
 	for _, subject := range seed.Subjects {
 		subjects = append(subjects, authoritypg.Subject{
 			WorkspaceID: seed.Scope.WorkspaceID,
-			ActorID:     subject.ActorID,
-			Role:        subject.Role,
+			// The admission is made in the scope's project. Seeding a subject
+			// without one would re-create the workspace-wide admission the
+			// register was narrowed away from.
+			ProjectID: seed.Scope.ProjectID,
+			ActorID:   subject.ActorID,
+			Role:      subject.Role,
 			Grants: authority.ActorAuthority{
 				Capabilities: subject.CustodyCapabilities,
 				DataClasses:  subject.DataClasses,
 			},
 		})
 	}
-	if err := store.Seed(ctx, authoritypg.Binding{
+	// The seeding opens its own trace: it is the start of this process's
+	// life, not a continuation of whatever last changed the authority
+	// document.
+	traceparent, err := startupTraceparent()
+	if err != nil {
+		return nil, err
+	}
+	applied, err := store.Seed(ctx, authoritypg.Binding{
 		WorkspaceID: seed.Scope.WorkspaceID,
 		ProjectID:   seed.Scope.ProjectID,
 		Definition:  seed.Definition,
@@ -1501,11 +1589,118 @@ func seedDurableAuthority(ctx context.Context, path string, guard *contractguard
 		Policy:      seed.Policy,
 		Budget:      seed.Budget,
 		Grants:      grants,
-	}, subjects); err != nil {
+		Generation:  seed.Change.Generation,
+	}, subjects, audit, authoritypg.SeedDecision{
+		ActorID:     seed.Change.AuthorizedBy,
+		Workload:    authoritySeedingWorkload,
+		Reason:      seed.Change.Reason,
+		Ticket:      seed.Change.Ticket,
+		Traceparent: traceparent,
+	})
+	if err != nil {
 		return nil, err
+	}
+	// A superseded document is not a failure: this instance is holding an
+	// older authority than the one in force and has correctly left it alone.
+	// It is reported because an operator who expected their change to take
+	// effect needs to know which instance did not carry it.
+	if applied.Superseded && logger != nil {
+		logger.Warn("authority seed superseded",
+			"workspaceId", seed.Scope.WorkspaceID, "projectId", seed.Scope.ProjectID,
+			"documentGeneration", seed.Change.Generation, "generationInForce", applied.Generation)
+	}
+	if !applied.Superseded && applied.WithdrawnSubjects > 0 && logger != nil {
+		logger.Info("authority seed withdrew admissions the document no longer names",
+			"workspaceId", seed.Scope.WorkspaceID, "projectId", seed.Scope.ProjectID,
+			"generation", applied.Generation, "withdrawn", applied.WithdrawnSubjects)
 	}
 	return store, nil
 }
+
+// authoritySeedingWorkload is what a seeding is audited as acting through. It
+// is server-owned: the document says who authorized the change, never what
+// component applied it.
+const authoritySeedingWorkload = "agent-service.authority-seeding"
+
+// auditIdentifier and auditReason bound the operator-supplied fields the
+// protected audit record carries, so a malformed document is refused when it
+// is read rather than when the audit rejects the record it produced.
+func auditIdentifier(value string) bool {
+	if len(value) < 1 || len(value) > 128 {
+		return false
+	}
+	for index, character := range value {
+		switch {
+		case character >= 'A' && character <= 'Z', character >= 'a' && character <= 'z', character >= '0' && character <= '9':
+		case index > 0 && (character == '.' || character == '_' || character == ':' || character == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func auditReason(value string) bool {
+	if len(value) < 1 || len(value) > 1024 {
+		return false
+	}
+	for _, character := range value {
+		if character < 0x20 || character > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
+// startupTraceparent opens one trace for work this process does on its own
+// behalf at startup.
+func startupTraceparent() (string, error) {
+	trace, span := make([]byte, 16), make([]byte, 8)
+	if _, err := rand.Read(trace); err != nil {
+		return "", fmt.Errorf("open startup trace: %w", err)
+	}
+	if _, err := rand.Read(span); err != nil {
+		return "", fmt.Errorf("open startup trace: %w", err)
+	}
+	return "00-" + hex.EncodeToString(trace) + "-" + hex.EncodeToString(span) + "-01", nil
+}
+
+// buildEgressGuard composes the deployment's outbound policy. The allowlist is
+// the operator's, and it is the whole of it: a destination not named there is
+// not reachable, and a deployment that names nothing has an agent that reaches
+// nothing outside — which is a closed default rather than an unconfigured one.
+//
+// The resolver is the host's, so the policy is applied to the addresses a name
+// actually resolves to rather than to the name alone. That is the difference
+// between refusing "metadata.internal" and refusing the link-local address a
+// friendly-looking name resolves to.
+func buildEgressGuard(cfg config.Config) (*security.EgressGuard, error) {
+	allowed := make(map[string]struct{}, len(cfg.EgressAllowlist))
+	for _, host := range cfg.EgressAllowlist {
+		if host == "" {
+			continue
+		}
+		allowed[host] = struct{}{}
+	}
+	if len(allowed) == 0 {
+		// The guard requires at least one host because a policy with none is
+		// indistinguishable from an unset one. A deployment that grants no
+		// egress gets a policy naming an address that resolves nowhere, which
+		// refuses every destination on the same code path every other refusal
+		// takes rather than on a special case.
+		allowed[closedEgressHost] = struct{}{}
+	}
+	return security.NewEgressGuard(security.EgressPolicy{
+		AllowedHosts:    allowed,
+		MaximumBytes:    cfg.EgressMaximumBytes,
+		MaximumDuration: cfg.EgressTimeout,
+	}, net.DefaultResolver)
+}
+
+// closedEgressHost stands for a deployment that permits no outbound
+// destination at all. It is in the reserved documentation domain, so it names
+// nothing that can ever be reached.
+const closedEgressHost = "egress-denied.invalid"
 
 // localTimeSource serves the local clock as a time source. It is selected only
 // where no external time authority is configured, which production forbids.
@@ -1530,6 +1725,15 @@ func (a auditAlerts) Alert(_ context.Context, kind, detail string) error {
 // the instance the decision was about, and the chain is verified at startup so
 // an audit that was rewritten while the service was down is discovered before
 // the service begins adding to it rather than after.
+//
+// The service is given one protected-audit credential and it is the narrow
+// one. It cannot establish the chain, it cannot drop a barrier on it, and it
+// is not configured with anything that could: the schema, its triggers, and
+// the runtime grant are established by cmd/protected-audit-provisioner, a
+// separate workload with a separate credential that exits. What is left here
+// is the check that the provisioning actually happened — a service that
+// created its own audit table when it found none would be a service that
+// could recreate it, and that is the standing this separation removes.
 func buildProtectedAudit(ctx context.Context, cfg config.Config, clock *securityaudit.AuthoritativeClock, receipts journal.Store, logger *slog.Logger) (*securityaudit.Service, func(), error) {
 	if clock == nil {
 		return nil, nil, fmt.Errorf("the protected audit requires the approved time authority")
@@ -1541,14 +1745,6 @@ func buildProtectedAudit(ctx context.Context, cfg config.Config, clock *security
 		}
 		service, err := securityaudit.NewService(&securityaudit.MemorySink{}, clock, alerts, receipts)
 		return service, func() {}, err
-	}
-	// Schema management and runtime appending are separate privileges held on
-	// separate connections. The administrative connection establishes the
-	// table, its barriers, and the runtime role's grants, and is then closed:
-	// the pool the service actually runs on connects as the runtime role, so
-	// the process that appends to the audit holds no privilege to rewrite it.
-	if err := prepareProtectedAuditSchema(ctx, cfg.ProtectedAudit.URL); err != nil {
-		return nil, nil, err
 	}
 	pool, err := persistence.OpenPool(ctx, persistence.PoolConfig{URL: cfg.ProtectedAudit.URL, Role: securityauditpg.RuntimeRole, Maximum: protectedAuditPoolSize})
 	if err != nil {
@@ -1562,6 +1758,27 @@ func buildProtectedAudit(ctx context.Context, cfg config.Config, clock *security
 	if err := sink.Check(ctx); err != nil {
 		pool.Close()
 		return nil, nil, err
+	}
+	// Asked on the connection the service will append through, so what is
+	// proved is the chain this process is actually going to write to.
+	if err := sink.RequireProvisioned(ctx); err != nil {
+		pool.Close()
+		return nil, nil, err
+	}
+	// Asked again from inside, on the connection the service will append
+	// through. The administrative check proves the grants were made correctly;
+	// this proves the process that ends up running is confined by them.
+	//
+	// It is asked where the separation is claimed. A controlled stack has one
+	// credential and administers the audit with it, so the answer there is
+	// known in advance and refusing on it would mean a local stack could not
+	// start; production is where the separation is required, and the
+	// configuration requiring it is refused above.
+	if cfg.Environment == config.EnvironmentProduction {
+		if err := sink.VerifyRuntimeIsolation(ctx); err != nil {
+			pool.Close()
+			return nil, nil, err
+		}
 	}
 	service, err := securityaudit.NewService(sink, clock, alerts, receipts)
 	if err != nil {
@@ -1578,27 +1795,6 @@ func buildProtectedAudit(ctx context.Context, cfg config.Config, clock *security
 // protectedAuditPoolSize bounds the audit connections. Every privileged
 // decision takes a few of them and nothing else uses the endpoint.
 const protectedAuditPoolSize = 4
-
-// prepareProtectedAuditSchema establishes the protected audit's schema, its
-// barriers, and the runtime role's grants on an administrative connection, and
-// proves the runtime role ended up with append and read and nothing more. The
-// connection is closed before the service opens the one it will run on, so no
-// schema-management privilege survives into the running process.
-func prepareProtectedAuditSchema(ctx context.Context, url string) error {
-	admin, err := pgxpool.New(ctx, url)
-	if err != nil {
-		return fmt.Errorf("open protected audit administration pool: %w", err)
-	}
-	defer admin.Close()
-	sink, err := securityauditpg.New(admin)
-	if err != nil {
-		return err
-	}
-	if err := sink.EnsureSchema(ctx); err != nil {
-		return err
-	}
-	return sink.VerifyRuntimePrivileges(ctx)
-}
 
 // requireProductionEligible refuses any implementation that has not declared
 // itself fit for production. The check is a positive assertion by the

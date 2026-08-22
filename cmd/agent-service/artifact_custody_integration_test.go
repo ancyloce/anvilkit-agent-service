@@ -66,6 +66,13 @@ func newCustodyStack(t *testing.T, ctx context.Context) *custodyStack {
 	if err := migration.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// The protected audit is established before the service starts, by the
+	// separate provisioning workload, because the service holds no credential
+	// that could establish it. A controlled stack has one credential and
+	// administers the audit with it, so the separation between the
+	// administering and runtime logins is not claimed here — it is required
+	// where it is the control, which is production.
+	provisionControlledAudit(t, ctx, databaseURL)
 	managerID, managerDigest := managerReference(t)
 	authorityPath := writeRunAuthority(t, managerID, managerDigest)
 	minted := mintBearers(t)
@@ -184,7 +191,9 @@ func (s *custodyStack) createArtifact(t *testing.T, ctx context.Context, id stri
 			SchemaDigest:  "sha256:" + strings.Repeat("b", 64),
 			CatalogDigest: "sha256:" + strings.Repeat("c", 64),
 		},
-		CreatedAt: time.Now().UTC(),
+		Kind:       artifacts.WorkerResult,
+		Validation: artifacts.Validation{ValidatedAt: time.Now().UTC(), Checks: []artifacts.Check{{Name: "schema", Result: "passed", EvidenceDigest: "sha256:" + strings.Repeat("b", 64)}}},
+		CreatedAt:  time.Now().UTC(),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,7 +17,10 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/config"
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
+	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/queue"
+	"github.com/ancyloce/anvilkit-agent-service/internal/securityaudit"
+	"github.com/ancyloce/anvilkit-agent-service/internal/trust"
 )
 
 type queuePublisherCapture struct{ message queue.Message }
@@ -36,22 +43,85 @@ func TestEventQueuePublisherPreservesOutboxIdentityAndPayload(t *testing.T) {
 	}
 }
 
+// The composed clock reads an authenticated time authority, and an outage
+// takes the service's time away rather than quietly handing it the host clock.
+// The outage also has to be reported as an outage: a caller told its authority
+// is stale goes looking for a revocation that never happened.
 func TestApplicationClockFailsClosedAfterAuthoritativeTimeOutage(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		response.Header().Set("Date", time.Now().UTC().Format(http.TimeFormat))
-		response.WriteHeader(http.StatusNoContent)
+	public, private, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const issuer = "urn:anvilkit:issuer:time-authority"
+	const keyID = "urn:anvilkit:key:time-authority:verification"
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		payload, marshalErr := json.Marshal(securityaudit.TimeStatement{
+			Kind:      securityaudit.TimeStatementKind,
+			Algorithm: "dsse-ed25519-v1",
+			Issuer:    issuer,
+			Audience:  securityaudit.TimeAudience,
+			KeyID:     keyID,
+			Nonce:     request.Header.Get(securityaudit.NonceHeader),
+			UTC:       time.Now().UTC().Format(trust.Timestamp),
+		})
+		if marshalErr != nil {
+			response.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		envelope, sealErr := trust.Seal(private, keyID, securityaudit.TimeStatementType, payload)
+		if sealErr != nil {
+			response.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		raw, marshalErr := json.Marshal(envelope)
+		if marshalErr != nil {
+			response.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		response.Header().Set("Content-Type", securityaudit.TimeStatementType)
+		_, _ = response.Write(raw)
 	}))
-	cfg := config.Config{Environment: config.EnvironmentProduction, AuthoritativeTime: config.Endpoint{URL: server.URL}, MaximumClockSkew: time.Minute}
+	key := trust.Key{KeyID: keyID, Issuer: issuer, Audiences: []string{securityaudit.TimeAudience}, Algorithms: []string{"dsse-ed25519-v1"}, Status: "active", NotBefore: "2020-01-01T00:00:00.000Z", NotAfter: "2099-01-01T00:00:00.000Z"}
+	key.PublicKeyJwk.KeyType, key.PublicKeyJwk.Curve = "OKP", "Ed25519"
+	key.PublicKeyJwk.X = base64.RawURLEncoding.EncodeToString(public)
+	rootBytes, err := json.Marshal(trust.Root{Kind: trust.RootKind, SnapshotID: "snapshot.time.0001", IssuedAt: "2026-01-01T00:00:00.000Z", NextUpdate: "2099-01-01T00:00:00.000Z", MaximumClockSkewSeconds: 60, Keys: []trust.Key{key}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootPath := filepath.Join(t.TempDir(), "time-trust-root.json")
+	if err := os.WriteFile(rootPath, rootBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		Environment:                config.EnvironmentProduction,
+		AuthoritativeTime:          config.Endpoint{URL: server.URL, TrustRef: issuer},
+		AuthoritativeTimeTrustRoot: rootPath,
+		MaximumClockSkew:           time.Minute,
+	}
 	clock, _, err := applicationClock(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if now := clock.Now(); now.IsZero() {
-		t.Fatal("live authoritative endpoint returned zero time")
+		t.Fatalf("live authoritative endpoint returned zero time: %v", clock.Refusal())
+	}
+	if clock.Refusal() != nil {
+		t.Fatalf("a working clock reports %v", clock.Refusal())
 	}
 	server.Close()
 	if now := clock.Now(); !now.IsZero() {
 		t.Fatalf("authority outage fell back to local time: %s", now)
+	}
+	var details problem.Details
+	if !errors.As(clock.Refusal(), &details) || details.Code != string(problem.CodeInfrastructureUnavailable) {
+		t.Fatalf("an outage was reported as %v, want a retryable dependency failure", clock.Refusal())
+	}
+	// A configuration that names a time endpoint with no trust material is
+	// refused outright: it would believe whatever answered on that address.
+	unauthenticated := cfg
+	unauthenticated.AuthoritativeTimeTrustRoot = ""
+	if _, _, err := applicationClock(unauthenticated); err == nil {
+		t.Fatal("a time authority with no trust material was composed")
 	}
 }
 
@@ -63,7 +133,8 @@ func TestRunAuthoritySeedIsStrictAndContractValid(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "authority.json")
 	policy := `{"policyId":"policy.synthetic","version":"v1","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`
 	material := `"definition":{"definitionId":"definition.synthetic.001","definitionDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"contractBomReference":{"repository":"anvilkit/contracts","bomDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ociManifestDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","evidenceManifestDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"policy":` + policy + `,"budget":{"kind":"AgentBudget","modelLimits":{"maximumCalls":10,"maximumConcurrentCalls":2},"tokenLimits":{"inputTokens":4096,"outputTokens":2048,"totalTokens":6144},"workerLimits":{"maximumAttempts":4,"maximumDurationMilliseconds":60000},"gpuLimits":{"maximumGpuMilliseconds":0},"currencyLimits":{"maximumCost":{"amount":"1000","currency":"USD"},"reservedCost":{"amount":"500","currency":"USD"}},"reservationId":"reservation.synthetic.001","exceedBehavior":"refuse","policy":` + policy + `}`
-	raw := `{"scope":{"workspaceId":"workspace","projectId":"project"},"subjects":[{"actorId":"actor","role":"agent-actor"}],` + material + `}`
+	change := `"change":{"generation":3,"authorizedBy":"operator.jane","reason":"admit the incident custodian","ticket":"CHG-4711"}`
+	raw := `{"scope":{"workspaceId":"workspace","projectId":"project"},` + change + `,"subjects":[{"actorId":"actor","role":"agent-actor"}],` + material + `}`
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -73,6 +144,29 @@ func TestRunAuthoritySeedIsStrictAndContractValid(t *testing.T) {
 	}
 	if seed.Scope.WorkspaceID != "workspace" || seed.Scope.ProjectID != "project" || len(seed.Subjects) != 1 || seed.Subjects[0].ActorID != "actor" {
 		t.Fatalf("seed scope and subjects were not carried: %#v", seed)
+	}
+	if seed.Change.Generation != 3 || seed.Change.AuthorizedBy != "operator.jane" || seed.Change.Ticket != "CHG-4711" {
+		t.Fatalf("the change the document declares was not carried: %#v", seed.Change)
+	}
+	// A document with no ordinal cannot be told apart from an older one, so
+	// it is refused rather than trusted to be the newest thing anyone holds.
+	for name, change := range map[string]string{
+		"no generation":                  `"change":{"generation":0,"authorizedBy":"operator.jane","reason":"why","ticket":"CHG-1"}`,
+		"no authorizing identity":        `"change":{"generation":2,"authorizedBy":"","reason":"why","ticket":"CHG-1"}`,
+		"unbounded authorizing identity": `"change":{"generation":2,"authorizedBy":"operator jane","reason":"why","ticket":"CHG-1"}`,
+		"no reason":                      `"change":{"generation":2,"authorizedBy":"operator.jane","reason":"","ticket":"CHG-1"}`,
+		"no ticket":                      `"change":{"generation":2,"authorizedBy":"operator.jane","reason":"why","ticket":""}`,
+	} {
+		document := `{"scope":{"workspaceId":"workspace","projectId":"project"},` + change + `,"subjects":[{"actorId":"actor","role":"agent-actor"}],` + material + `}`
+		if err := os.WriteFile(path, []byte(document), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadAuthoritySeed(path, guard); err == nil {
+			t.Fatalf("an authority document with %s was accepted", name)
+		}
+	}
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	// A document without its scope binds no authority at all.
 	unscoped := `{` + material + `}`
@@ -94,7 +188,7 @@ func TestRunAuthoritySeedIsStrictAndContractValid(t *testing.T) {
 	// name anything else would be a way to write new authority into the
 	// register rather than to grant the authority that exists.
 	subject := func(grants string) string {
-		return `{"scope":{"workspaceId":"workspace","projectId":"project"},"subjects":[{"actorId":"actor","role":"agent-artifact-custodian"` + grants + `}],` + material + `}`
+		return `{"scope":{"workspaceId":"workspace","projectId":"project"},` + change + `,"subjects":[{"actorId":"actor","role":"agent-artifact-custodian"` + grants + `}],` + material + `}`
 	}
 	for name, grants := range map[string]string{
 		"unknown capability":   `,"custodyCapabilities":["artifact-custody.rename"]`,

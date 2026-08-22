@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/applyauth"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/ancyloce/anvilkit-agent-service/internal/artifacts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/config"
@@ -20,6 +23,7 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/recovery"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runapp"
 	"github.com/ancyloce/anvilkit-agent-service/internal/scheduler"
+	"github.com/ancyloce/anvilkit-agent-service/internal/security"
 	"github.com/ancyloce/anvilkit-agent-service/internal/securityaudit"
 	securityauditpg "github.com/ancyloce/anvilkit-agent-service/internal/securityaudit/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
@@ -210,6 +214,9 @@ func TestInterruptDeadlinesMustBePositive(t *testing.T) {
 	cfg.DomainRetryCap = time.Second
 	cfg.TurnLimit = 1
 	cfg.CircuitFailures = 1
+	cfg.EgressMaximumBytes = 1 << 20
+	cfg.EgressTimeout = 5 * time.Second
+	cfg.MemoryAdmissionBytes = 64 * 1024
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("bounded development configuration must validate: %v", err)
 	}
@@ -220,6 +227,10 @@ func TestInterruptDeadlinesMustBePositive(t *testing.T) {
 type stubProtectedAudit struct{}
 
 func (stubProtectedAudit) PrivilegedMutation(context.Context, securityaudit.Record, securityaudit.Mutation) error {
+	return nil
+}
+
+func (stubProtectedAudit) ResumeMutation(context.Context, string, securityaudit.Admission, securityaudit.AdoptedMutation) error {
 	return nil
 }
 
@@ -333,12 +344,17 @@ type stubUsageAcceptor struct{}
 
 func (stubUsageAcceptor) Accept(context.Context, usage.Observation) (bool, error) { return true, nil }
 
-// The protected audit's schema is established by an administrative connection
-// that is closed again, and the running service then connects as a role that
-// holds append and read and nothing else. Schema management and runtime
-// appending are different privileges, and a process that can rewrite the
-// account of its own security decisions is not one whose account means
-// anything.
+// The protected audit is established by a separate one-shot workload, and the
+// running service then connects as a role that holds append and read and
+// nothing else. Schema management and runtime appending are different
+// privileges, and a process that can rewrite the account of its own security
+// decisions is not one whose account means anything.
+//
+// The separation is not merely that the two credentials differ. The service is
+// never given the administrative one at all, so it cannot establish the audit
+// even at startup — which is why the first thing proved here is that it
+// refuses to run against an audit nothing provisioned, rather than quietly
+// creating one.
 //
 // This drives the composition root's own builder against a real database, so
 // what is proved is the wiring the service actually starts with.
@@ -354,8 +370,17 @@ func TestTheProtectedAuditRunsOnAnAppendOnlyRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtimeURL := auditRuntimeLogin(t, ctx, databaseURL)
 	cfg := config.Config{Environment: config.EnvironmentProduction}
-	cfg.ProtectedAudit.URL = databaseURL
+	cfg.ProtectedAudit.URL = runtimeURL
+	// Nothing has established the chain yet, and the service holds no
+	// credential that could. It refuses to start rather than running against
+	// an audit that is not there — a service that created its own audit table
+	// when it found none would be a service that could recreate it.
+	if _, _, err := buildProtectedAudit(ctx, cfg, clock, journal.NewMemoryStore(), slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+		t.Fatal("the service started against a protected audit nothing had provisioned")
+	}
+	provisionCompositionAudit(t, ctx, databaseURL)
 	receipts := journal.NewMemoryStore()
 	service, closeAudit, err := buildProtectedAudit(ctx, cfg, clock, receipts, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -377,8 +402,10 @@ func TestTheProtectedAuditRunsOnAnAppendOnlyRole(t *testing.T) {
 		t.Fatalf("the composed audit chain does not verify: %v", err)
 	}
 
-	// The composed connection cannot rewrite what it just wrote.
-	pool, err := persistence.OpenPool(ctx, persistence.PoolConfig{URL: databaseURL, Role: securityauditpg.RuntimeRole, Maximum: 2})
+	// The composed connection cannot rewrite what it just wrote — and cannot
+	// after it puts its narrow role down, because the login underneath holds
+	// nothing either.
+	pool, err := persistence.OpenPool(ctx, persistence.PoolConfig{URL: runtimeURL, Role: securityauditpg.RuntimeRole, Maximum: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,6 +421,82 @@ func TestTheProtectedAuditRunsOnAnAppendOnlyRole(t *testing.T) {
 			t.Fatalf("the running service could %s", name)
 		}
 	}
+	if _, err := pool.Exec(ctx, `RESET ROLE`); err != nil {
+		t.Fatal(err)
+	}
+	for name, statement := range map[string]string{
+		"rewrite a record after resetting its role":   `UPDATE agent_protected_audit.records SET record_digest='sha256:'||repeat('f',64)`,
+		"remove a record after resetting its role":    `DELETE FROM agent_protected_audit.records`,
+		"truncate the chain after resetting its role": `TRUNCATE agent_protected_audit.records`,
+	} {
+		if _, err := pool.Exec(ctx, statement); err == nil {
+			t.Fatalf("the running service could %s", name)
+		}
+	}
+}
+
+// auditCompositionLogin is the login the service connects to the protected
+// audit as in this suite. It is named here because two things need it: the
+// runtime connection string, and the provisioning run that grants it.
+const auditCompositionLogin = "agent_audit_composition_runtime"
+
+// provisionCompositionAudit runs the one-shot provisioning path the operator
+// workload runs, on the administrative credential the service never sees.
+func provisionCompositionAudit(t *testing.T, ctx context.Context, administrativeURL string) {
+	t.Helper()
+	admin, err := pgxpool.New(ctx, administrativeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	// The separation between the administering and runtime logins is proved
+	// here, where both are visible, exactly as the production provisioner
+	// proves it.
+	if err := securityauditpg.Provision(ctx, admin, auditCompositionLogin, true); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// auditRuntimeLogin creates the login the service connects to the protected
+// audit as: an ordinary unprivileged role, distinct from the one that
+// administers the audit, which is the whole point of the separation.
+func auditRuntimeLogin(t *testing.T, ctx context.Context, administrativeURL string) string {
+	t.Helper()
+	const login = auditCompositionLogin
+	const secret = "agent-audit-composition-secret"
+	admin, err := pgxpool.New(ctx, administrativeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	if _, err := admin.Exec(ctx, `DO $$ BEGIN CREATE ROLE `+login+` LOGIN PASSWORD '`+secret+`'; EXCEPTION WHEN duplicate_object THEN NULL; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	var database string
+	if err := admin.QueryRow(ctx, `SELECT current_database()`).Scan(&database); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(ctx, `GRANT CONNECT ON DATABASE "`+database+`" TO `+login); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closing, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		cleanup, err := pgxpool.New(closing, administrativeURL)
+		if err != nil {
+			return
+		}
+		defer cleanup.Close()
+		_, _ = cleanup.Exec(closing, `REVOKE ALL ON SCHEMA agent_protected_audit FROM `+login)
+		_, _ = cleanup.Exec(closing, `REVOKE `+securityauditpg.RuntimeRole+` FROM `+login)
+		_, _ = cleanup.Exec(closing, `DROP ROLE IF EXISTS `+login)
+	})
+	parsed, err := url.Parse(administrativeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed.User = url.UserPassword(login, secret)
+	return parsed.String()
 }
 
 type auditCompositionTime struct{ value time.Time }
@@ -468,3 +571,104 @@ func (compositionTimeSource) Now(context.Context) (time.Time, error) {
 type compositionClock struct{}
 
 func (compositionClock) Now() time.Time { return time.Unix(1700, 0).UTC() }
+
+// The egress policy an agent's tools reach outside under is the one the
+// composition root builds from the deployment's own configuration, and it is
+// enforced where the connection is made.
+//
+// The guard used to be composed here and then only ever asked whether a URL
+// was permitted; the request itself was somebody else's business. This drives
+// the composed guard's own exchange, so what is proved is the policy a
+// deployed instance actually applies rather than a policy assembled beside it
+// in a test.
+func TestTheComposedEgressPolicyIsEnforcedWhereTheConnectionIsMade(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a deployment that names no destination reaches nothing", func(t *testing.T) {
+		guard, err := buildEgressGuard(config.Config{EgressMaximumBytes: 1 << 20, EgressTimeout: 2 * time.Second})
+		if err != nil {
+			t.Fatalf("a deployment granting no egress could not be composed: %v", err)
+		}
+		for _, target := range []string{
+			"https://example.test/resource",
+			"https://169.254.169.254/latest/meta-data/",
+			"https://localhost/resource",
+		} {
+			if _, err := guard.Fetch(ctx, target); err == nil {
+				t.Fatalf("a deployment granting no egress reached %s", target)
+			}
+		}
+	})
+
+	t.Run("the composed bounds are the deployment's own", func(t *testing.T) {
+		settings := config.Config{
+			EgressAllowlist:    []string{"partner.example"},
+			EgressMaximumBytes: 4096,
+			EgressTimeout:      3 * time.Second,
+		}
+		guard, err := buildEgressGuard(settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if guard.MaximumBytes() != settings.EgressMaximumBytes || guard.MaximumDuration() != settings.EgressTimeout {
+			t.Fatalf("the composed guard bounds an exchange at %d bytes and %s", guard.MaximumBytes(), guard.MaximumDuration())
+		}
+		// A destination outside the operator's allowlist is refused before
+		// anything is resolved or connected, which is the whole of the
+		// policy: the allowlist is not advice about preferred hosts.
+		if _, err := guard.Fetch(ctx, "https://elsewhere.example/resource"); err == nil {
+			t.Fatal("a destination outside the deployment's allowlist was reached")
+		}
+		// So is a scheme the policy does not carry, and an address that names
+		// a service rather than a data destination.
+		for _, target := range []string{
+			"http://partner.example/resource",
+			"https://partner.example:8443/resource",
+			"https://169.254.169.254/latest/meta-data/",
+		} {
+			if _, err := guard.Fetch(ctx, target); err == nil {
+				t.Fatalf("the composed policy reached %s", target)
+			}
+		}
+	})
+
+	t.Run("the composed guard follows no redirect it was not configured to follow", func(t *testing.T) {
+		guard, err := buildEgressGuard(config.Config{
+			EgressAllowlist:    []string{"partner.example"},
+			EgressMaximumBytes: 1 << 20,
+			EgressTimeout:      2 * time.Second,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Redirects are not enabled by the composition root, so the guard
+		// refuses one without needing a peer to produce it.
+		if _, err := guard.ValidateRedirect(ctx, security.Destination{}, "https://partner.example/moved"); err == nil {
+			t.Fatal("the composed policy followed a redirect it never enabled")
+		}
+	})
+}
+
+// provisionControlledAudit establishes the protected audit for a controlled
+// stack, which administers it with the same credential it runs as. It is the
+// operator step a deployment runs before the service starts, and the service
+// refuses to start without it — so a stack that composes the durable audit has
+// to run it exactly as a deployment does.
+func provisionControlledAudit(t *testing.T, ctx context.Context, databaseURL string) {
+	t.Helper()
+	parsed, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.ConnConfig.User == "" {
+		t.Fatal("the protected audit connection names no login role")
+	}
+	admin, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	if err := securityauditpg.Provision(ctx, admin, parsed.ConnConfig.User, false); err != nil {
+		t.Fatal(err)
+	}
+}

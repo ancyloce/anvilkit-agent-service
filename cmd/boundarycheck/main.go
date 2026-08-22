@@ -126,6 +126,36 @@ func main() {
 			if strings.Contains(name, "anvilkit-platform/") {
 				failures = append(failures, relative+": cross-repository source import is forbidden")
 			}
+			// Outbound HTTP is mediated. An agent's tools reach outside
+			// through the egress guard, which resolves the name once, pins
+			// the connection to what it resolved, re-decides every redirect,
+			// and bounds the duration and the response — and none of that is
+			// worth anything if an adapter can construct its own client
+			// beside it. The list below is every package that legitimately
+			// speaks HTTP, and adding to it is a decision somebody makes here
+			// rather than a dependency that appears.
+			if name == "net/http" && !mediatesOutboundHTTP(relative) {
+				failures = append(failures, relative+": net/http outside the mediated egress boundary; outbound requests go through internal/security")
+			}
+		}
+		// The same rule one level down: a package that cannot import net/http
+		// must not reach the network through a raw dialer either.
+		if !dialsDirectly(relative) {
+			ast.Inspect(parsed, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				selector, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				identifier, ok := selector.X.(*ast.Ident)
+				if ok && identifier.Name == "net" && strings.HasPrefix(selector.Sel.Name, "Dial") {
+					failures = append(failures, relative+": direct network dial outside the mediated egress boundary")
+				}
+				return true
+			})
 		}
 		if relative != "internal/config/config.go" && !isEvidenceCommand(relative) {
 			ast.Inspect(parsed, func(node ast.Node) bool {
@@ -192,6 +222,49 @@ const deliveryIdentifierPattern = `(^|[^A-Za-z0-9])` + deliveryLabelAlternation 
 // it. Requiring the capital is what keeps it off ordinary words: item0 and sum0
 // carry no hump, so they are names, not labels.
 const deliveryCamelPattern = `([a-z0-9])` + deliveryLabelCapitalAlternation + `([^a-z0-9]|$)`
+
+// outboundHTTPBoundary is every package permitted to speak HTTP directly: the
+// inbound server and its streaming surface, the readiness probes, the clients
+// for the named internal authorities this service is configured with, the
+// telemetry exporter, the composition root that builds them, and the egress
+// guard itself — which is the one that carries an agent's traffic.
+//
+// A tool adapter is deliberately absent from this list. That is what makes the
+// guard a boundary rather than a convention: an adapter cannot make its own
+// request, so the mediated exchange is the only exchange there is.
+func outboundHTTPBoundary() []string {
+	return []string{
+		"cmd/agent-service/",
+		"internal/api/",
+		"internal/events/",
+		"internal/lifecycle/",
+		"internal/runapp/",
+		"internal/security/",
+		"internal/securityaudit/",
+		"internal/telemetry/",
+	}
+}
+
+func mediatesOutboundHTTP(relative string) bool {
+	for _, prefix := range outboundHTTPBoundary() {
+		if strings.HasPrefix(relative, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// dialsDirectly names the packages permitted to open a socket themselves: the
+// egress guard, which pins its own connections, and the composition root and
+// inbound server, which listen rather than reach out.
+func dialsDirectly(relative string) bool {
+	for _, prefix := range []string{"cmd/agent-service/", "internal/api/", "internal/security/"} {
+		if strings.HasPrefix(relative, prefix) {
+			return true
+		}
+	}
+	return false
+}
 
 // canonicalScopeNames are the exact names ADR-018 established for the
 // canonical contract profile and the scope it governs. This service does not
