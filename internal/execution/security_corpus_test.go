@@ -380,9 +380,9 @@ func corpusArtifactAuthority() authority.Source {
 		Definition: material, ContractBOM: material, Policy: material, Budget: material,
 		WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true,
 		ActorRole: authority.RoleArtifactCustodian,
-		Grants: authority.Grants{
-			AllowedCapabilities: []string{string(artifacts.LegalHoldCapability), string(artifacts.DeleteCapability)},
-			DataClasses:         []string{artifacts.CustodyDataClass},
+		ActorGrants: authority.ActorAuthority{
+			Capabilities: []string{string(artifacts.LegalHoldCapability), string(artifacts.DeleteCapability)},
+			DataClasses:  []string{artifacts.CustodyDataClass},
 		},
 	})
 }
