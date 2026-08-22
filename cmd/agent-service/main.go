@@ -1382,18 +1382,22 @@ type authoritySeed struct {
 	Subjects []struct {
 		ActorID string `json:"actorId"`
 		Role    string `json:"role"`
+		// CustodyCapabilities are the artifact-custody capabilities this
+		// subject holds, and DataClasses the classifications it is cleared
+		// for. Both are named per subject rather than per binding because
+		// they authorize something a whole workspace should never hold at
+		// once: not what an agent may run, but whether an artifact it
+		// produced may be frozen or destroyed, and what internal material
+		// this person may read. A subject that names none holds none, so a
+		// deployment that has not decided who may destroy artifacts has
+		// nobody who can.
+		CustodyCapabilities []string `json:"custodyCapabilities"`
+		DataClasses         []string `json:"dataClasses"`
 	} `json:"subjects"`
-	// CustodyCapabilities are the artifact-custody capabilities this binding
-	// grants. They are named separately from the dispatch grants a tool
-	// implementation brings because they authorize a different thing: not what
-	// an agent may run, but whether an artifact it produced may be frozen or
-	// destroyed. A binding that names none grants none, so a deployment that
-	// has not decided who may destroy artifacts has nobody who can.
-	CustodyCapabilities []string        `json:"custodyCapabilities"`
-	Definition          json.RawMessage `json:"definition"`
-	ContractBOM         json.RawMessage `json:"contractBomReference"`
-	Policy              json.RawMessage `json:"policy"`
-	Budget              json.RawMessage `json:"budget"`
+	Definition  json.RawMessage `json:"definition"`
+	ContractBOM json.RawMessage `json:"contractBomReference"`
+	Policy      json.RawMessage `json:"policy"`
+	Budget      json.RawMessage `json:"budget"`
 }
 
 func loadAuthoritySeed(path string, guard *contractguard.Guard) (authoritySeed, error) {
@@ -1425,13 +1429,21 @@ func loadAuthoritySeed(path string, guard *contractguard.Guard) (authoritySeed, 
 	if len(payload.Definition) == 0 || len(payload.ContractBOM) == 0 || len(payload.Policy) == 0 || len(payload.Budget) == 0 {
 		return authoritySeed{}, fmt.Errorf("run authority is incomplete")
 	}
-	// Only the two governed custody capabilities may be granted here. A seed
-	// is configuration, and configuration that could name any capability
-	// string would be a way to write new authority into the register rather
-	// than to grant the authority the service defines.
-	for _, capability := range payload.CustodyCapabilities {
-		if capability != string(artifacts.LegalHoldCapability) && capability != string(artifacts.DeleteCapability) {
-			return authoritySeed{}, fmt.Errorf("run authority grants unknown custody capability %q", capability)
+	// Only the two governed custody capabilities and the registered data
+	// classifications may be granted here. A seed is configuration, and
+	// configuration that could name any capability or clearance string would
+	// be a way to write new authority into the register rather than to grant
+	// the authority the service defines.
+	for _, subject := range payload.Subjects {
+		for _, capability := range subject.CustodyCapabilities {
+			if capability != string(artifacts.LegalHoldCapability) && capability != string(artifacts.DeleteCapability) {
+				return authoritySeed{}, fmt.Errorf("run authority grants subject %q the unknown custody capability %q", subject.ActorID, capability)
+			}
+		}
+		for _, class := range subject.DataClasses {
+			if authority.ClassificationRank(class) == 0 {
+				return authoritySeed{}, fmt.Errorf("run authority clears subject %q for the unregistered data classification %q", subject.ActorID, class)
+			}
 		}
 	}
 	probe := runs.Snapshot{Kind: "AgentRun", RunID: "run.authority-validation", RootRunID: "run.authority-validation", WorkspaceID: "workspace.authority-validation", ActorID: "actor.authority-validation", Domain: "platform-agent", Operation: "artifact-validation", Target: runs.Target{Type: "page", ID: "page.authority-validation", WorkspaceID: "workspace.authority-validation", ProjectID: "project.authority-validation"}, Definition: payload.Definition, ContractBOM: payload.ContractBOM, Policy: payload.Policy, Budget: payload.Budget, Idempotency: runs.IdempotencyProjection{Scope: "workspace.authority-validation:create-run", Key: "authority-validation", CanonicalRequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Status: runs.Created, Version: 1, ExecutionGeneration: 1, CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0)}
@@ -1465,14 +1477,21 @@ func seedDurableAuthority(ctx context.Context, path string, guard *contractguard
 	if err != nil {
 		return nil, err
 	}
-	// The custody capabilities the binding grants join the dispatch grants the
-	// selected tool implementation brings. They are appended rather than
-	// merged into that set at its source, so a tool implementation can never
-	// hand out custody of an artifact as a side effect of being selected.
-	grants.AllowedCapabilities = append(append([]string(nil), grants.AllowedCapabilities...), seed.CustodyCapabilities...)
+	// Each subject carries its own capabilities and clearance. They never join
+	// the dispatch grants the selected tool implementation brings: those are
+	// shared by the whole scope, and authority that answers for one person
+	// must not be readable as everyone's.
 	subjects := make([]authoritypg.Subject, 0, len(seed.Subjects))
 	for _, subject := range seed.Subjects {
-		subjects = append(subjects, authoritypg.Subject{WorkspaceID: seed.Scope.WorkspaceID, ActorID: subject.ActorID, Role: subject.Role})
+		subjects = append(subjects, authoritypg.Subject{
+			WorkspaceID: seed.Scope.WorkspaceID,
+			ActorID:     subject.ActorID,
+			Role:        subject.Role,
+			Grants: authority.ActorAuthority{
+				Capabilities: subject.CustodyCapabilities,
+				DataClasses:  subject.DataClasses,
+			},
+		})
 	}
 	if err := store.Seed(ctx, authoritypg.Binding{
 		WorkspaceID: seed.Scope.WorkspaceID,

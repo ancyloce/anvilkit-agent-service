@@ -36,7 +36,7 @@ func sliceEvidenceAuthority(t *testing.T, workspaceID, projectID string) events.
 		PermissionActive: true,
 		PolicyActive:     true,
 		ActorRole:        authority.RoleOperator,
-		Grants:           authority.Grants{DataClasses: []string{"public", "internal", "confidential", "restricted"}},
+		ActorGrants:      authority.ActorAuthority{DataClasses: []string{"public", "internal", "confidential", "restricted"}},
 	})
 	value, err := events.MintEvidenceAuthority(
 		context.Background(),

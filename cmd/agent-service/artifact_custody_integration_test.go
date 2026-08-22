@@ -368,6 +368,23 @@ func TestArtifactCustodyDeniesUnauthorizedProductionRequests(t *testing.T) {
 		t.Fatalf("stale status=%d, want 412", stale.StatusCode)
 	}
 
+	// An unauthorized caller learns nothing about which artifacts exist. The
+	// pretender holds every custody grant its subject record can carry and is
+	// refused on the role alone, and it is refused identically whether the
+	// artifact it names is real or invented.
+	absent := "artifact.custody.never-issued"
+	present, _ := stack.decide(t, ctx, stack.bearers.pretender, "workspace", id, "custody-probe-present", record.ETag(), body)
+	invented, _ := stack.decide(t, ctx, stack.bearers.pretender, "workspace", absent, "custody-probe-absent", `"`+absent+`:v1"`, custodyCommand(absent, "deleted"))
+	if present.StatusCode != http.StatusForbidden || invented.StatusCode != present.StatusCode {
+		t.Fatalf("an existing artifact answered %d and an invented one %d: the refusal discloses existence", present.StatusCode, invented.StatusCode)
+	}
+	// An authorized custodian, by contrast, is told plainly that there is
+	// nothing there.
+	unknown, _ := stack.decide(t, ctx, stack.bearers.custodian, "workspace", absent, "custody-absent", `"`+absent+`:v1"`, custodyCommand(absent, "deleted"))
+	if unknown.StatusCode != http.StatusNotFound {
+		t.Fatalf("an authorized custodian addressing an absent artifact = %d, want 404", unknown.StatusCode)
+	}
+
 	// Revocation takes effect on the next request. The custodian keeps its
 	// token, its scope, and its role, and is refused because the register no
 	// longer admits it.

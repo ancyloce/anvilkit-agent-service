@@ -89,6 +89,37 @@ func TestRunAuthoritySeedIsStrictAndContractValid(t *testing.T) {
 	if _, err := loadAuthoritySeed(path, guard); err == nil {
 		t.Fatal("unknown server-authority field was accepted")
 	}
+	// A subject may be granted only the custody capabilities and the
+	// registered classifications the service defines. Configuration that could
+	// name anything else would be a way to write new authority into the
+	// register rather than to grant the authority that exists.
+	subject := func(grants string) string {
+		return `{"scope":{"workspaceId":"workspace","projectId":"project"},"subjects":[{"actorId":"actor","role":"agent-artifact-custodian"` + grants + `}],` + material + `}`
+	}
+	for name, grants := range map[string]string{
+		"unknown capability":   `,"custodyCapabilities":["artifact-custody.rename"]`,
+		"tool capability":      `,"custodyCapabilities":["fake.execute"]`,
+		"unregistered class":   `,"dataClasses":["unbounded"]`,
+		"empty classification": `,"dataClasses":[""]`,
+	} {
+		if err := os.WriteFile(path, []byte(subject(grants)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadAuthoritySeed(path, guard); err == nil {
+			t.Fatalf("a subject granted an %s was accepted", name)
+		}
+	}
+	granted := subject(`,"custodyCapabilities":["artifact-custody.delete"],"dataClasses":["internal"]`)
+	if err := os.WriteFile(path, []byte(granted), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	seed, err = loadAuthoritySeed(path, guard)
+	if err != nil {
+		t.Fatalf("a governed custody grant was refused: %v", err)
+	}
+	if len(seed.Subjects) != 1 || len(seed.Subjects[0].CustodyCapabilities) != 1 || len(seed.Subjects[0].DataClasses) != 1 {
+		t.Fatalf("the subject's own grants were not carried: %#v", seed.Subjects)
+	}
 }
 
 func TestOpenPersistencePoolsRoutesAuthorityThroughControlConfiguration(t *testing.T) {
