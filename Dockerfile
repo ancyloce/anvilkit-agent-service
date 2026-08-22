@@ -13,9 +13,15 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /out/agent-service ./cmd/agent-service
+# The protected-audit provisioner ships in the same image so the audit is
+# established by exactly the code the service was built with, and it is a
+# separate binary because it is a separate workload: it runs once with an
+# administrative credential the service is never given, and exits.
+RUN CGO_ENABLED=0 go build -ldflags "-s -w" -o /out/protected-audit-provisioner ./cmd/protected-audit-provisioner
 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/agent-service /agent-service
+COPY --from=build /out/protected-audit-provisioner /usr/local/bin/protected-audit-provisioner
 
 # The pinned canonical contract material is read from disk at startup and at
 # the readiness boundary: the service verifies the local pin, the pinned
