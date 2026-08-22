@@ -750,7 +750,7 @@ func assertCommandReceipts(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 		Method:      runapp.ReceiptMethod,
 		Route:       runapp.ResolveDomainOperationRoute,
 		Key:         "receipt-key",
-		RunID:       "run-receipts",
+		ResourceID:  "run-receipts",
 		Digest:      "sha256:" + strings.Repeat("a", 64),
 		Version:     3,
 	}
@@ -790,7 +790,7 @@ func assertCommandReceipts(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 			return r, runapp.ReceiptBytesReused
 		},
 		"different-run": func(r runapp.CommandReceiptRequest) (runapp.CommandReceiptRequest, string) {
-			r.RunID = "run-other"
+			r.ResourceID = "run-other"
 			return r, runapp.ReceiptResourceReused
 		},
 		"different-revision": func(r runapp.CommandReceiptRequest) (runapp.CommandReceiptRequest, string) {

@@ -61,6 +61,8 @@ import (
 	runpg "github.com/ancyloce/anvilkit-agent-service/internal/runs/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/scheduler"
 	schedulerpg "github.com/ancyloce/anvilkit-agent-service/internal/scheduler/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/securityaudit"
+	securityauditpg "github.com/ancyloce/anvilkit-agent-service/internal/securityaudit/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
 	toolpg "github.com/ancyloce/anvilkit-agent-service/internal/tools/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/usage"
@@ -160,6 +162,9 @@ func TestPostgresFoundations(t *testing.T) {
 	assertLateSupersededFinalityRecovers(t, ctx, authorityPool)
 	assertBudgetSettlementIsConcurrencySafe(t, ctx, authorityPool)
 	assertWorkerLeaseRenewal(t, ctx, authorityPool)
+	assertIsolatedFabricRefusesDispatch(t, ctx, authorityPool)
+	assertDispatchAdmissionIsAtomicWithItsMutation(t, ctx, authorityPool, databaseURL)
+	assertProtectedAuditChain(t, ctx, pool, databaseURL)
 	assertCommandReceipts(t, ctx, authorityPool)
 	if os.Getenv("DURABLE_CREATE_LOAD_TEST") == "1" {
 		assertDurableCreateLatency(t, ctx, authorityPool)
@@ -1039,9 +1044,9 @@ func assertStreamCursorSpoolRecovery(t *testing.T, ctx context.Context, pool *pg
 	if err != nil {
 		t.Fatal(err)
 	}
-	placed, err := reconciler.ReconcileOnce(ctx)
-	if err != nil || placed != 1 {
-		t.Fatalf("placed=%d err=%v, want the held record placed", placed, err)
+	report, err := reconciler.ReconcileOnce(ctx)
+	if err != nil || report.Placed != 1 {
+		t.Fatalf("report=%+v err=%v, want the held record placed", report, err)
 	}
 	var lastEventID, reason, recordedRun string
 	if err := pool.QueryRow(ctx, `SELECT run_id,last_event_id,reason FROM agent_events.stream_cursors WHERE workspace_id=$1 AND project_id=$2 AND connection_id=$3`, scope.WorkspaceID, scope.ProjectID, connectionID).Scan(&recordedRun, &lastEventID, &reason); err != nil {
@@ -1054,8 +1059,8 @@ func assertStreamCursorSpoolRecovery(t *testing.T, ctx context.Context, pool *pg
 		t.Fatalf("held records=%d err=%v after placement, want none", held, err)
 	}
 	// A second sweep places nothing: the record was moved, not copied.
-	if placed, err := reconciler.ReconcileOnce(ctx); err != nil || placed != 0 {
-		t.Fatalf("placed=%d err=%v on a second sweep, want nothing left to place", placed, err)
+	if report, err := reconciler.ReconcileOnce(ctx); err != nil || report.Placed != 0 {
+		t.Fatalf("report=%+v err=%v on a second sweep, want nothing left to place", report, err)
 	}
 }
 
@@ -1195,8 +1200,13 @@ func assertArtifactLifecycle(t *testing.T, ctx context.Context, pool *pgxpool.Po
 		t.Fatal(err)
 	}
 	material := json.RawMessage(`{"synthetic":true}`)
-	activeAuthority := authority.NewStatic(authority.Current{Definition: material, ContractBOM: material, Policy: material, Budget: material, WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true})
-	service, err := artifacts.New(store, objects, reader, activeAuthority, time.Hour, 5*time.Minute)
+	activeAuthority := authority.NewStatic(authority.Current{Definition: material, ContractBOM: material, Policy: material, Budget: material, WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true,
+		ActorRole: authority.RoleArtifactCustodian,
+		Grants: authority.Grants{
+			AllowedCapabilities: []string{string(artifacts.LegalHoldCapability), string(artifacts.DeleteCapability)},
+			DataClasses:         []string{artifacts.CustodyDataClass},
+		}})
+	service, err := artifacts.New(store, objects, reader, activeAuthority, persistenceProtectedAudit{}, time.Hour, 5*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1302,6 +1312,87 @@ func assertArtifactLifecycle(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	stored, err := objects.Read(ctx, record.Reference)
 	if err != nil || string(stored) != string(candidateBytes) {
 		t.Fatalf("stored bytes mismatch err=%v", err)
+	}
+	assertDeletionOwnershipPrecedesDestruction(t, ctx, pool, store, objects, service, now)
+}
+
+// Deletion ownership is taken by compare-and-set before anything is revoked or
+// destroyed, and the database holds the same invariants the service does. A
+// hold and a deletion that race must never end with live metadata naming
+// content that is already gone, so exactly one of them can win and the loser
+// is refused rather than partially applied.
+func assertDeletionOwnershipPrecedesDestruction(t *testing.T, ctx context.Context, pool *pgxpool.Pool, store *artifactspg.Store, objects *artifactspg.Objects, service *artifacts.Service, now time.Time) {
+	t.Helper()
+	seed := func(id artifacts.ID) artifacts.Record {
+		t.Helper()
+		value := []byte("ownership bytes for " + string(id))
+		sum := sha256.Sum256(value)
+		created, err := service.Create(ctx, artifacts.Create{
+			WorkspaceID: "workspace-ownership", ProjectID: "project-ownership", RunID: "run-ownership", ID: id,
+			Bytes: value, ClaimedDigest: "sha256:" + hex.EncodeToString(sum[:]),
+			Reference: artifacts.Reference{Bucket: "artifacts", ObjectKey: string(id), SizeBytes: int64(len(value)), MediaType: "application/json"},
+			Schema:    artifacts.SchemaIdentity{Component: "plan", Version: "1.0.0", Digest: "sha256:" + strings.Repeat("e", 64)},
+			Lineage: artifacts.Lineage{
+				RunID: "run-ownership", TaskID: "task-ownership", PhysicalAttemptID: "attempt-ownership",
+				Producer:      artifacts.Producer{TaskID: "task-ownership", PhysicalAttemptID: "attempt-ownership", RecoveryEpoch: 1, ExecutionGeneration: 1, LeaseEpoch: 1, BuildIdentity: "build-ownership", Provider: "integration"},
+				BOMDigest:     "sha256:" + strings.Repeat("a", 64),
+				SchemaDigest:  "sha256:" + strings.Repeat("b", 64),
+				CatalogDigest: "sha256:" + strings.Repeat("c", 64),
+			},
+			CreatedAt: now,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return created
+	}
+	custody := artifacts.Custody{ActorID: "actor-ownership", Workload: "artifact-lifecycle", Reason: "ownership conformance", Ticket: "change-0003", Traceparent: "00-" + strings.Repeat("3", 32) + "-" + strings.Repeat("4", 16) + "-01"}
+	var details problem.Details
+
+	// A hold that stands refuses the claim outright, so nothing is destroyed.
+	held := seed("artifact.ownership.held")
+	if _, err := service.SetLegalHold(ctx, held.WorkspaceID, held.ProjectID, held.ID, held.Version, true, custody, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ClaimDeletion(ctx, held.WorkspaceID, held.ProjectID, held.ID, held.Version+1, artifacts.DeletionClaim{Decision: "artifact.ownership.attempt", Terminal: artifacts.Expired, At: now}); !errors.As(err, &details) || details.Code != string(problem.CodeArtifactAccessDenied) {
+		t.Fatalf("deletion ownership was taken over a standing legal hold: %v", err)
+	}
+	if exists, err := objects.Exists(ctx, held.Reference); err != nil || !exists {
+		t.Fatalf("a refused claim destroyed content: exists=%v err=%v", exists, err)
+	}
+
+	// Ownership taken first carries the artifact out of every live state in
+	// the same write, and a hold arriving afterwards is refused by the
+	// database itself, not only by the service above it.
+	owned := seed("artifact.ownership.claimed")
+	claimed, err := store.ClaimDeletion(ctx, owned.WorkspaceID, owned.ProjectID, owned.ID, owned.Version, artifacts.DeletionClaim{Decision: "artifact.ownership.decision", Terminal: artifacts.Expired, At: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed.State != artifacts.Expired || claimed.DeletionClaim != "artifact.ownership.decision" || claimed.DeletionClaimedAt == nil || claimed.Version != owned.Version+1 || claimed.SecurityGeneration != owned.SecurityGeneration+1 {
+		t.Fatalf("ownership did not carry the artifact out of its live state: %+v", claimed)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_artifacts.metadata SET legal_hold=true,version=version+1,updated_at=$4 WHERE workspace_id=$1 AND project_id=$2 AND artifact_id=$3`, owned.WorkspaceID, owned.ProjectID, owned.ID, now); err == nil {
+		t.Fatal("a legal hold was placed on an artifact whose deletion was already owned")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_artifacts.metadata SET deletion_claim='someone.else',version=version+1,updated_at=$4 WHERE workspace_id=$1 AND project_id=$2 AND artifact_id=$3`, owned.WorkspaceID, owned.ProjectID, owned.ID, now); err == nil {
+		t.Fatal("artifact deletion ownership was transferable")
+	}
+	// The same decision resumes its own claim; another decision is refused.
+	resumed, err := store.ClaimDeletion(ctx, owned.WorkspaceID, owned.ProjectID, owned.ID, owned.Version, artifacts.DeletionClaim{Decision: "artifact.ownership.decision", Terminal: artifacts.Expired, At: now})
+	if err != nil || resumed.Version != claimed.Version {
+		t.Fatalf("the owning decision could not resume its own claim: %+v %v", resumed, err)
+	}
+	if _, err := store.ClaimDeletion(ctx, owned.WorkspaceID, owned.ProjectID, owned.ID, claimed.Version, artifacts.DeletionClaim{Decision: "artifact.ownership.other", Terminal: artifacts.Expired, At: now}); !errors.As(err, &details) || details.Code != string(problem.CodeVersionConflict) {
+		t.Fatalf("a second decision claimed an artifact that was already owned: %v", err)
+	}
+	// And the owned destruction finishes.
+	final, err := service.Delete(ctx, owned.WorkspaceID, owned.ProjectID, owned.ID, owned.Version, custody, now.Add(time.Minute))
+	if err != nil || final.State != artifacts.Deleted || final.DeletedAt == nil {
+		t.Fatalf("an owned destruction could not be finished: %+v %v", final, err)
+	}
+	if exists, err := objects.Exists(ctx, owned.Reference); err != nil || exists {
+		t.Fatalf("content survived a completed destruction: exists=%v err=%v", exists, err)
 	}
 }
 
@@ -3085,6 +3176,15 @@ func assertDurableToolDispatch(t *testing.T, ctx context.Context, pool *pgxpool.
 	if err := register.EnsureBaseline(ctx); err != nil {
 		t.Fatal(err)
 	}
+	// An earlier assertion in this suite rotates the recovery state, which
+	// isolates the fabric: dispatch, ingress, and result intake are all
+	// cleared until a restore re-enables them stage by stage. This assertion
+	// is about dispatch under a dispatching fabric, so it restores that state
+	// explicitly rather than depending on what ran before it. The isolated
+	// case has its own assertion below.
+	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.recovery_state SET dispatch_enabled=true,ingress_enabled=true,result_intake_enabled=true,version=version+1 WHERE register_name='platform-recovery-epoch'`); err != nil {
+		t.Fatal(err)
+	}
 	newExecutor := func(owner string, worker execution.ToolExecutor) execution.ToolExecutor {
 		t.Helper()
 		freshRegister, err := recoverypg.NewMirrorEpochSource(pool)
@@ -3162,5 +3262,467 @@ func assertDurableToolDispatch(t *testing.T, ctx context.Context, pool *pgxpool.
 	}
 	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.worker_outputs SET output='\x00' WHERE workspace_id='workspace-dispatch'`); err == nil {
 		t.Fatal("a recorded replayable output was mutable")
+	}
+}
+
+// persistenceProtectedAudit records nothing: the persistence suite proves the
+// durable artifact stores behave, and the protected audit has its own suite.
+type persistenceProtectedAudit struct{}
+
+func (persistenceProtectedAudit) PrivilegedMutation(ctx context.Context, _ securityaudit.Record, mutation securityaudit.Mutation) error {
+	if mutation == nil {
+		return nil
+	}
+	return mutation(ctx)
+}
+
+// A restore isolates the fabric before it repairs anything: the mirrored epoch
+// advances and dispatch, ingress, and result intake are all cleared. Result
+// intake was already fenced on that state; dispatch was not, so an instance
+// that restarted inside the isolated window — or one that simply never noticed
+// the restore — went on creating and leasing tasks into a fabric that had been
+// deliberately stopped. This proves both ends of the fence: no task is created
+// and no lease is issued while the fabric is isolated, and a task recorded
+// under a superseded epoch is never leased under the current one.
+func assertIsolatedFabricRefusesDispatch(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	register, err := recoverypg.NewMirrorEpochSource(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := register.EnsureBaseline(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.recovery_state SET dispatch_enabled=true,ingress_enabled=true,result_intake_enabled=true,version=version+1 WHERE register_name='platform-recovery-epoch'`); err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := schedulerpg.NewDurableScheduler(pool, register, execution.DispatchIDs{}, realClock{},
+		scheduler.PrerequisiteFunc(func(context.Context, scheduler.Create) error { return nil }), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch, err := register.Current(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := scheduler.Scope{WorkspaceID: "workspace-isolation", ProjectID: "project-isolation"}
+	// Every task is fenced to a standing reservation, so one is recorded here
+	// exactly as dispatch records it.
+	reservations, err := executionpg.NewToolReservations(pool, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reservations.Ensure(ctx, scope.WorkspaceID, scope.ProjectID, "run-isolation", "run-isolation", "reservation-isolation", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	create := func(id scheduler.TaskID, at recovery.Epoch) scheduler.Create {
+		return scheduler.Create{
+			Scope: scope, TaskID: id, RunID: "run-isolation", RootRunID: "run-isolation",
+			RecoveryEpoch: uint64(at), ExecutionGeneration: 1, Capability: "fake.execute",
+			ReservationID: "reservation-isolation", ReservationCurrent: true, PolicyAllowed: true,
+			InputDigest: "sha256:" + strings.Repeat("c", 64), InputObjectKey: "inputs/isolation",
+			CreatedAt: time.Now().UTC(),
+		}
+	}
+	// A dispatching fabric admits the task, so the refusals below are the
+	// isolation and nothing else.
+	admitted, err := dispatch.Create(ctx, create("task.isolation.admitted", epoch))
+	if err != nil {
+		t.Fatalf("a dispatching fabric refused a task: %v", err)
+	}
+	if admitted.State != scheduler.Queued {
+		t.Fatalf("admitted task state = %v, want queued", admitted.State)
+	}
+
+	// The restore isolates the fabric.
+	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.recovery_state SET dispatch_enabled=false,version=version+1 WHERE register_name='platform-recovery-epoch'`); err != nil {
+		t.Fatal(err)
+	}
+	var details problem.Details
+	if _, err := dispatch.Create(ctx, create("task.isolation.refused", epoch)); !errors.As(err, &details) || details.Code != string(problem.CodeTaskDispatchDenied) {
+		t.Fatalf("an isolated fabric created a task: %v", err)
+	}
+	if _, err := dispatch.Lease(ctx, scope, "task.isolation.admitted", "executor-isolation"); !errors.As(err, &details) || details.Code != string(problem.CodeTaskDispatchDenied) {
+		t.Fatalf("an isolated fabric leased a task: %v", err)
+	}
+	// Nothing was written: the refused task does not exist.
+	if _, err := dispatch.Get(ctx, scope, "task.isolation.refused"); !errors.As(err, &details) || details.Code != string(problem.CodeResourceNotFound) {
+		t.Fatalf("a refused dispatch left a task record: %v", err)
+	}
+
+	// The restore advances the epoch. The database enforces what the restore
+	// procedure requires — a new epoch begins fully isolated — so the advance
+	// and the re-enabling are separate steps, exactly as a restore performs
+	// them.
+	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.recovery_state SET dispatch_enabled=false,ingress_enabled=false,result_intake_enabled=false,mirrored_epoch=mirrored_epoch+1,version=version+1 WHERE register_name='platform-recovery-epoch'`); err != nil {
+		t.Fatal(err)
+	}
+	// Dispatch returns, but the epoch has moved past the task that was already
+	// queued: a task the restore did not carry forward is never leased under
+	// the epoch that replaced it.
+	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.recovery_state SET dispatch_enabled=true,version=version+1 WHERE register_name='platform-recovery-epoch'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dispatch.Lease(ctx, scope, "task.isolation.admitted", "executor-isolation"); !errors.As(err, &details) || details.Code != string(problem.CodeWorkerFenceStale) {
+		t.Fatalf("a task from a superseded epoch was leased under the current one: %v", err)
+	}
+	if _, err := dispatch.Create(ctx, create("task.isolation.stale-epoch", epoch)); !errors.As(err, &details) || details.Code != string(problem.CodeWorkerFenceStale) {
+		t.Fatalf("a task was created under a superseded epoch: %v", err)
+	}
+
+	// Leave the fabric dispatching. The epoch stays where the restore left it:
+	// a recovery epoch never rolls back, and the database refuses to let one.
+	if _, err := pool.Exec(ctx, `UPDATE agent_workflow.recovery_state SET dispatch_enabled=true,ingress_enabled=true,result_intake_enabled=true,version=version+1 WHERE register_name='platform-recovery-epoch'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The protected audit is what makes a security decision reconstructable after
+// the fact, so it has to hold two properties against a real database: the
+// chain must detect any record that was altered, removed, or inserted, and the
+// table must refuse to be rewritten in the first place.
+func assertProtectedAuditChain(t *testing.T, ctx context.Context, pool *pgxpool.Pool, databaseURL string) {
+	t.Helper()
+	sink, err := securityauditpg.New(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	record := func(id, action string) securityaudit.Record {
+		return securityaudit.Record{
+			ID: id, Action: action, Actor: "operator-01", Workload: "audit-suite",
+			Reason: "protected audit conformance", Ticket: "change-0002",
+			OldDigest:   "sha256:" + strings.Repeat("a", 64),
+			NewDigest:   "sha256:" + strings.Repeat("b", 64),
+			Traceparent: "00-" + strings.Repeat("1", 32) + "-" + strings.Repeat("2", 16) + "-01",
+			Outcome:     "applied",
+			UTC:         time.Unix(1_700_000_000, 0).UTC(),
+			Scope:       securityaudit.Scope{WorkspaceID: "workspace-audit", ProjectID: "project-audit", ResourceID: "artifact-audit"},
+		}
+	}
+	first, inserted, err := sink.Append(ctx, record("audit.chain.1", "artifact-deleted"))
+	if err != nil || !inserted {
+		t.Fatalf("first append inserted=%v err=%v", inserted, err)
+	}
+	if first.PreviousDigest != "" || first.Digest == "" {
+		t.Fatalf("the first record does not open the chain: %+v", first)
+	}
+	second, inserted, err := sink.Append(ctx, record("audit.chain.2", "artifact-legal-hold-placed"))
+	if err != nil || !inserted {
+		t.Fatalf("second append inserted=%v err=%v", inserted, err)
+	}
+	if second.PreviousDigest != first.Digest {
+		t.Fatalf("the second record does not chain onto the first: %+v", second)
+	}
+	if err := sink.Verify(ctx); err != nil {
+		t.Fatalf("a freshly written chain does not verify: %v", err)
+	}
+
+	// The same decision recorded again is the same record, not a second one.
+	retained, inserted, err := sink.Append(ctx, record("audit.chain.2", "artifact-legal-hold-placed"))
+	if err != nil || inserted {
+		t.Fatalf("a repeated decision inserted=%v err=%v, want the retained record", inserted, err)
+	}
+	if retained.Digest != second.Digest {
+		t.Fatalf("a repeated decision returned a different record: %+v", retained)
+	}
+	// The same identity carrying a different decision is a conflict.
+	conflicting := record("audit.chain.2", "artifact-legal-hold-lifted")
+	var details problem.Details
+	if _, _, err := sink.Append(ctx, conflicting); !errors.As(err, &details) || details.Code != string(problem.CodeIdempotencyConflict) {
+		t.Fatalf("a reused identity carrying a different decision was accepted: %v", err)
+	}
+
+	// A lookup answers with the record that was asked for.
+	looked, found, err := sink.Lookup(ctx, "audit.chain.2")
+	if err != nil || !found || looked.Digest != second.Digest || looked.Action != "artifact-legal-hold-placed" {
+		t.Fatalf("lookup=%+v found=%v err=%v", looked, found, err)
+	}
+	if _, found, err := sink.Lookup(ctx, "audit.chain.absent"); err != nil || found {
+		t.Fatalf("an absent identity was found: found=%v err=%v", found, err)
+	}
+
+	// Every column the row duplicates from the authenticated payload is
+	// checked against that payload on the way in. Without this a row could be
+	// filed under one identity while carrying another, and the dedupe key
+	// would have nothing to do with the identity the chain digest covers: a
+	// lookup would answer with a record that is not the record asked for.
+	authenticPayload, err := securityaudit.ChainPayload(func() securityaudit.Record {
+		value := record("audit.chain.forged", "artifact-deleted")
+		value.PreviousDigest = second.Digest
+		return value
+	}())
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticDigest := securityaudit.ChainDigest(authenticPayload)
+	for name, insert := range map[string]struct{ id, previous, digest string }{
+		"an identity the payload does not claim":       {id: "audit.chain.mislabelled", previous: second.Digest, digest: authenticDigest},
+		"a predecessor the payload does not claim":     {id: "audit.chain.forged", previous: first.Digest, digest: authenticDigest},
+		"a digest that is not the digest of the bytes": {id: "audit.chain.forged", previous: second.Digest, digest: "sha256:" + strings.Repeat("c", 64)},
+	} {
+		if _, err := pool.Exec(ctx, `INSERT INTO agent_protected_audit.records(record_id,previous_digest,record_digest,chain_payload) VALUES($1,$2,$3,$4)`,
+			insert.id, insert.previous, insert.digest, authenticPayload); err == nil {
+			t.Fatalf("the protected audit accepted a row carrying %s", name)
+		}
+	}
+
+	// The role the service runs as holds append and read and nothing else, so
+	// the running process has no privilege to rewrite its own audit even if
+	// every trigger above it were removed. A grant widened later is exactly
+	// the change nobody notices, so it is asserted rather than assumed.
+	if err := sink.VerifyRuntimePrivileges(ctx); err != nil {
+		t.Fatalf("the protected audit runtime role is not least-privileged: %v", err)
+	}
+	runtimePool, err := persistence.OpenPool(ctx, persistence.PoolConfig{URL: databaseURL, Role: securityauditpg.RuntimeRole, Maximum: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtimePool.Close()
+	runtimeSink, err := securityauditpg.New(runtimePool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, inserted, err := runtimeSink.Append(ctx, record("audit.chain.runtime", "artifact-expired")); err != nil || !inserted {
+		t.Fatalf("the runtime role cannot append to its own audit: inserted=%v err=%v", inserted, err)
+	}
+	if records, err := runtimeSink.Read(ctx); err != nil || len(records) == 0 {
+		t.Fatalf("the runtime role cannot read its own audit: records=%d err=%v", len(records), err)
+	}
+	for name, statement := range map[string]string{
+		"rewrite":  `UPDATE agent_protected_audit.records SET record_digest='sha256:'||repeat('f',64)`,
+		"remove":   `DELETE FROM agent_protected_audit.records`,
+		"truncate": `TRUNCATE agent_protected_audit.records`,
+		"redefine": `ALTER TABLE agent_protected_audit.records DISABLE TRIGGER protected_audit_is_append_only`,
+	} {
+		if _, err := runtimePool.Exec(ctx, statement); err == nil {
+			t.Fatalf("the protected audit runtime role could %s the chain", name)
+		}
+	}
+
+	// The table refuses to be rewritten. This is the first barrier; the chain
+	// below is the evidence that survives someone getting past it.
+	if _, err := pool.Exec(ctx, `UPDATE agent_protected_audit.records SET record_digest='sha256:'||repeat('f',64) WHERE record_id='audit.chain.1'`); err == nil {
+		t.Fatal("the protected audit accepted an update")
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM agent_protected_audit.records WHERE record_id='audit.chain.1'`); err == nil {
+		t.Fatal("the protected audit accepted a delete")
+	}
+	if err := sink.Verify(ctx); err != nil {
+		t.Fatalf("a refused rewrite still broke the chain: %v", err)
+	}
+
+	// And the chain detects a record that was altered anyway — the trigger
+	// dropped, the row rewritten by a superuser, the table restored from
+	// somewhere else. The digest no longer matches the bytes.
+	if _, err := pool.Exec(ctx, `ALTER TABLE agent_protected_audit.records DISABLE TRIGGER protected_audit_is_append_only`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE agent_protected_audit.records SET chain_payload=convert_to('{"ID":"audit.chain.1","Action":"nothing-happened"}','UTF8') WHERE record_id='audit.chain.1'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Verify(ctx); err == nil {
+		t.Fatal("an altered record verified against the chain")
+	}
+	// A row whose duplicated columns disagree with its payload is refused by
+	// the read path as well as by the trigger, so a row written around the
+	// trigger cannot be served as though it were authentic.
+	if _, err := pool.Exec(ctx, `ALTER TABLE agent_protected_audit.records DISABLE TRIGGER protected_audit_columns_match_payload`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_protected_audit.records(record_id,previous_digest,record_digest,chain_payload) VALUES($1,$2,$3,$4)`,
+		"audit.chain.smuggled", "", securityaudit.ChainDigest(authenticPayload), authenticPayload); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := sink.Lookup(ctx, "audit.chain.smuggled"); err == nil {
+		t.Fatal("a record filed under an identity its payload does not claim was served by the read path")
+	}
+	if _, err := pool.Exec(ctx, `ALTER TABLE agent_protected_audit.records ENABLE TRIGGER protected_audit_columns_match_payload`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `ALTER TABLE agent_protected_audit.records ENABLE TRIGGER protected_audit_is_append_only`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The admission check and the mutation it admits must be one indivisible act.
+// A restore's very first move is to stop the fabric, and dispatch used to read
+// that state on one connection and write on another: between the two the
+// restore could disable dispatch and commit, and the task or the lease still
+// landed — admitted by a fact that had already stopped being true.
+//
+// This proves it deterministically rather than by racing. A holder transaction
+// takes the recovery row exactly as a restore's rotation does, dispatch is
+// asked for the mutation and must block on it, and only then does the holder
+// disable dispatch and commit. If the admission and the mutation are one
+// transaction, dispatch wakes to the state the restore left and refuses. If
+// they are not, the mutation completes before the holder ever moves, which is
+// what the block assertion catches.
+func assertDispatchAdmissionIsAtomicWithItsMutation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, databaseURL string) {
+	t.Helper()
+	register, err := recoverypg.NewMirrorEpochSource(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := schedulerpg.NewDurableScheduler(pool, register, execution.DispatchIDs{}, realClock{},
+		scheduler.PrerequisiteFunc(func(context.Context, scheduler.Create) error { return nil }), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope := scheduler.Scope{WorkspaceID: "workspace-admission", ProjectID: "project-admission"}
+	reservations, err := executionpg.NewToolReservations(pool, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reservations.Ensure(ctx, scope.WorkspaceID, scope.ProjectID, "run-admission", "run-admission", "reservation-admission", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	enableDispatch := func() {
+		t.Helper()
+		if _, err := pool.Exec(ctx, `UPDATE agent_workflow.recovery_state SET dispatch_enabled=true,ingress_enabled=true,result_intake_enabled=true,version=version+1 WHERE register_name='platform-recovery-epoch'`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	enableDispatch()
+	epoch, err := register.Current(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(id scheduler.TaskID) scheduler.Create {
+		return scheduler.Create{
+			Scope: scope, TaskID: id, RunID: "run-admission", RootRunID: "run-admission",
+			RecoveryEpoch: uint64(epoch), ExecutionGeneration: 1, Capability: "fake.execute",
+			ReservationID: "reservation-admission", ReservationCurrent: true, PolicyAllowed: true,
+			InputDigest: "sha256:" + strings.Repeat("d", 64), InputObjectKey: "inputs/admission",
+			CreatedAt: time.Now().UTC(),
+		}
+	}
+	var details problem.Details
+
+	// Creation: the restore lands between the admission and the insert.
+	createErr := withRestoreHoldingTheRecoveryRow(t, ctx, pool, databaseURL, func() error {
+		_, err := dispatch.Create(ctx, create("task.admission.create"))
+		return err
+	})
+	if !errors.As(createErr, &details) || details.Code != string(problem.CodeTaskDispatchDenied) {
+		t.Fatalf("create admitted across a restore that disabled dispatch: %v", createErr)
+	}
+	if _, err := dispatch.Get(ctx, scope, "task.admission.create"); !errors.As(err, &details) || details.Code != string(problem.CodeResourceNotFound) {
+		t.Fatalf("a create refused by the restore still recorded a task: %v", err)
+	}
+
+	// Leasing: the same window, one step further along the fabric.
+	enableDispatch()
+	if _, err := dispatch.Create(ctx, create("task.admission.lease")); err != nil {
+		t.Fatalf("a dispatching fabric refused the task the lease test needs: %v", err)
+	}
+	leaseErr := withRestoreHoldingTheRecoveryRow(t, ctx, pool, databaseURL, func() error {
+		_, err := dispatch.Lease(ctx, scope, "task.admission.lease", "executor-admission")
+		return err
+	})
+	if !errors.As(leaseErr, &details) || details.Code != string(problem.CodeTaskDispatchDenied) {
+		t.Fatalf("lease admitted across a restore that disabled dispatch: %v", leaseErr)
+	}
+	task, err := dispatch.Get(ctx, scope, "task.admission.lease")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != scheduler.Queued || task.Lease != nil {
+		t.Fatalf("a lease refused by the restore still moved the task: state=%v lease=%+v", task.State, task.Lease)
+	}
+	var attempts int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM agent_workflow.worker_attempts WHERE workspace_id=$1 AND project_id=$2 AND task_id='task.admission.lease'`, scope.WorkspaceID, scope.ProjectID).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 {
+		t.Fatalf("a lease refused by the restore recorded %d attempt row(s)", attempts)
+	}
+	enableDispatch()
+}
+
+// withRestoreHoldingTheRecoveryRow runs one dispatch operation while a
+// transaction holds the recovery row the way a restore's rotation holds it,
+// then disables dispatch and commits. It returns what the operation answered.
+//
+// The operation is required to block. That requirement is the test: an
+// operation that reads the admission on its own connection never waits for the
+// holder, so it finishes before the restore has moved and the assertion below
+// says so plainly instead of leaving a race to decide the outcome.
+func withRestoreHoldingTheRecoveryRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, databaseURL string, operation func() error) error {
+	t.Helper()
+	holder, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Close(ctx) }()
+	restore, err := holder.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mirrored uint64
+	if err := restore.QueryRow(ctx, `SELECT mirrored_epoch FROM agent_workflow.recovery_state WHERE register_name='platform-recovery-epoch' FOR UPDATE`).Scan(&mirrored); err != nil {
+		_ = restore.Rollback(ctx)
+		t.Fatal(err)
+	}
+	// The waiting session is observed on its own privileged connection.
+	// Postgres hides the wait columns of pg_stat_activity from a session that
+	// holds no privilege over the waiter's role, so a pooled connection that
+	// has assumed a scoped role would report an idle database no matter what
+	// was blocked on it.
+	observer, err := pgx.Connect(ctx, databaseURL)
+	if err != nil {
+		_ = restore.Rollback(ctx)
+		t.Fatal(err)
+	}
+	defer func() { _ = observer.Close(ctx) }()
+	answered := make(chan error, 1)
+	go func() { answered <- operation() }()
+	if err := waitUntilBlockedOnALock(ctx, observer, answered); err != nil {
+		_ = restore.Rollback(ctx)
+		t.Fatalf("the dispatch operation did not serialize against the restore: %v", err)
+	}
+	if _, err := restore.Exec(ctx, `UPDATE agent_workflow.recovery_state SET dispatch_enabled=false,version=version+1 WHERE register_name='platform-recovery-epoch'`); err != nil {
+		_ = restore.Rollback(ctx)
+		t.Fatal(err)
+	}
+	if err := restore.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-answered:
+		return err
+	case <-time.After(30 * time.Second):
+		t.Fatal("the dispatch operation never returned after the restore committed")
+		return nil
+	}
+}
+
+// waitUntilBlockedOnALock waits for the database itself to report a session
+// waiting on a lock. It reports an error if the operation answers first, which
+// means it never took the lock the restore is holding.
+func waitUntilBlockedOnALock(ctx context.Context, observer *pgx.Conn, answered <-chan error) error {
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		select {
+		case err := <-answered:
+			return fmt.Errorf("it completed while the recovery row was held (answer: %v)", err)
+		default:
+		}
+		var waiting int
+		if err := observer.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND state='active' AND pid<>pg_backend_pid()`).Scan(&waiting); err != nil {
+			return err
+		}
+		if waiting > 0 {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("no session ever waited on the recovery row")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
