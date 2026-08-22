@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/auth"
@@ -86,6 +87,12 @@ type App struct {
 	receipts     CommandReceipts
 	guard        CommandGuard
 	definitions  DefinitionResolver
+	// The artifact custody path and the receipt store and clock it is bound
+	// to. All three are installed together or not at all; an unbound custody
+	// path answers as unavailable.
+	custodian       ArtifactCustodian
+	custodyReceipts CommandReceipts
+	custodyNow      func() time.Time
 }
 
 func (a *App) WithInterrupts(service *interrupts.Service) *App { a.interrupts = service; return a }
@@ -474,7 +481,7 @@ func (a *App) ResolveEscalation(ctx context.Context, claims auth.Claims, input C
 		Method:      ReceiptMethod,
 		Route:       ResolveDomainOperationRoute,
 		Key:         input.Key,
-		RunID:       input.RunID,
+		ResourceID:  input.RunID,
 		Digest:      input.Digest,
 		Version:     version,
 	}

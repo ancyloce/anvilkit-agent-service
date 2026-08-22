@@ -32,21 +32,29 @@ const ResolveDomainOperationRoute = "POST /workspaces/{workspaceId}/agent-runs/{
 // subject's recorded privileged outcome be replayed to another. The audited
 // resolving operator is a separate concern and stays the verified actor.
 //
-// Digest, Version, and RunID are deliberately not part of that identity. They
-// are what a claimed key is checked against, which is what makes reuse
+// Digest, Version, and ResourceID are deliberately not part of that identity.
+// They are what a claimed key is checked against, which is what makes reuse
 // distinguishable from replay: the same key with different command bytes,
-// against a different observed resource revision, or aimed at a different run
-// is a conflict, never a replay of an outcome the caller did not ask for.
+// against a different observed resource revision, or aimed at a different
+// resource is a conflict, never a replay of an outcome the caller did not ask
+// for.
+//
+// ResourceID names whatever the route addresses — the run a control command
+// acts on, the artifact a custody decision is about. It is the addressed
+// resource rather than any one kind of resource, because the isolation it
+// gives is the same in every case: a key replayed against something other
+// than what it was claimed for conflicts instead of answering with another
+// resource's recorded outcome.
 type CommandReceiptRequest struct {
-	WorkspaceID, ProjectID, Subject, Method, Route, Key, RunID, Digest string
-	Version                                                            uint64
+	WorkspaceID, ProjectID, Subject, Method, Route, Key, ResourceID, Digest string
+	Version                                                                 uint64
 }
 
 // Valid reports whether the request carries every element the receipt identity
 // and its conflict checks are made of.
 func (r CommandReceiptRequest) Valid() bool {
 	return r.WorkspaceID != "" && r.ProjectID != "" && r.Subject != "" && r.Method != "" &&
-		r.Route != "" && r.Key != "" && len(r.Key) <= 256 && r.RunID != "" && r.Digest != "" && r.Version != 0
+		r.Route != "" && r.Key != "" && len(r.Key) <= 256 && r.ResourceID != "" && r.Digest != "" && r.Version != 0
 }
 
 // CommandReceipt is the recorded outcome of one idempotent command: the
@@ -123,7 +131,7 @@ func receiptConflictCode(detail string) problem.Code {
 const (
 	ReceiptBytesReused    = "the idempotency key was already used with different command bytes"
 	ReceiptRevisionReused = "the idempotency key was already used against a different resource revision"
-	ReceiptResourceReused = "the idempotency key was already used against a different run"
+	ReceiptResourceReused = "the idempotency key was already used against a different resource"
 	ReceiptInFlight       = "a command with this idempotency key is still in flight"
 	ReceiptClaimLost      = "the idempotency claim was taken over before its outcome was recorded"
 )
@@ -142,7 +150,7 @@ type MemoryCommandReceipts struct {
 
 type memoryReceipt struct {
 	digest     string
-	runID      string
+	resourceID string
 	version    uint64
 	epoch      uint64
 	reservedAt time.Time
@@ -169,7 +177,7 @@ func receiptKey(request CommandReceiptRequest) string {
 
 func (m *MemoryCommandReceipts) Begin(_ context.Context, request CommandReceiptRequest) (CommandReceipt, ReceiptClaim, bool, error) {
 	if !request.Valid() {
-		return CommandReceipt{}, ReceiptClaim{}, false, fmt.Errorf("command receipt: scope, subject, method, route, key, run, digest, and revision are required")
+		return CommandReceipt{}, ReceiptClaim{}, false, fmt.Errorf("command receipt: scope, subject, method, route, key, resource, digest, and revision are required")
 	}
 	m.lock.Lock()
 	defer m.lock.Unlock()
@@ -177,7 +185,7 @@ func (m *MemoryCommandReceipts) Begin(_ context.Context, request CommandReceiptR
 	key := receiptKey(request)
 	existing, held := m.records[key]
 	if !held {
-		m.records[key] = &memoryReceipt{digest: request.Digest, runID: request.RunID, version: request.Version, epoch: 1, reservedAt: now}
+		m.records[key] = &memoryReceipt{digest: request.Digest, resourceID: request.ResourceID, version: request.Version, epoch: 1, reservedAt: now}
 		return CommandReceipt{}, ReceiptClaim{Epoch: 1}, false, nil
 	}
 	if err := existing.conflict(request); err != nil {
@@ -206,7 +214,7 @@ func (r *memoryReceipt) conflict(request CommandReceiptRequest) error {
 	switch {
 	case r.digest != request.Digest:
 		return ReceiptConflict(ReceiptBytesReused)
-	case r.runID != request.RunID:
+	case r.resourceID != request.ResourceID:
 		return ReceiptConflict(ReceiptResourceReused)
 	case r.version != request.Version:
 		return ReceiptConflict(ReceiptRevisionReused)
@@ -216,7 +224,7 @@ func (r *memoryReceipt) conflict(request CommandReceiptRequest) error {
 
 func (m *MemoryCommandReceipts) Record(_ context.Context, request CommandReceiptRequest, claim ReceiptClaim, receipt CommandReceipt) error {
 	if !request.Valid() {
-		return fmt.Errorf("command receipt: scope, subject, method, route, key, run, digest, and revision are required")
+		return fmt.Errorf("command receipt: scope, subject, method, route, key, resource, digest, and revision are required")
 	}
 	if !claim.Held() {
 		return fmt.Errorf("command receipt: recording an outcome requires the claim Begin issued")

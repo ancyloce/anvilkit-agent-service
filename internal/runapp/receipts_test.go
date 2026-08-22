@@ -331,7 +331,7 @@ func TestOperatorResolutionReceiptReclaimsAbandonedClaims(t *testing.T) {
 	receipt := CommandReceiptRequest{
 		WorkspaceID: "workspace", ProjectID: "project", Subject: "operator",
 		Method: ReceiptMethod, Route: ResolveDomainOperationRoute, Key: "key-crashed",
-		RunID: "run", Digest: harness.digest, Version: 3,
+		ResourceID: "run", Digest: harness.digest, Version: 3,
 	}
 	// A previous process claimed the key and died before recording anything.
 	if _, _, replayed, err := harness.receipts.Begin(context.Background(), receipt); err != nil || replayed {
@@ -552,7 +552,7 @@ func TestReceiptClaimFencesStaleHolders(t *testing.T) {
 	request := CommandReceiptRequest{
 		WorkspaceID: "workspace", ProjectID: "project", Subject: "subject.one",
 		Method: ReceiptMethod, Route: ResolveDomainOperationRoute, Key: "key-fenced",
-		RunID: "run", Digest: "sha256:" + strings.Repeat("a", 64), Version: 3,
+		ResourceID: "run", Digest: "sha256:" + strings.Repeat("a", 64), Version: 3,
 	}
 	stalePayload := CommandReceipt{Body: []byte(`{"status":"stale"}`), ETag: `"run:run:99"`}
 	successorPayload := CommandReceipt{Body: []byte(`{"status":"successor"}`), ETag: `"run:run:4"`}
@@ -614,7 +614,7 @@ func TestReleasingHolderCannotRecordAfterwards(t *testing.T) {
 	request := CommandReceiptRequest{
 		WorkspaceID: "workspace", ProjectID: "project", Subject: "subject.one",
 		Method: ReceiptMethod, Route: ResolveDomainOperationRoute, Key: "key-released",
-		RunID: "run", Digest: "sha256:" + strings.Repeat("a", 64), Version: 3,
+		ResourceID: "run", Digest: "sha256:" + strings.Repeat("a", 64), Version: 3,
 	}
 	_, claim, _, err := receipts.Begin(ctx, request)
 	if err != nil {

@@ -70,9 +70,9 @@ func (r *Receipts) Begin(ctx context.Context, request runapp.CommandReceiptReque
 	// A duplicate arriving concurrently blocks on the primary key until the
 	// first claim commits, then reads it back. That is what makes the outcome
 	// deterministic rather than a race: exactly one caller inserts.
-	claim, err := tx.Exec(ctx, `INSERT INTO agent_control.write_idempotency(workspace_id,project_id,subject,method,operation,idempotency_key,run_id,request_digest,version_bound,response_status,response_content_type,response_body,response_etag,reserved_at,claim_epoch,expires_at)
+	claim, err := tx.Exec(ctx, `INSERT INTO agent_control.write_idempotency(workspace_id,project_id,subject,method,operation,idempotency_key,resource_id,request_digest,version_bound,response_status,response_content_type,response_body,response_etag,reserved_at,claim_epoch,expires_at)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,0,'',decode('','hex'),'',$10,1,$11) ON CONFLICT DO NOTHING`,
-		request.WorkspaceID, request.ProjectID, request.Subject, request.Method, request.Route, request.Key, request.RunID,
+		request.WorkspaceID, request.ProjectID, request.Subject, request.Method, request.Route, request.Key, request.ResourceID,
 		[]byte(request.Digest), int64(request.Version), now, now.Add(r.retention))
 	if err != nil {
 		return runapp.CommandReceipt{}, runapp.ReceiptClaim{}, false, fmt.Errorf("claim command receipt: %w", err)
@@ -84,15 +84,15 @@ func (r *Receipts) Begin(ctx context.Context, request runapp.CommandReceiptReque
 		return runapp.CommandReceipt{}, runapp.ReceiptClaim{Epoch: 1}, false, nil
 	}
 	var digest, body []byte
-	var runID, etag string
+	var resourceID, etag string
 	var status int
 	var versionBound, epoch int64
 	var reservedAt time.Time
-	if err := tx.QueryRow(ctx, `SELECT request_digest,run_id,version_bound,response_status,response_body,response_etag,reserved_at,claim_epoch
+	if err := tx.QueryRow(ctx, `SELECT request_digest,resource_id,version_bound,response_status,response_body,response_etag,reserved_at,claim_epoch
 		FROM agent_control.write_idempotency
 		WHERE workspace_id=$1 AND project_id=$2 AND subject=$3 AND method=$4 AND operation=$5 AND idempotency_key=$6 FOR UPDATE`,
 		request.WorkspaceID, request.ProjectID, request.Subject, request.Method, request.Route, request.Key).
-		Scan(&digest, &runID, &versionBound, &status, &body, &etag, &reservedAt, &epoch); err != nil {
+		Scan(&digest, &resourceID, &versionBound, &status, &body, &etag, &reservedAt, &epoch); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// The holder rolled back between the failed insert and this read.
 			// Nothing is claimed, so this request is told to retry rather than
@@ -101,7 +101,7 @@ func (r *Receipts) Begin(ctx context.Context, request runapp.CommandReceiptReque
 		}
 		return runapp.CommandReceipt{}, runapp.ReceiptClaim{}, false, fmt.Errorf("read command receipt: %w", err)
 	}
-	if conflict := receiptConflict(request, digest, runID, versionBound); conflict != nil {
+	if conflict := receiptConflict(request, digest, resourceID, versionBound); conflict != nil {
 		return runapp.CommandReceipt{}, runapp.ReceiptClaim{}, false, conflict
 	}
 	if status != 0 {
@@ -132,6 +132,13 @@ func (r *Receipts) Begin(ctx context.Context, request runapp.CommandReceiptReque
 }
 
 func (r *Receipts) Record(ctx context.Context, request runapp.CommandReceiptRequest, claim runapp.ReceiptClaim, receipt runapp.CommandReceipt) error {
+	// A command whose outcome is a revision rather than a representation
+	// records no body. The stored outcome is an empty body rather than an
+	// absent one, so "recorded with nothing to replay" stays distinguishable
+	// from "not recorded" in the column that holds it.
+	if receipt.Body == nil {
+		receipt.Body = []byte{}
+	}
 	if !request.Valid() {
 		return fmt.Errorf("command receipt: scope, subject, method, route, key, run, digest, and revision are required")
 	}
@@ -144,9 +151,9 @@ func (r *Receipts) Record(ctx context.Context, request runapp.CommandReceiptRequ
 	tag, err := r.database.Exec(ctx, `UPDATE agent_control.write_idempotency
 		SET response_status=$7,response_content_type=$8,response_body=$9,response_etag=$10
 		WHERE workspace_id=$1 AND project_id=$2 AND subject=$3 AND method=$4 AND operation=$5 AND idempotency_key=$6
-		  AND request_digest=$11 AND version_bound=$12 AND run_id=$13 AND response_status=0 AND claim_epoch=$14`,
+		  AND request_digest=$11 AND version_bound=$12 AND resource_id=$13 AND response_status=0 AND claim_epoch=$14`,
 		request.WorkspaceID, request.ProjectID, request.Subject, request.Method, request.Route, request.Key,
-		receiptStatus, receiptContentType, receipt.Body, receipt.ETag, []byte(request.Digest), int64(request.Version), request.RunID, int64(claim.Epoch))
+		receiptStatus, receiptContentType, receipt.Body, receipt.ETag, []byte(request.Digest), int64(request.Version), request.ResourceID, int64(claim.Epoch))
 	if err != nil {
 		return fmt.Errorf("record command receipt: %w", err)
 	}
@@ -158,19 +165,19 @@ func (r *Receipts) Record(ctx context.Context, request runapp.CommandReceiptRequ
 	// moved on, which is a lost claim the caller must be told about rather
 	// than silently ignore.
 	var digest []byte
-	var runID string
+	var resourceID string
 	var status int
 	var versionBound, epoch int64
-	if err := r.database.QueryRow(ctx, `SELECT request_digest,run_id,version_bound,response_status,claim_epoch FROM agent_control.write_idempotency
+	if err := r.database.QueryRow(ctx, `SELECT request_digest,resource_id,version_bound,response_status,claim_epoch FROM agent_control.write_idempotency
 		WHERE workspace_id=$1 AND project_id=$2 AND subject=$3 AND method=$4 AND operation=$5 AND idempotency_key=$6`,
 		request.WorkspaceID, request.ProjectID, request.Subject, request.Method, request.Route, request.Key).
-		Scan(&digest, &runID, &versionBound, &status, &epoch); err != nil {
+		Scan(&digest, &resourceID, &versionBound, &status, &epoch); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return runapp.ReceiptConflict(runapp.ReceiptClaimLost)
 		}
 		return fmt.Errorf("read command receipt after recording: %w", err)
 	}
-	if conflict := receiptConflict(request, digest, runID, versionBound); conflict != nil {
+	if conflict := receiptConflict(request, digest, resourceID, versionBound); conflict != nil {
 		return conflict
 	}
 	if uint64(epoch) != claim.Epoch || status == 0 {
@@ -205,13 +212,13 @@ func (r *Receipts) Abandon(ctx context.Context, request runapp.CommandReceiptReq
 
 // receiptConflict reports why a held receipt cannot answer this request, or
 // nil when it can. The three checks are the difference between replay and
-// reuse: same key with different bytes, aimed at a different run, or made
+// reuse: same key with different bytes, aimed at a different resource, or made
 // against a different observed revision.
-func receiptConflict(request runapp.CommandReceiptRequest, digest []byte, runID string, versionBound int64) error {
+func receiptConflict(request runapp.CommandReceiptRequest, digest []byte, resourceID string, versionBound int64) error {
 	switch {
 	case !bytes.Equal(digest, []byte(request.Digest)):
 		return runapp.ReceiptConflict(runapp.ReceiptBytesReused)
-	case runID != request.RunID:
+	case resourceID != request.ResourceID:
 		return runapp.ReceiptConflict(runapp.ReceiptResourceReused)
 	case versionBound != int64(request.Version):
 		return runapp.ReceiptConflict(runapp.ReceiptRevisionReused)
