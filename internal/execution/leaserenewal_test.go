@@ -389,3 +389,153 @@ func TestALiveLeaseExcludesAConcurrentDispatch(t *testing.T) {
 func taskIdentity(idempotencyKey string) scheduler.TaskID {
 	return execution.TaskIdentity(idempotencyKey)
 }
+
+// A restore advances the non-rollback recovery epoch. Every attempt already in
+// flight belongs to a fabric that no longer exists, and the epoch is read once
+// before dispatch — so without a re-read the attempt renewed its lease happily
+// and ran to completion against restored state, learning only at acceptance
+// that its result would never be taken. The epoch is now re-read on the
+// renewal beat: the attempt is cancelled promptly and converges against the
+// durable record, and its result is refused either way.
+func TestARecoveryEpochAdvancingMidExecutionFencesTheAttempt(t *testing.T) {
+	register, err := recovery.NewMemoryRegister(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch := renewalScheduler(t, 200*time.Millisecond)
+	worker := newGatedWorker()
+	executor, err := execution.NewScheduledToolExecutor(dispatch, register, dispatchAuthority(), renewalToolMaterial(), worker,
+		renewalUsage(t), execution.NewMemoryToolReservations(), systemClock{}, "executor-epoch", "sha256:"+strings.Repeat("b", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type outcome struct {
+		result execution.ToolResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := executor.Execute(context.Background(), renewalInvocation("epoch-advance-01"))
+		done <- outcome{result: result, err: err}
+	}()
+
+	select {
+	case <-worker.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the worker never started")
+	}
+
+	// The restore lands while the attempt is running.
+	if _, err := register.Increment(context.Background(), 1, recovery.IncrementEvidence{
+		Actor:       "operator-01",
+		Workload:    "recovery-drill",
+		Reason:      "restore completed; the recovery epoch advances",
+		Ticket:      "restore-0001",
+		Traceparent: traceparent,
+		At:          time.Unix(1_700_000_000, 0).UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case finished := <-done:
+		if finished.err == nil {
+			t.Fatalf("an attempt dispatched under a superseded recovery epoch produced an accepted result: %+v", finished.result)
+		}
+		var details problem.Details
+		if !errors.As(finished.err, &details) || details.Code != string(problem.CodeWorkerFenceStale) {
+			t.Fatalf("stale-epoch attempt failed with %v, want the worker fence", finished.err)
+		}
+		if details.Retryability != "safe-after-backoff" {
+			t.Fatalf("stale-epoch attempt reported retryability %q, want a safely retryable stop", details.Retryability)
+		}
+	case <-time.After(10 * time.Second):
+		close(worker.release)
+		t.Fatal("the attempt was never fenced by the advanced recovery epoch")
+	}
+	if worker.cancelled.Load() != 1 {
+		t.Fatalf("worker cancellations = %d, want the superseded execution stopped rather than left running", worker.cancelled.Load())
+	}
+	// The advanced epoch is the current one; nothing rolled it back.
+	current, err := register.Current(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != 2 {
+		t.Fatalf("recovery epoch = %d, want the advanced epoch to stand", current)
+	}
+}
+
+// A register that cannot be read is not evidence that the epoch moved. An
+// attempt is never abandoned on a register outage — that would turn an outage
+// into lost work — and the lease fence still governs it.
+func TestAnUnreadableRecoveryRegisterDoesNotAbandonALiveAttempt(t *testing.T) {
+	register, err := recovery.NewMemoryRegister(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch := renewalScheduler(t, 200*time.Millisecond)
+	worker := newGatedWorker()
+	executor, err := execution.NewScheduledToolExecutor(dispatch, register, dispatchAuthority(), renewalToolMaterial(), worker,
+		renewalUsage(t), execution.NewMemoryToolReservations(), systemClock{}, "executor-outage", "sha256:"+strings.Repeat("b", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type outcome struct {
+		result execution.ToolResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := executor.Execute(context.Background(), renewalInvocation("register-outage-01"))
+		done <- outcome{result: result, err: err}
+	}()
+	select {
+	case <-worker.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the worker never started")
+	}
+	register.SetUnavailable(true)
+	// The attempt keeps its lease across several renewal beats while the
+	// register is unreachable, then finishes normally.
+	time.Sleep(300 * time.Millisecond)
+	register.SetUnavailable(false)
+	close(worker.release)
+
+	select {
+	case finished := <-done:
+		if finished.err != nil {
+			t.Fatalf("a register outage abandoned a live attempt: %v", finished.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the attempt never completed")
+	}
+	if worker.cancelled.Load() != 0 {
+		t.Fatalf("worker cancellations = %d, want none: a register outage is not a superseded epoch", worker.cancelled.Load())
+	}
+}
+
+// renewalToolMaterial is the attested tool material the dispatch tests run
+// against.
+func renewalToolMaterial() execution.ToolMaterial {
+	return staticToolMaterial{definition: tools.Definition{
+		Kind:       "ToolDefinition",
+		ToolID:     "anvilkit.tool.context-echo",
+		Capability: "fake.execute",
+		InputSchema: tools.SchemaReference{
+			ComponentName: "anvilkit.tool.context-echo.arguments",
+			Digest:        "sha256:" + strings.Repeat("a", 64),
+		},
+	}}
+}
+
+func renewalUsage(t *testing.T) *usage.Pipeline {
+	t.Helper()
+	pipeline, err := usage.New(usage.NewMemoryStore(), execution.NewControlledUsageSink())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pipeline
+}

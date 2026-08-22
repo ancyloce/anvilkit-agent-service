@@ -3,8 +3,13 @@ package execution_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"sync"
 	"testing"
 
+	"github.com/ancyloce/anvilkit-agent-service/internal/budget"
+	"github.com/ancyloce/anvilkit-agent-service/internal/execution"
+	"github.com/ancyloce/anvilkit-agent-service/internal/modelgateway"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
 )
@@ -137,4 +142,178 @@ func billedOperations(t *testing.T, h *harness) int {
 		t.Fatal(err)
 	}
 	return billed
+}
+
+// lostCompletionRecorder is the durable invocation recorder failing at the one
+// boundary that costs money: the provider call has been made and billed, and
+// the write that records it does not land. The gateway returns that failure
+// exactly as it is — the recorder's error is not a provider problem and is
+// never reinterpreted as one — so the turn fails with an error nothing above
+// it can classify.
+type lostCompletionRecorder struct {
+	inner    modelgateway.Recorder
+	lock     sync.Mutex
+	failures int
+	fail     bool
+}
+
+func (r *lostCompletionRecorder) BeforeDisclosure(ctx context.Context, record modelgateway.InvocationRecord) error {
+	return r.inner.BeforeDisclosure(ctx, record)
+}
+
+func (r *lostCompletionRecorder) BeforeAttempt(ctx context.Context, record modelgateway.InvocationRecord) error {
+	return r.inner.BeforeAttempt(ctx, record)
+}
+
+func (r *lostCompletionRecorder) Complete(ctx context.Context, record modelgateway.InvocationRecord) error {
+	r.lock.Lock()
+	failing := r.fail
+	if failing {
+		r.failures++
+	}
+	r.lock.Unlock()
+	if failing {
+		return errors.New("the durable invocation record could not be written")
+	}
+	return r.inner.Complete(ctx, record)
+}
+
+func (r *lostCompletionRecorder) stopFailing() {
+	r.lock.Lock()
+	r.fail = false
+	r.lock.Unlock()
+}
+
+// TestAFailedTurnStillAccountsTheAttemptsItWasBilledFor is the regression for
+// an accounting hole in the failed-turn path. A provider call that is made and
+// billed, and whose durable invocation record then fails to write, fails the
+// turn with an error nothing above it can classify. That path used to return
+// an empty outcome — the usage the call had already reported was discarded
+// with it — and the executor returned before observing anything against the
+// reservation at all. The run's spend was understated by exactly what the
+// failure had cost, and the same allowance could be spent again.
+//
+// The completion standard for all-attempt accounting names failed attempts
+// explicitly. This proves the failure path counts them, and counts them once.
+func TestAFailedTurnStillAccountsTheAttemptsItWasBilledFor(t *testing.T) {
+	ctx := context.Background()
+	recorder := &lostCompletionRecorder{inner: &execution.MemoryModelRecorder{}, fail: true}
+	h := newHarness(t, [][]byte{finalPlan(), finalPlan()}, func(options *harnessOptions) {
+		options.modelRecorder = recorder
+	})
+	input := h.seedRun("artifact-validation")
+	prepare(t, h, input)
+
+	if _, err := h.ops.ExecuteTurn(ctx, opID(input, "turn-0000"), workflow.TurnInput{Run: input, Turn: 0, Phase: workflow.PhasePlan}); err == nil {
+		t.Fatal("the turn reported success although its invocation record was lost")
+	}
+	// The provider really was called and really did bill.
+	if billed := billedOperations(t, h); billed < 1 {
+		t.Fatalf("billed provider operations = %d, want the failed attempt billed", billed)
+	}
+	if recorder.failures < 1 {
+		t.Fatal("the invocation record never reached the boundary that failed")
+	}
+
+	reservationID := budget.ReservationID("budget:" + testRunID + ":g1")
+	reservation, err := h.budgetLedger.Reservation(ctx, testBudgetScope, reservationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reservation.ObservedMicros <= 0 {
+		t.Fatalf("observed usage after a failed turn = %d, want the billed attempt counted", reservation.ObservedMicros)
+	}
+	spent := reservation.ObservedMicros
+
+	// Counted once. The engine re-executes the same durable step; the provider
+	// replays the recorded operation for free, so the repeated observation
+	// carries the same cost under the same identity and does not accumulate.
+	recorder.stopFailing()
+	if _, err := h.ops.ExecuteTurn(ctx, opID(input, "turn-0000"), workflow.TurnInput{Run: input, Turn: 0, Phase: workflow.PhasePlan}); err != nil {
+		t.Fatalf("the re-executed durable step did not converge: %v", err)
+	}
+	repeated, err := h.budgetLedger.Reservation(ctx, testBudgetScope, reservationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated.ObservedMicros != spent {
+		t.Fatalf("observed usage after the step was re-executed = %d, want the attempt counted exactly once (%d)", repeated.ObservedMicros, spent)
+	}
+}
+
+// The complement: a turn that fails before it reaches a provider has no spend
+// to account, and must not fix its turn identity at zero. Recording a
+// zero-cost observation for such a turn would make the engine's retry of the
+// same durable step contradict it, so the retry could not record what it
+// actually spent.
+func TestATurnThatFailedBeforeSpendingRecordsNothingAndLetsTheRetryAccount(t *testing.T) {
+	ctx := context.Background()
+	recorder := &refusedDisclosureRecorder{inner: &execution.MemoryModelRecorder{}, fail: true}
+	h := newHarness(t, [][]byte{finalPlan()}, func(options *harnessOptions) {
+		options.modelRecorder = recorder
+	})
+	input := h.seedRun("artifact-validation")
+	prepare(t, h, input)
+
+	if _, err := h.ops.ExecuteTurn(ctx, opID(input, "turn-0000"), workflow.TurnInput{Run: input, Turn: 0, Phase: workflow.PhasePlan}); err == nil {
+		t.Fatal("the turn reported success although disclosure was refused")
+	}
+	if billed := billedOperations(t, h); billed != 0 {
+		t.Fatalf("billed provider operations = %d, want none before disclosure was recorded", billed)
+	}
+	reservationID := budget.ReservationID("budget:" + testRunID + ":g1")
+	reservation, err := h.budgetLedger.Reservation(ctx, testBudgetScope, reservationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reservation.ObservedMicros != 0 {
+		t.Fatalf("observed usage = %d, want nothing accounted for a turn that never spent", reservation.ObservedMicros)
+	}
+
+	// The retry of the same durable step spends for real, and its cost is
+	// recorded rather than refused as a contradiction of a zero already
+	// written under the same identity.
+	recorder.stopFailing()
+	if _, err := h.ops.ExecuteTurn(ctx, opID(input, "turn-0000"), workflow.TurnInput{Run: input, Turn: 0, Phase: workflow.PhasePlan}); err != nil {
+		t.Fatalf("the retried turn failed: %v", err)
+	}
+	settled, err := h.budgetLedger.Reservation(ctx, testBudgetScope, reservationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settled.ObservedMicros <= 0 {
+		t.Fatalf("observed usage after the retry = %d, want the retry's real cost recorded", settled.ObservedMicros)
+	}
+}
+
+// refusedDisclosureRecorder fails before any provider attempt is made, so the
+// turn fails without spending anything.
+type refusedDisclosureRecorder struct {
+	inner modelgateway.Recorder
+	lock  sync.Mutex
+	fail  bool
+}
+
+func (r *refusedDisclosureRecorder) BeforeDisclosure(ctx context.Context, record modelgateway.InvocationRecord) error {
+	r.lock.Lock()
+	failing := r.fail
+	r.lock.Unlock()
+	if failing {
+		return errors.New("the durable disclosure record could not be written")
+	}
+	return r.inner.BeforeDisclosure(ctx, record)
+}
+
+func (r *refusedDisclosureRecorder) BeforeAttempt(ctx context.Context, record modelgateway.InvocationRecord) error {
+	return r.inner.BeforeAttempt(ctx, record)
+}
+
+func (r *refusedDisclosureRecorder) Complete(ctx context.Context, record modelgateway.InvocationRecord) error {
+	return r.inner.Complete(ctx, record)
+}
+
+func (r *refusedDisclosureRecorder) stopFailing() {
+	r.lock.Lock()
+	r.fail = false
+	r.lock.Unlock()
 }

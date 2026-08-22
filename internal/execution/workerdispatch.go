@@ -183,7 +183,7 @@ func (e *ScheduledToolExecutor) Execute(ctx context.Context, invocation ToolInvo
 	// renewal fails, the lease has been reclaimed or superseded: the worker
 	// context is cancelled so the stale attempt stops promptly, and its late
 	// result is fenced out of acceptance below.
-	executed := e.executeUnderLease(ctx, scope, lease, invocation)
+	executed := e.executeUnderLease(ctx, scope, lease, invocation, epoch)
 	lease = executed.lease
 	output, workerErr := executed.output, executed.workerErr
 	finished := e.clock.Now()
@@ -279,7 +279,15 @@ type leasedExecution struct {
 // its TTL. A failed renewal cancels the worker context and marks the lease
 // lost; the worker's return is always awaited so no execution is abandoned
 // mid-flight.
-func (e *ScheduledToolExecutor) executeUnderLease(ctx context.Context, scope scheduler.Scope, lease scheduler.Lease, invocation ToolInvocation) leasedExecution {
+//
+// The non-rollback recovery epoch is re-read on the same beat as the renewal.
+// The epoch is read once before dispatch, so an attempt that started before a
+// restore would otherwise keep renewing its lease and keep running against a
+// fabric that has since been restored underneath it — its result refused only
+// at the very end, after the whole execution had been spent. An advanced epoch
+// is therefore treated exactly as a lost lease: the worker is cancelled at the
+// next beat and the attempt converges against the durable record.
+func (e *ScheduledToolExecutor) executeUnderLease(ctx context.Context, scope scheduler.Scope, lease scheduler.Lease, invocation ToolInvocation, dispatched recovery.Epoch) leasedExecution {
 	workerCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type outcome struct {
@@ -305,6 +313,16 @@ func (e *ScheduledToolExecutor) executeUnderLease(ctx context.Context, scope sch
 			return leasedExecution{lease: current, output: result.output, workerErr: result.err, leaseLost: lost}
 		case <-ticker.C:
 			if lost {
+				continue
+			}
+			// A register that cannot be read decides nothing: an unreachable
+			// register is not evidence that the epoch moved, and abandoning a
+			// live attempt on that basis would turn a register outage into
+			// lost work. The renewal below still fences the attempt on the
+			// lease itself.
+			if epoch, err := e.epochs.Current(ctx); err == nil && epoch != dispatched {
+				lost = true
+				cancel()
 				continue
 			}
 			renewed, err := e.scheduler.Heartbeat(ctx, scope, current, current.ExpiresAt)

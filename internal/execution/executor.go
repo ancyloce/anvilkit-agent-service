@@ -625,17 +625,12 @@ func (e *Executor) ExecuteTurn(ctx context.Context, op workflow.OpID, input work
 		})
 		return turnErr
 	})
-	if dispatchErr != nil {
-		var details problem.Details
-		if errors.As(dispatchErr, &details) && details.Code == string(problem.CodeBudgetDenied) {
-			return workflow.TurnResult{Carry: carry, Halt: &workflow.Halt{Problem: details, Behavior: workflow.TerminalFailed}}, nil
-		}
-		return workflow.TurnResult{}, dispatchErr
-	}
-	// Every turn's observed cost lands on the durable reservation,
-	// deduplicated by the durable operation identity so replay never counts
-	// usage twice.
-	if err := e.cfg.Budget.Observe(ctx, budget.Observation{
+	// The turn's observed cost lands on the durable reservation whatever the
+	// turn's outcome was. A failed turn is not a free turn: the provider
+	// attempts it made before failing were billed, and an attempt whose cost
+	// is dropped because its turn did not reach a decision is an attempt the
+	// run gets to make again for nothing.
+	observation := budget.Observation{
 		ID:                  op.Key() + ":budget",
 		Scope:               budgetScopeOf(snapshot),
 		ReservationID:       reservationID,
@@ -646,7 +641,31 @@ func (e *Executor) ExecuteTurn(ctx context.Context, op workflow.OpID, input work
 		ExecutionGeneration: snapshot.ExecutionGeneration,
 		MeterSequence:       uint64(input.Turn),
 		CostMicros:          outcome.Usage.CostMicros,
-	}); err != nil {
+	}
+	if dispatchErr != nil {
+		var details problem.Details
+		if errors.As(dispatchErr, &details) && details.Code == string(problem.CodeBudgetDenied) {
+			return workflow.TurnResult{Carry: carry, Halt: &workflow.Halt{Problem: details, Behavior: workflow.TerminalFailed}}, nil
+		}
+		// Only real spend is recorded. A turn that failed before any provider
+		// attempt has nothing to account, and writing a zero-cost observation
+		// under this turn's identity would fix that identity at zero — the
+		// engine's retry of the same durable step would then contradict it
+		// rather than record what the retry actually spent.
+		if outcome.Usage.CostMicros > 0 {
+			if err := e.cfg.Budget.Observe(ctx, observation); err != nil {
+				return workflow.TurnResult{}, fmt.Errorf("observe failed turn usage against the budget reservation: %w", err)
+			}
+		}
+		return workflow.TurnResult{}, dispatchErr
+	}
+	// The successful turn observes under the same identity: one turn is one
+	// cost against the reservation, whichever execution of the durable step
+	// established it. A replay of the operation is free at the provider, so
+	// the repeated observation carries the same cost and deduplicates; a
+	// repeat that carried a different cost would be an accounting
+	// contradiction, and the ledger refuses it rather than overwriting.
+	if err := e.cfg.Budget.Observe(ctx, observation); err != nil {
 		return workflow.TurnResult{}, fmt.Errorf("observe turn usage against the budget reservation: %w", err)
 	}
 	carry.Usage = carry.Usage.Add(outcome.Usage)
