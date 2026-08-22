@@ -768,7 +768,7 @@ func grantedEvidenceAuthority(role string, classes ...string) *authority.Static 
 		PermissionActive: true,
 		PolicyActive:     true,
 		ActorRole:        role,
-		Grants:           authority.Grants{DataClasses: classes},
+		ActorGrants:      authority.ActorAuthority{DataClasses: classes},
 	})
 }
 
@@ -1202,9 +1202,9 @@ func assertArtifactLifecycle(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	material := json.RawMessage(`{"synthetic":true}`)
 	activeAuthority := authority.NewStatic(authority.Current{Definition: material, ContractBOM: material, Policy: material, Budget: material, WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true,
 		ActorRole: authority.RoleArtifactCustodian,
-		Grants: authority.Grants{
-			AllowedCapabilities: []string{string(artifacts.LegalHoldCapability), string(artifacts.DeleteCapability)},
-			DataClasses:         []string{artifacts.CustodyDataClass},
+		ActorGrants: authority.ActorAuthority{
+			Capabilities: []string{string(artifacts.LegalHoldCapability), string(artifacts.DeleteCapability)},
+			DataClasses:  []string{artifacts.CustodyDataClass},
 		}})
 	service, err := artifacts.New(store, objects, reader, activeAuthority, persistenceProtectedAudit{}, time.Hour, 5*time.Minute)
 	if err != nil {
@@ -3005,10 +3005,21 @@ func assertScopedAuthorityStore(t *testing.T, ctx context.Context, pool *pgxpool
 	material := json.RawMessage(`{"synthetic":true}`)
 	bom := json.RawMessage(`{"repository":"anvilkit/contracts","bomDigest":"sha256:` + strings.Repeat("a", 64) + `"}`)
 	binding := authoritypg.Binding{WorkspaceID: "workspace-auth", ProjectID: "project-auth", Definition: material, ContractBOM: bom, Policy: material, Budget: material, Grants: authority.Grants{AllowedCapabilities: []string{"fake.execute"}, MaximumRisk: "low"}}
-	subjects := []authoritypg.Subject{{WorkspaceID: "workspace-auth", ActorID: "actor-auth", Role: "agent-actor"}}
+	// The custodian carries its capabilities and clearance on its own subject
+	// record; the ordinary actor carries none. They share every dispatch grant
+	// the binding holds, which is exactly what must not admit either of them
+	// to custody.
+	subjects := []authoritypg.Subject{
+		{WorkspaceID: "workspace-auth", ActorID: "actor-auth", Role: "agent-actor"},
+		{WorkspaceID: "workspace-auth", ActorID: "custodian-auth", Role: "agent-artifact-custodian", Grants: authority.ActorAuthority{
+			Capabilities: []string{"artifact-custody.legal-hold"},
+			DataClasses:  []string{"internal"},
+		}},
+	}
 	if err := store.Seed(ctx, binding, subjects); err != nil {
 		t.Fatal(err)
 	}
+	assertActorBoundAuthority(t, ctx, store)
 	scope := authority.Scope{WorkspaceID: "workspace-auth", ProjectID: "project-auth", ActorID: "actor-auth"}
 	current, err := store.Current(ctx, scope)
 	if err != nil || !current.Active() || !current.MaterialComplete() || len(current.Grants.AllowedCapabilities) != 1 {
@@ -3724,5 +3735,47 @@ func waitUntilBlockedOnALock(ctx context.Context, observer *pgx.Conn, answered <
 			return fmt.Errorf("no session ever waited on the recovery row")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Authority that answers for one person is read back bound to that person.
+// The register holds the custodian's capability and clearance on its own
+// subject row, the ordinary actor in the same scope holds neither, and an
+// actor the register stops admitting holds nothing at all.
+func assertActorBoundAuthority(t *testing.T, ctx context.Context, store *authoritypg.Store) {
+	t.Helper()
+	scoped := func(actor string) authority.Current {
+		t.Helper()
+		current, err := store.Current(ctx, authority.Scope{WorkspaceID: "workspace-auth", ProjectID: "project-auth", ActorID: actor})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return current
+	}
+	custodian := scoped("custodian-auth")
+	if !custodian.ActorGrants.HasCapability("artifact-custody.legal-hold") || !custodian.ActorGrants.Clears("internal") {
+		t.Fatalf("custodian actor grants=%+v, want its own capability and clearance", custodian.ActorGrants)
+	}
+	if custodian.ActorGrants.HasCapability("artifact-custody.delete") {
+		t.Fatalf("custodian holds a capability the register never bound to it: %+v", custodian.ActorGrants)
+	}
+	if custodian.ActorGrants.Clears("confidential") {
+		t.Fatalf("custodian clears above what the register granted: %+v", custodian.ActorGrants)
+	}
+	// The same scope, the same dispatch grants, a different person: nothing.
+	ordinary := scoped("actor-auth")
+	if len(ordinary.ActorGrants.Capabilities) != 0 || len(ordinary.ActorGrants.DataClasses) != 0 {
+		t.Fatalf("an ordinary actor in the scope holds %+v, want nothing bound to it", ordinary.ActorGrants)
+	}
+	if ordinary.Grants.MaximumRisk != custodian.Grants.MaximumRisk {
+		t.Fatalf("dispatch grants differ between actors in one scope: %q vs %q", ordinary.Grants.MaximumRisk, custodian.Grants.MaximumRisk)
+	}
+	// Withdrawing the custodian leaves nothing readable behind it.
+	if err := store.Revoke(ctx, authority.Revocation{WorkspaceID: "workspace-auth", ProjectID: "project-auth", RevocationID: "revocation-custodian-auth", Kind: authority.RevokeActor, Subject: "custodian-auth", Reason: "offboarded"}); err != nil {
+		t.Fatal(err)
+	}
+	withdrawn := scoped("custodian-auth")
+	if withdrawn.ActorActive || withdrawn.ActorRole != "" || len(withdrawn.ActorGrants.Capabilities) != 0 || len(withdrawn.ActorGrants.DataClasses) != 0 {
+		t.Fatalf("a withdrawn custodian still reads as %+v", withdrawn)
 	}
 }
