@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent/runner"
+	"github.com/ancyloce/anvilkit-agent-service/internal/artifacts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/budget"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler"
@@ -30,6 +32,8 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/recovery"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
 	"github.com/ancyloce/anvilkit-agent-service/internal/scheduler"
+	"github.com/ancyloce/anvilkit-agent-service/internal/security"
+	"github.com/ancyloce/anvilkit-agent-service/internal/securityaudit"
 	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
 	"github.com/ancyloce/anvilkit-agent-service/internal/usage"
 	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
@@ -316,6 +320,20 @@ type harness struct {
 	// settlement against the ledger.
 	budgetController *budget.Controller
 	budgetLedger     *budget.MemoryLedger
+	// memoryGuard and egressGuard are the production guards the pipeline is
+	// composed with. They are held so a test can drive the same instances the
+	// executor is using rather than a second set beside it.
+	memoryGuard *security.MemoryGuard
+	egressGuard *security.EgressGuard
+	// artifactService is the governed artifact metadata surface the executor
+	// answers metadata reads from.
+	artifactService *artifacts.Service
+	// protectedAudit is the tamper-evident chain the artifact lifecycle and
+	// every governed disclosure are recorded in; auditSink is the same chain's
+	// storage, held so a test can read what was recorded and take the chain
+	// away to prove nothing is disclosed without it.
+	protectedAudit *securityaudit.Service
+	auditSink      *securityaudit.MemorySink
 	// settlement is the deferred terminal-budget port the interrupt service
 	// settles cancellation and discard through.
 	settlement *deferredSettlement
@@ -359,6 +377,11 @@ type harnessOptions struct {
 	// evidence wraps the immutable evidence store, so a test can inject a
 	// crash between a durable decision and the audit record it must leave.
 	evidence func(execution.EvidenceRecorder) execution.EvidenceRecorder
+	// memoryAdmissionBytes, egressAllowedHosts, and egressResolver are the
+	// deployment policy the production guards are composed from.
+	memoryAdmissionBytes int
+	egressAllowedHosts   map[string]struct{}
+	egressResolver       security.Resolver
 	// modelAdapter wraps the controlled provider adapter, so a test can hold a
 	// real billable provider call open across a concurrent control-plane
 	// operation instead of simulating one.
@@ -380,7 +403,23 @@ type harnessOptions struct {
 }
 
 func defaultHarnessOptions() harnessOptions {
-	return harnessOptions{inputTTL: time.Minute, approvalTTL: time.Minute, maximumCalls: 100, allowedTools: []string{"anvilkit.tool.context-echo", "anvilkit.tool.contract-validate", "anvilkit.tool.artifact-scan"}, allowedCapabilities: []string{"fake.execute", "contract.validate", "artifact.scan"}, domainOutcome: execution.DomainConfirmed, providerAttempts: 1, budgetHeadroomMicros: 10_000_000_000, reconcileLimit: 3, domainRetryBase: time.Millisecond, domainRetryCap: 4 * time.Millisecond}
+	return harnessOptions{
+		inputTTL: time.Minute, approvalTTL: time.Minute, maximumCalls: 100,
+		allowedTools:        []string{"anvilkit.tool.context-echo", "anvilkit.tool.contract-validate", "anvilkit.tool.artifact-scan"},
+		allowedCapabilities: []string{"fake.execute", "contract.validate", "artifact.scan"},
+		domainOutcome:       execution.DomainConfirmed, providerAttempts: 1,
+		budgetHeadroomMicros: 10_000_000_000, reconcileLimit: 3,
+		domainRetryBase: time.Millisecond, domainRetryCap: 4 * time.Millisecond,
+		memoryAdmissionBytes: 64 * 1024,
+		// One host the policy permits and one it permits by name while the
+		// address it resolves to is the cloud metadata service. The second is
+		// there because an allowlist checked on names alone is not a policy.
+		egressAllowedHosts: map[string]struct{}{"api.allowed.test": {}, "metadata.allowed.test": {}},
+		egressResolver: staticEgressResolver{addresses: map[string][]net.IPAddr{
+			"api.allowed.test":      {{IP: net.ParseIP("93.184.216.34")}},
+			"metadata.allowed.test": {{IP: net.ParseIP("169.254.169.254")}},
+		}},
+	}
 }
 
 func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) *harness {
@@ -589,6 +628,31 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		t.Fatal(err)
 	}
 	h.budgetController = budgetController
+	// The guards are composed exactly as production composes them, from the
+	// same constructors and the same policy shape. The security corpus below
+	// drives the pipeline these are wired into rather than guard instances of
+	// its own, so what the corpus proves is what production does.
+	// The governed metadata surface is the real artifact service over
+	// in-memory stores, composed against the same current-authority source
+	// every other guarded boundary reads. A metadata read in a test therefore
+	// takes the same authorization path a metadata read in production takes.
+	h.protectedAudit, h.auditSink = corpusProtectedAudit(t)
+	h.artifactService, err = artifacts.New(artifacts.NewMemoryStore(), artifacts.NewMemoryObjects(), harnessArtifactReader{}, h.authoritySource, h.protectedAudit, time.Hour, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.memoryGuard, err = security.NewMemoryGuard(options.memoryAdmissionBytes, clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.egressGuard, err = security.NewEgressGuard(security.EgressPolicy{
+		AllowedHosts:    options.egressAllowedHosts,
+		MaximumBytes:    1 << 20,
+		MaximumDuration: time.Second,
+	}, options.egressResolver)
+	if err != nil {
+		t.Fatal(err)
+	}
 	executor, err := execution.New(execution.Config{
 		Registry:          registry,
 		Runner:            agentRunner,
@@ -608,6 +672,10 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		Deltas:            deltaBroker,
 		Decisions:         h.journal,
 		Budget:            budgetController,
+		Memory:            h.memoryGuard,
+		Egress:            h.egressGuard,
+		ArtifactMetadata:  h.artifactService,
+		DisclosureAudit:   h.protectedAudit,
 		Clock:             clock,
 		InputTTL:          options.inputTTL,
 		ApprovalTTL:       options.approvalTTL,
@@ -1229,3 +1297,27 @@ func TestReplayAfterCompletionReturnsRecordedOutcomeWithoutReexecution(t *testin
 		t.Fatalf("replay re-executed operations: %d -> %d", before, after)
 	}
 }
+
+// staticEgressResolver answers the addresses the harness's policy is written
+// against, so egress behaviour is deterministic and never depends on DNS.
+type staticEgressResolver struct{ addresses map[string][]net.IPAddr }
+
+func (r staticEgressResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	values, ok := r.addresses[host]
+	if !ok {
+		return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+	}
+	return values, nil
+}
+
+// harnessArtifactReader signs and revokes nothing: the harness exercises the
+// metadata surface, whose authorization never issues a read capability.
+type harnessArtifactReader struct{}
+
+func (harnessArtifactReader) SignRead(context.Context, artifacts.Record, artifacts.Grant, time.Duration) (string, error) {
+	return "harness-grant://unused", nil
+}
+func (harnessArtifactReader) Verify(context.Context, artifacts.Record, artifacts.Grant) error {
+	return nil
+}
+func (harnessArtifactReader) Revoke(context.Context, artifacts.Record) error { return nil }

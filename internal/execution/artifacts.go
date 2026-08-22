@@ -28,6 +28,13 @@ type ArtifactCandidate struct {
 	ExecutionGeneration uint64
 	BuildIdentity       string
 	Producer            string
+	// Kind is what the artifact is, and Validation is what the Contract
+	// Runtime proved about it. Both are known here and nowhere later: an
+	// artifact classified after the fact was classified by something other
+	// than what produced it, and validation recomputed later answers about
+	// whatever the content is then rather than what was checked.
+	Kind       artifacts.Kind
+	Validation artifacts.Validation
 }
 
 // ArtifactBucket is the single logical bucket the kernel stores run artifacts
@@ -65,6 +72,9 @@ func (p *ServiceArtifactPort) RecordCandidate(ctx context.Context, candidate Art
 	if candidate.WorkspaceID == "" || candidate.ProjectID == "" || candidate.RunID == "" || !validDigestString(candidate.Digest) || len(candidate.Bytes) == 0 || candidate.OperationKey == "" {
 		return fmt.Errorf("artifact port: a complete candidate identity is required")
 	}
+	if !artifacts.ValidKind(candidate.Kind) || !candidate.Validation.Valid() {
+		return fmt.Errorf("artifact port: a candidate must declare what it is and what was validated about it")
+	}
 	id := ArtifactRecordID(candidate.RunID, candidate.Digest)
 	now := p.clock.Now()
 	if now.IsZero() {
@@ -81,8 +91,10 @@ func (p *ServiceArtifactPort) RecordCandidate(ctx context.Context, candidate Art
 		ProjectID:     candidate.ProjectID,
 		RunID:         candidate.RunID,
 		ID:            id,
+		Kind:          candidate.Kind,
 		Bytes:         canonicalBytes,
 		ClaimedDigest: candidate.Digest,
+		Validation:    candidate.Validation,
 		Reference: artifacts.Reference{
 			Bucket:    ArtifactBucket,
 			ObjectKey: candidate.WorkspaceID + "/" + candidate.ProjectID + "/" + candidate.RunID + "/" + string(id) + ".json",

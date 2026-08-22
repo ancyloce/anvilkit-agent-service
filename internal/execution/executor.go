@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent/runner"
 	"github.com/ancyloce/anvilkit-agent-service/internal/applyauth"
+	"github.com/ancyloce/anvilkit-agent-service/internal/artifacts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/budget"
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
@@ -281,8 +283,27 @@ type Config struct {
 	Deltas           DeltaPublisher
 	Decisions        journal.Store
 	Budget           BudgetController
-	Clock            Clock
-	InputTTL         time.Duration
+	// Memory admits untrusted content into the run's carried memory, and
+	// Egress admits the outbound destinations a tool call names. Both are
+	// required: an execution pipeline composed without them would carry
+	// whatever a tool returned into the next prompt and dispatch a tool at
+	// whatever address the model proposed.
+	Memory MemoryAdmission
+	Egress DestinationGuard
+	// ArtifactMetadata serves the governed artifact metadata surface. It is
+	// the same artifact service the lifecycle uses; the port is named
+	// separately because reading metadata is a disclosure with its own
+	// authorization rather than a lifecycle operation.
+	ArtifactMetadata ArtifactMetadataReader
+	// DisclosureAudit is the tamper-evident record a governed metadata
+	// disclosure is decided inside. It is the same protected audit the
+	// artifact lifecycle writes its authorization changes to: who was told
+	// what about a tenant's artifacts belongs in the same account as who
+	// changed access to them, and an incident reads one chain rather than
+	// two.
+	DisclosureAudit DisclosureAudit
+	Clock           Clock
+	InputTTL        time.Duration
 	// BudgetTTL bounds how long a run's standing reservation stays
 	// dispatchable before requiring settlement or review.
 	BudgetTTL         time.Duration
@@ -315,6 +336,15 @@ func traceparentOf(input workflow.RunInput) string {
 func New(cfg Config) (*Executor, error) {
 	if cfg.Registry == nil || cfg.Runner == nil || cfg.Runs == nil || cfg.InterruptWriter == nil || cfg.InterruptReader == nil || cfg.InterruptExpirer == nil || cfg.Authority == nil || cfg.Tools == nil || cfg.ToolMaterial == nil || cfg.Artifacts == nil || cfg.Domain == nil || cfg.Submissions == nil || cfg.CommitAuthority == nil || cfg.Contracts == nil || cfg.Evidence == nil || cfg.Deltas == nil || cfg.Decisions == nil || cfg.Budget == nil || cfg.Clock == nil {
 		return nil, fmt.Errorf("agent execution: every pipeline dependency is required")
+	}
+	if cfg.Memory == nil || cfg.Egress == nil {
+		return nil, fmt.Errorf("agent execution: the memory admission and egress guards are required")
+	}
+	if cfg.ArtifactMetadata == nil {
+		return nil, fmt.Errorf("agent execution: the governed artifact metadata surface is required")
+	}
+	if cfg.DisclosureAudit == nil {
+		return nil, fmt.Errorf("agent execution: the protected audit a governed disclosure is recorded in is required")
 	}
 	if cfg.BudgetTTL <= 0 {
 		return nil, fmt.Errorf("agent execution: the budget reservation lifetime must be positive")
@@ -748,6 +778,28 @@ func (e *Executor) ExecuteAction(ctx context.Context, op workflow.OpID, input wo
 			}
 			return workflow.ActionResult{}, err
 		}
+		// The tool is allowed; where it is being pointed is a separate
+		// question. Every outbound destination the proposal names is resolved
+		// against the deployment's egress policy before anything is
+		// dispatched, so a model that proposes an allowed tool aimed at the
+		// cloud metadata service, an internal address, or any host outside the
+		// policy is stopped here rather than after the request has been made.
+		//
+		// A denied destination is a durable, typed refusal on the same terms a
+		// denied tool is: the run continues, the denial is recorded, and the
+		// next turn observes it.
+		for _, destination := range proposedDestinations(proposal.Arguments) {
+			if _, err := e.cfg.Egress.Resolve(ctx, destination); err != nil {
+				if err := e.recordEvidence(ctx, op, input.Run, snapshot, "tool.egress-denied", "audit", map[string]string{"toolId": proposal.ToolID, "destinationDigest": destinationDigest(destination)}); err != nil {
+					return workflow.ActionResult{}, err
+				}
+				// The refused address is never carried into the notes: those
+				// become the next prompt, and naming the destination there
+				// hands the model exactly what the guard refused to reach.
+				carry.Notes = boundNotes(append(carry.Notes, "tool denied (EGRESS_DENIED): "+proposal.ToolID))
+				return workflow.ActionResult{Carry: carry}, nil
+			}
+		}
 		// The guard returned the signed execution envelope of the tool it
 		// allowed. The dispatch happens inside it: the signed timeout bounds
 		// how long the tool may run, and the signed retry policy bounds how
@@ -774,7 +826,17 @@ func (e *Executor) ExecuteAction(ctx context.Context, op workflow.OpID, input wo
 		if err := e.recordEvidence(ctx, op, input.Run, snapshot, "tool.execution-completed", "operational", map[string]string{"toolId": proposal.ToolID, "outputDigest": outputDigest}); err != nil {
 			return workflow.ActionResult{}, err
 		}
-		carry.Notes = boundNotes(append(carry.Notes, "tool "+proposal.ToolID+" output: "+truncate(string(result.Output), 2048)))
+		// What the tool returned is untrusted content, and the note it becomes
+		// is compiled into the next prompt. It is admitted to the run's memory
+		// or it is not carried at all: this is the boundary indirect injection
+		// and memory poisoning have to cross, and it used to be no boundary.
+		note, admitted := admitToolOutput(e.cfg.Memory, memoryScope{WorkspaceID: snapshot.WorkspaceID, ProjectID: snapshot.Target.ProjectID, RunID: string(snapshot.RunID)}, proposal.ToolID, result.Output, e.cfg.Clock.Now())
+		if !admitted {
+			if err := e.recordEvidence(ctx, op, input.Run, snapshot, "tool.memory-admission-denied", "audit", map[string]string{"toolId": proposal.ToolID, "outputDigest": outputDigest}); err != nil {
+				return workflow.ActionResult{}, err
+			}
+		}
+		carry.Notes = boundNotes(append(carry.Notes, note))
 		return workflow.ActionResult{Carry: carry}, nil
 	default:
 		details := problem.Internal("")
@@ -1174,9 +1236,15 @@ func (e *Executor) FinalizeCandidate(ctx context.Context, op workflow.OpID, inpu
 	// digest-attested object, never loose candidate bytes. Replays converge on
 	// the same record.
 	if err := e.cfg.Artifacts.RecordCandidate(ctx, ArtifactCandidate{
-		WorkspaceID:         snapshot.WorkspaceID,
-		ProjectID:           snapshot.Target.ProjectID,
-		RunID:               string(id),
+		WorkspaceID: snapshot.WorkspaceID,
+		ProjectID:   snapshot.Target.ProjectID,
+		RunID:       string(id),
+		// The run's final candidate is the work result the pipeline produced,
+		// and what the Contract Runtime just proved about it is recorded with
+		// it rather than derived again later from content that may by then
+		// have been superseded.
+		Kind:                artifacts.WorkerResult,
+		Validation:          validationRecord(evidence),
 		Digest:              artifactDigest,
 		Bytes:               candidate,
 		SchemaComponent:     definition.OutputSchema.ComponentName,
@@ -2335,6 +2403,29 @@ func (e *Executor) dispatch(ctx context.Context, envelope tools.DispatchEnvelope
 		}
 	}
 	return ToolResult{}, last
+}
+
+// validationRecord renders what the Contract Runtime proved about a candidate
+// as the artifact's recorded validation. Each check names the material it was
+// made against, so a reader can go back to that exact schema, contract BOM, or
+// guardrail policy rather than being told only that something passed.
+func validationRecord(evidence contractclient.Evidence) artifacts.Validation {
+	result := "passed"
+	if !evidence.Valid {
+		result = "failed"
+	}
+	checks := make([]artifacts.Check, 0, 3)
+	for name, material := range map[string]string{
+		"schema":           evidence.SchemaDigest,
+		"contract-bom":     evidence.BOMDigest,
+		"guardrail-policy": evidence.PolicyDigest,
+	} {
+		if validDigestString(material) {
+			checks = append(checks, artifacts.Check{Name: name, Result: result, EvidenceDigest: material})
+		}
+	}
+	sort.Slice(checks, func(left, right int) bool { return checks[left].Name < checks[right].Name })
+	return artifacts.Validation{ValidatedAt: evidence.ValidatedAt.UTC(), Checks: checks}
 }
 
 // verifyMaterial proves that the Tool, model, Guardrail, memory, and policy
