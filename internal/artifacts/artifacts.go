@@ -346,9 +346,7 @@ func classificationRank(class string) int {
 // ETag renders the strong resource revision this record stands at. A custodian
 // pins it on the decision they make, so the decision names the exact revision
 // they observed.
-func (r Record) ETag() string {
-	return fmt.Sprintf("%q", string(r.ID)+":v"+strconv.FormatUint(r.Version, 10))
-}
+func (r Record) ETag() string { return fmt.Sprintf("\"%s:v%d\"", r.ID, r.Version) }
 
 // ParseETag reads the artifact revision a caller pinned. A missing
 // precondition and a stale one are different answers: the caller who sent

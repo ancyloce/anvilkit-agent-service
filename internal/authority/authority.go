@@ -37,6 +37,22 @@ type Grants struct {
 	ApprovalDecisionVersion uint64
 }
 
+// HasCapability reports whether the actor currently holds the named
+// capability. Boundaries that authorize a specific operation ask for the
+// capability that operation needs rather than reading the whole set, so a
+// grant of one capability can never be mistaken for a grant of another.
+func (g Grants) HasCapability(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, granted := range g.AllowedCapabilities {
+		if granted == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (g Grants) clone() Grants {
 	return Grants{
 		AllowedTools:            append([]string(nil), g.AllowedTools...),
@@ -98,6 +114,14 @@ func (c Current) MaterialComplete() bool {
 // owner, so it is a distinct role from the actor that runs an agent and the
 // reviewer that approves one.
 const RoleOperator = "agent-operator"
+
+// RoleArtifactCustodian is the role a subject must hold in the scope's subject
+// register to change an artifact's custody: to place or lift the legal hold
+// that decides whether it may be destroyed, and to destroy it. Producing an
+// artifact and deciding that it may cease to exist are different authorities,
+// so they are different roles: an actor that runs agents and creates artifacts
+// all day holds no power over whether any of them survives.
+const RoleArtifactCustodian = "agent-artifact-custodian"
 
 // HasRole reports whether the observation's admitted actor role is exactly the
 // named one. A revoked actor has no role for this purpose: an inactive

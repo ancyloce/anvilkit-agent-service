@@ -7,9 +7,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"sync"
-	"time"
 )
 
 type AttackCase struct {
@@ -63,75 +63,64 @@ func LoadCorpus(path string) (Corpus, error) {
 	return corpus, nil
 }
 
-type staticResolver struct{ addresses map[string][]net.IPAddr }
-
-func (r staticResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
-	values, ok := r.addresses[host]
-	if !ok {
-		return nil, fmt.Errorf("not found")
-	}
-	return values, nil
+// Guard is the production decision one adversarial category must be refused
+// by. Refuses reports whether the real guard rejected the case; a guard that
+// cannot reach a decision returns an error, which is a corpus failure rather
+// than a refusal — an evaluation that did not happen is never evidence that
+// an attack was blocked.
+type Guard interface {
+	Refuses(ctx context.Context, attack AttackCase) (bool, error)
 }
 
-// RunCorpus is deliberately closed: every supported adversarial category must map to
-// a deterministic guard, and unknown categories fail the corpus run.
-func RunCorpus(ctx context.Context, corpus Corpus) ([]Finding, error) {
-	return RunCorpusWithRecorder(ctx, corpus, &MemoryFindingRecorder{})
+// GuardFunc adapts a function to Guard.
+type GuardFunc func(ctx context.Context, attack AttackCase) (bool, error)
+
+func (f GuardFunc) Refuses(ctx context.Context, attack AttackCase) (bool, error) {
+	return f(ctx, attack)
 }
 
-func RunCorpusWithRecorder(ctx context.Context, corpus Corpus, recorder FindingRecorder) ([]Finding, error) {
+// Guards binds every adversarial category to the production guard that owns
+// it. The binding is the whole point of the corpus: an adversarial case
+// evaluated by the corpus's own reasoning proves only that the corpus agrees
+// with itself, which is what this file used to do — every category resolved to
+// a comparison written beside the case it judged, so a case could be "blocked"
+// while the production path it named would have admitted it. A category with
+// no bound guard fails the run rather than passing unevaluated.
+type Guards map[string]Guard
+
+// RunCorpus evaluates every case against the production guard bound to its
+// category and records one finding per case.
+func RunCorpus(ctx context.Context, corpus Corpus, guards Guards) ([]Finding, error) {
+	return RunCorpusWithRecorder(ctx, corpus, guards, &MemoryFindingRecorder{})
+}
+
+// RunCorpusWithRecorder is RunCorpus against an explicit finding recorder. A
+// finding that cannot be recorded fails the run: an unrecorded refusal is not
+// evidence of one.
+func RunCorpusWithRecorder(ctx context.Context, corpus Corpus, guards Guards, recorder FindingRecorder) ([]Finding, error) {
 	if recorder == nil {
 		return nil, fmt.Errorf("security finding recorder required")
 	}
-	now := time.Unix(700, 0).UTC()
-	memory, _ := NewMemoryGuard(1024, func() time.Time { return now })
-	resolver := staticResolver{addresses: map[string][]net.IPAddr{
-		"api.allowed.test":      {{IP: net.ParseIP("8.8.8.8")}},
-		"metadata.allowed.test": {{IP: net.ParseIP("169.254.169.254")}},
-	}}
-	egress, _ := NewEgressGuard(EgressPolicy{AllowedHosts: map[string]struct{}{"api.allowed.test": {}, "metadata.allowed.test": {}}, MaximumBytes: 1 << 20, MaximumDuration: time.Second}, resolver)
+	if len(guards) == 0 {
+		return nil, fmt.Errorf("the adversarial corpus requires the production guards it is evaluated against")
+	}
 	findings := make([]Finding, 0, len(corpus.Cases))
 	seen := map[string]bool{}
-	effects := map[string]string{"authorization-1": "original-operation"}
 	for _, attack := range corpus.Cases {
 		if attack.ID == "" || seen[attack.ID] {
 			return nil, fmt.Errorf("missing or duplicate attack ID %q", attack.ID)
 		}
 		seen[attack.ID] = true
-		blocked := false
-		switch attack.Category {
-		case "direct-injection", "indirect-injection", "encoded-injection", "markup-injection", "memory-poisoning", "exfiltration-proposal":
-			blocked = memory.Admit(MemoryCandidate{WorkspaceID: "workspace", ProjectID: "project", SourceID: attack.ID, Classification: "untrusted", Content: []byte(attack.Input), ExpiresAt: now.Add(time.Minute)}) != nil
-		case "ssrf-egress":
-			_, err := egress.Resolve(ctx, attack.Input)
-			blocked = err != nil
-		case "cross-tenant", "unauthorized-disclosure":
-			blocked = attack.Input != "workspace-a"
-		case "forbidden-tool":
-			_, allowed := map[string]struct{}{"artifact.create": {}}[attack.Input]
-			blocked = !allowed
-		case "approval-bypass":
-			blocked = attack.Input != "current-approved-decision"
-		case "duplicate-effect":
-			prior, exists := effects["authorization-1"]
-			blocked = exists && prior != attack.Input
-		case "forged-observation":
-			blocked = !strings.HasPrefix(attack.Input, "signed:")
-		case "schema-violation":
-			blocked = !json.Valid([]byte(attack.Input))
-		case "recursive-tool":
-			blocked = strings.Contains(attack.Input, "itself")
-		case "stale-result":
-			blocked = attack.Input != "recovery-epoch:current"
-		case "restored-deletion":
-			blocked = strings.Contains(attack.Input, "tombstone")
-		case "revoked-authority":
-			blocked = strings.Contains(attack.Input, "revoked") || strings.Contains(attack.Input, "old artifact grant")
-		default:
-			return nil, fmt.Errorf("unmapped adversarial category %q", attack.Category)
+		guard, bound := guards[attack.Category]
+		if !bound || guard == nil {
+			return nil, fmt.Errorf("adversarial category %q is bound to no production guard", attack.Category)
+		}
+		refused, err := guard.Refuses(ctx, attack)
+		if err != nil {
+			return findings, fmt.Errorf("evaluate adversarial case %s against its production guard: %w", attack.ID, err)
 		}
 		outcome := "blocked"
-		if !blocked {
+		if !refused {
 			outcome = "accepted"
 		}
 		finding := Finding{ID: attack.ID, Category: attack.Category, Outcome: outcome}
@@ -142,6 +131,31 @@ func RunCorpusWithRecorder(ctx context.Context, corpus Corpus, recorder FindingR
 		findings = append(findings, finding)
 	}
 	return findings, nil
+}
+
+// Categories returns every category the corpus contains, so a caller can prove
+// its bindings cover the corpus before running it.
+func (c Corpus) Categories() []string {
+	seen := map[string]bool{}
+	values := make([]string, 0, len(c.Cases))
+	for _, attack := range c.Cases {
+		if !seen[attack.Category] {
+			seen[attack.Category] = true
+			values = append(values, attack.Category)
+		}
+	}
+	sort.Strings(values)
+	return values
+}
+
+type staticResolver struct{ addresses map[string][]net.IPAddr }
+
+func (r staticResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	values, ok := r.addresses[host]
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+	return values, nil
 }
 
 type MemoryFindingRecorder struct {

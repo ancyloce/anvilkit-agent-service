@@ -81,7 +81,18 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 		return
 	}
 	parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
-	if len(parts) < 4 || parts[0] != "v1" || parts[1] != "workspaces" || parts[3] != "agent-runs" {
+	if len(parts) < 4 || parts[0] != "v1" || parts[1] != "workspaces" {
+		writeProblem(response, problem.New(problem.CodeResourceNotFound, request.Header.Get("traceparent")), request.Header.Get("traceparent"))
+		return
+	}
+	// Artifacts are addressed under the workspace directly rather than under a
+	// run: an artifact outlives the run that produced it, and its custody is
+	// decided long after that run is gone.
+	if parts[3] == "artifacts" {
+		h.serveArtifactCustody(response, request, claims, parts)
+		return
+	}
+	if parts[3] != "agent-runs" {
 		writeProblem(response, problem.New(problem.CodeResourceNotFound, request.Header.Get("traceparent")), request.Header.Get("traceparent"))
 		return
 	}
@@ -207,6 +218,36 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 	writeProblem(response, problem.New(problem.CodeResourceNotFound, request.Header.Get("traceparent")), request.Header.Get("traceparent"))
 }
 
+// serveArtifactCustody carries one artifact custody decision inward. Transport
+// reads the addressed workspace and artifact out of the path and the
+// concurrency, idempotency, digest, and trace headers off the request, and
+// decides nothing else: who is deciding, in which project, and whether they
+// may is the application's to resolve from verified authority.
+//
+// The decision changes what may be done to the artifact rather than producing
+// a representation of it, so a successful decision answers 204 with the
+// revision it produced in ETag.
+func (h *Handler) serveArtifactCustody(response http.ResponseWriter, request *http.Request, claims auth.Claims, parts []string) {
+	if len(parts) != 6 || parts[5] != "custody" || request.Method != http.MethodPost {
+		writeProblem(response, problem.New(problem.CodeResourceNotFound, request.Header.Get("traceparent")), request.Header.Get("traceparent"))
+		return
+	}
+	raw, err := readBoundedCommand(response, request)
+	if err != nil {
+		writeProblem(response, err, request.Header.Get("traceparent"))
+		return
+	}
+	result, err := h.core.DecideArtifactCustody(request.Context(), claims, runapp.CustodyInput{
+		WorkspaceID: parts[2],
+		ArtifactID:  parts[4],
+		ETag:        request.Header.Get("If-Match"),
+		Key:         request.Header.Get("Idempotency-Key"),
+		Digest:      request.Header.Get("X-AnvilKit-Request-Digest"),
+		Traceparent: request.Header.Get("traceparent"),
+	}, raw)
+	h.writeRepresentationStatus(response, result, err, request, http.StatusNoContent)
+}
+
 // readBoundedCommand reads one bounded command body and admits it as strict
 // canonical JSON without interpreting it.
 func readBoundedCommand(response http.ResponseWriter, request *http.Request) ([]byte, error) {
@@ -257,7 +298,11 @@ func (h *Handler) writeRepresentationStatus(response http.ResponseWriter, result
 		writeProblem(response, err, request.Header.Get("traceparent"))
 		return
 	}
-	response.Header().Set("Content-Type", "application/json")
+	// A representation-less outcome carries no media type: the response says
+	// what revision the resource now stands at, not what it looks like.
+	if len(result.Body) > 0 {
+		response.Header().Set("Content-Type", "application/json")
+	}
 	if result.ETag != "" {
 		response.Header().Set("ETag", result.ETag)
 	}

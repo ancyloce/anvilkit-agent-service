@@ -32,6 +32,13 @@ const (
 	// can decide an escalated effect, and nothing that can decide one can do
 	// the rest.
 	OpResolveEscalation Operation = "resolve-escalation"
+	// OpDecideArtifactCustody is the custody of one immutable artifact: the
+	// legal hold that decides whether it may be destroyed, and its
+	// destruction. Producing artifacts and deciding that one ceases to exist
+	// are different authorities, so this is its own operation under its own
+	// scope: nothing that can run an agent, review its work, or recover a run
+	// can destroy what it produced by virtue of that.
+	OpDecideArtifactCustody Operation = "decide-artifact-custody"
 	// OpReadEvidence is the disclosure of internal AgentEvidence. Evidence is
 	// the high-fidelity internal execution record, so reading it is its own
 	// operation under its own scope: nothing that can read, run, review, or
@@ -45,6 +52,12 @@ const (
 	ScopeIssuer   = "agent:issue"
 	// ScopeOperator is held only by the operator recovery surface.
 	ScopeOperator = "agent:operate"
+	// ScopeCustodian is held only by a subject authorized to change an
+	// artifact's custody. It admits the request; whether the scope's subject
+	// register still admits the actor as a custodian, still grants the
+	// capability for the exact operation, and still clears them for artifact
+	// content comes from current authority, never from a claim.
+	ScopeCustodian = "agent:custody"
 	// ScopeEvidence is held only by a subject authorized to read internal
 	// AgentEvidence. It admits the read; the clearance that bounds which
 	// classifications the read discloses comes from current authority, never
@@ -64,6 +77,8 @@ func RequiredScopes(operation Operation) []string {
 		return []string{ScopeIssuer}
 	case OpResolveEscalation:
 		return []string{ScopeOperator}
+	case OpDecideArtifactCustody:
+		return []string{ScopeCustodian}
 	case OpReadEvidence:
 		return []string{ScopeEvidence}
 	default:
@@ -164,7 +179,7 @@ func (v *Validator) Revalidate(ctx context.Context, claims Claims, operation Ope
 	return err
 }
 func ProtectedOperations() []Operation {
-	values := []Operation{OpCreateRun, OpListRuns, OpGetRun, OpStreamEvents, OpCancel, OpRetry, OpDiscard, OpRespondInput, OpDecideApproval, OpIssueAuthorization, OpAccessArtifact, OpResolveEscalation, OpReadEvidence}
+	values := []Operation{OpCreateRun, OpListRuns, OpGetRun, OpStreamEvents, OpCancel, OpRetry, OpDiscard, OpRespondInput, OpDecideApproval, OpIssueAuthorization, OpAccessArtifact, OpResolveEscalation, OpDecideArtifactCustody, OpReadEvidence}
 	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
 	return values
 }

@@ -17,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
+	"github.com/ancyloce/anvilkit-agent-service/internal/events/spool"
 )
 
 // Fields is a governed telemetry projection. Sensitive bodies and URLs have no
@@ -84,6 +85,13 @@ type Telemetry struct {
 	duration        metric.Int64Histogram
 	eventVisibility metric.Float64Histogram
 	cursorFailures  metric.Int64Counter
+	spoolHeld       metric.Int64Gauge
+	spoolUnreadable metric.Int64Gauge
+	spoolOldest     metric.Float64Gauge
+	spoolPlaced     metric.Int64Counter
+	spoolDeferred   metric.Int64Counter
+	spoolSetAside   metric.Int64Counter
+	spoolUnsettable metric.Int64Counter
 }
 
 func New(serviceName string, exporter sdktrace.SpanExporter, redactor *Redactor) (*Telemetry, error) {
@@ -121,7 +129,35 @@ func newTelemetry(serviceName string, exporter sdktrace.SpanExporter, redactor *
 	if err != nil {
 		return nil, fmt.Errorf("create stream cursor record failure counter: %w", err)
 	}
-	return &Telemetry{provider: provider, metricProvider: metricProvider, tracer: provider.Tracer("anvilkit-agent-service"), propagator: propagation.TraceContext{}, redactor: redactor, workCounter: workCounter, duration: duration, eventVisibility: eventVisibility, cursorFailures: cursorFailures}, nil
+	spoolHeld, err := meter.Int64Gauge("agent_event_stream_cursor_spool_held_records")
+	if err != nil {
+		return nil, fmt.Errorf("create stream cursor spool backlog gauge: %w", err)
+	}
+	spoolUnreadable, err := meter.Int64Gauge("agent_event_stream_cursor_spool_unreadable_records")
+	if err != nil {
+		return nil, fmt.Errorf("create stream cursor spool unreadable-record gauge: %w", err)
+	}
+	spoolOldest, err := meter.Float64Gauge("agent_event_stream_cursor_spool_oldest_record_seconds", metric.WithUnit("s"))
+	if err != nil {
+		return nil, fmt.Errorf("create stream cursor spool oldest-record gauge: %w", err)
+	}
+	spoolPlaced, err := meter.Int64Counter("agent_event_stream_cursor_spool_placed_total")
+	if err != nil {
+		return nil, fmt.Errorf("create stream cursor spool placement counter: %w", err)
+	}
+	spoolDeferred, err := meter.Int64Counter("agent_event_stream_cursor_spool_deferred_total")
+	if err != nil {
+		return nil, fmt.Errorf("create stream cursor spool deferral counter: %w", err)
+	}
+	spoolUnsettable, err := meter.Int64Counter("agent_event_stream_cursor_spool_set_aside_failed_total")
+	if err != nil {
+		return nil, err
+	}
+	spoolSetAside, err := meter.Int64Counter("agent_event_stream_cursor_spool_unreadable_total")
+	if err != nil {
+		return nil, fmt.Errorf("create stream cursor spool unreadable-record counter: %w", err)
+	}
+	return &Telemetry{provider: provider, metricProvider: metricProvider, spoolHeld: spoolHeld, spoolUnreadable: spoolUnreadable, spoolOldest: spoolOldest, spoolPlaced: spoolPlaced, spoolDeferred: spoolDeferred, spoolSetAside: spoolSetAside, spoolUnsettable: spoolUnsettable, tracer: provider.Tracer("anvilkit-agent-service"), propagator: propagation.TraceContext{}, redactor: redactor, workCounter: workCounter, duration: duration, eventVisibility: eventVisibility, cursorFailures: cursorFailures}, nil
 }
 
 func (t *Telemetry) Start(ctx context.Context, name string, fields Fields) (context.Context, trace.Span) {
@@ -199,3 +235,37 @@ func isProhibited(name string) bool {
 	}
 	return false
 }
+
+// ObserveCursorSpool reports what one spool sweep found. The three gauges are
+// the operational state — how many disconnect records the instance is holding,
+// how long the oldest of them has waited, and how many it has had to set aside
+// as unreadable — and the counters are the flow through it. Backlog size alone
+// does not distinguish a store that is briefly unreachable from one that is
+// not coming back; the oldest record's age does, and an unreadable record never
+// resolves with time at all. A record the sweep could not even set aside is
+// counted apart from the ones it did, because the two ask for different
+// remedies.
+func (t *Telemetry) ObserveCursorSpool(ctx context.Context, stats spool.Stats, report spool.DrainReport) {
+	t.spoolHeld.Record(ctx, int64(stats.Held))
+	t.spoolUnreadable.Record(ctx, int64(stats.Quarantined))
+	t.spoolOldest.Record(ctx, stats.OldestAge.Seconds())
+	if report.Placed > 0 {
+		t.spoolPlaced.Add(ctx, int64(report.Placed))
+	}
+	if report.Deferred > 0 {
+		t.spoolDeferred.Add(ctx, int64(report.Deferred))
+	}
+	if report.Quarantined > 0 {
+		t.spoolSetAside.Add(ctx, int64(report.Quarantined))
+	}
+	// A record the sweep meant to set aside and could not is a different fault
+	// from one it set aside, and it is the one that needs someone. It is
+	// counted separately rather than folded into the set-aside total, because
+	// a volume that has stopped accepting renames would otherwise be reported
+	// as a volume quietly doing its job.
+	if report.QuarantineFailed > 0 {
+		t.spoolUnsettable.Add(ctx, int64(report.QuarantineFailed))
+	}
+}
+
+var _ spool.SpoolObserver = (*Telemetry)(nil)

@@ -14,19 +14,79 @@ func (failingFindingRecorder) RecordFinding(context.Context, Finding) error {
 	return context.Canceled
 }
 
-func TestVersionedAdversarialCorpusZeroTolerance(t *testing.T) {
+// The corpus refuses to run without the production decisions it names. Its
+// own package can prove the runner's contract — coverage, recording, and the
+// closed category set — but never the outcomes: those come from the packages
+// that own the guards, which is the whole point of the binding.
+func TestTheCorpusRunnerRefusesToDecideAnythingItself(t *testing.T) {
 	corpus, err := LoadCorpus("testdata/adversarial-corpus.v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	findings, err := RunCorpus(context.Background(), corpus)
+	if _, err := RunCorpus(context.Background(), corpus, nil); err == nil {
+		t.Fatal("the corpus ran with no bound guards")
+	}
+	if _, err := RunCorpus(context.Background(), corpus, Guards{}); err == nil {
+		t.Fatal("the corpus ran with an empty guard binding")
+	}
+	// One category left unbound fails the whole run rather than being skipped.
+	partial := Guards{}
+	for _, category := range corpus.Categories()[1:] {
+		partial[category] = alwaysRefuses{}
+	}
+	if _, err := RunCorpus(context.Background(), corpus, partial); err == nil {
+		t.Fatal("an unbound category did not fail the corpus")
+	}
+	// A category bound to nil is unbound, not silently permissive.
+	nilBound := Guards{}
+	for _, category := range corpus.Categories() {
+		nilBound[category] = alwaysRefuses{}
+	}
+	nilBound[corpus.Categories()[0]] = nil
+	if _, err := RunCorpus(context.Background(), corpus, nilBound); err == nil {
+		t.Fatal("a category bound to no guard at all did not fail the corpus")
+	}
+}
+
+// Every case is answered by the guard bound to its category, and an admitted
+// case is reported as admitted rather than absorbed.
+func TestEveryCaseIsAnsweredByItsBoundGuard(t *testing.T) {
+	corpus, err := LoadCorpus("testdata/adversarial-corpus.v1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guards := Guards{}
+	for _, category := range corpus.Categories() {
+		guards[category] = alwaysRefuses{}
+	}
+	findings, err := RunCorpus(context.Background(), corpus, guards)
 	if err != nil || len(findings) != len(corpus.Cases) {
-		t.Fatalf("findings=%#v err=%v", findings, err)
+		t.Fatalf("findings=%d err=%v, want one finding per case", len(findings), err)
 	}
 	for index, finding := range findings {
 		if finding.Outcome != "blocked" || !finding.Recorded || !corpus.Cases[index].PreviouslySuccessful {
 			t.Fatalf("case=%#v finding=%#v", corpus.Cases[index], finding)
 		}
+	}
+	// A guard that admits its case produces an admitted finding: the runner
+	// never converts a decision it did not obtain into a refusal.
+	admitting := Guards{}
+	for category := range guards {
+		admitting[category] = alwaysRefuses{}
+	}
+	admitting[corpus.Cases[0].Category] = GuardFunc(func(context.Context, AttackCase) (bool, error) { return false, nil })
+	admitted, err := RunCorpus(context.Background(), corpus, admitting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, finding := range admitted {
+		if finding.Outcome == "accepted" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("an admitted case was not reported as admitted")
 	}
 }
 
@@ -35,16 +95,26 @@ func TestCorpusCannotClaimUnrecordedFinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	findings, err := RunCorpusWithRecorder(context.Background(), corpus, failingFindingRecorder{})
+	guards := Guards{}
+	for _, category := range corpus.Categories() {
+		guards[category] = alwaysRefuses{}
+	}
+	findings, err := RunCorpusWithRecorder(context.Background(), corpus, guards, failingFindingRecorder{})
 	if err == nil || len(findings) != 0 {
 		t.Fatalf("unrecorded findings=%#v err=%v", findings, err)
 	}
 	invalid := corpus
 	invalid.Cases = append(invalid.Cases, invalid.Cases[0])
-	if _, err := RunCorpus(context.Background(), invalid); err == nil {
+	if _, err := RunCorpus(context.Background(), invalid, guards); err == nil {
 		t.Fatal("duplicate regression identity accepted")
 	}
 }
+
+// alwaysRefuses stands in for a bound guard where the property under test is
+// the runner's own contract rather than any production outcome.
+type alwaysRefuses struct{}
+
+func (alwaysRefuses) Refuses(context.Context, AttackCase) (bool, error) { return true, nil }
 
 func TestEgressProtocolDNSIPRedirectAndBounds(t *testing.T) {
 	resolver := staticResolver{addresses: map[string][]net.IPAddr{
