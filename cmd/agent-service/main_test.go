@@ -42,7 +42,7 @@ func TestApplicationClockFailsClosedAfterAuthoritativeTimeOutage(t *testing.T) {
 		response.WriteHeader(http.StatusNoContent)
 	}))
 	cfg := config.Config{Environment: config.EnvironmentProduction, AuthoritativeTime: config.Endpoint{URL: server.URL}, MaximumClockSkew: time.Minute}
-	clock, err := applicationClock(cfg)
+	clock, _, err := applicationClock(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

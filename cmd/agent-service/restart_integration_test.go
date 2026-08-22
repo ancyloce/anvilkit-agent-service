@@ -131,12 +131,18 @@ func composeForRestart(ctx context.Context, t *testing.T, mutate func(*execution
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock, err := applicationClock(cfg)
+	clock, auditClock, err := applicationClock(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	receipts := journal.NewMemoryStore()
+	protectedAudit, closeAudit, err := buildProtectedAudit(ctx, cfg, auditClock, receipts, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAudit()
 	handle := &runtimeHandle{}
-	core, executionConfig, err := buildRuntimeDependencies(ctx, cfg, pools, guard, journal.NewMemoryStore(), clock, handle)
+	core, executionConfig, err := buildRuntimeDependencies(ctx, cfg, pools, guard, receipts, clock, protectedAudit, handle)
 	if err != nil {
 		t.Fatal(err)
 	}

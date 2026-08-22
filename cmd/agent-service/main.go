@@ -66,6 +66,7 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/scheduler"
 	schedulerpg "github.com/ancyloce/anvilkit-agent-service/internal/scheduler/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/securityaudit"
+	securityauditpg "github.com/ancyloce/anvilkit-agent-service/internal/securityaudit/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/telemetry"
 	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
 	toolspg "github.com/ancyloce/anvilkit-agent-service/internal/tools/postgres"
@@ -163,7 +164,7 @@ func main() {
 		defer journalPool.Close()
 	}
 
-	clock, err := applicationClock(cfg)
+	clock, auditClock, err := applicationClock(cfg)
 	if err != nil {
 		logger.Error("application clock initialization failed", "error", err)
 		os.Exit(1)
@@ -177,8 +178,15 @@ func main() {
 		logger.Error("workflow runtime initialization failed", "error", "the durable agent runtime requires the control and authority databases")
 		os.Exit(1)
 	}
+	protectedAudit, closeProtectedAudit, err := buildProtectedAudit(ctx, cfg, auditClock, journalStore, logger)
+	if err != nil {
+		logger.Error("protected audit initialization failed", "error", err)
+		os.Exit(1)
+	}
+	defer closeProtectedAudit()
+
 	handle := &runtimeHandle{}
-	core, err := buildRuntimeCore(ctx, cfg, pools, guard, journalStore, clock, handle)
+	core, err := buildRuntimeCore(ctx, cfg, pools, guard, journalStore, clock, protectedAudit, handle)
 	if err != nil {
 		logger.Error("agent runtime pipeline initialization failed", "error", err)
 		os.Exit(1)
@@ -339,8 +347,8 @@ type runtimeCore struct {
 // buildRuntimeCore wires the real Agent execution pipeline. Every
 // implementation is explicitly selected; nothing falls back to a controlled
 // fake implicitly, and production configuration rejects controlled values.
-func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.Pools, guard *contractguard.Guard, receipts journal.Store, clock applicationTime, handle *runtimeHandle) (*runtimeCore, error) {
-	core, executionConfig, err := buildRuntimeDependencies(ctx, cfg, pools, guard, receipts, clock, handle)
+func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.Pools, guard *contractguard.Guard, receipts journal.Store, clock applicationTime, protectedAudit artifacts.ProtectedAudit, handle *runtimeHandle) (*runtimeCore, error) {
+	core, executionConfig, err := buildRuntimeDependencies(ctx, cfg, pools, guard, receipts, clock, protectedAudit, handle)
 	if err != nil {
 		return nil, err
 	}
@@ -403,7 +411,7 @@ var _ interrupts.TerminalBudget = (*executorHandle)(nil)
 // directly, and the restart-verification harness constructs it after wrapping
 // exact ports with crash injection — so what restart proofs exercise is the
 // production composition itself, never a parallel wiring.
-func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools persistence.Pools, guard *contractguard.Guard, receipts journal.Store, clock applicationTime, handle *runtimeHandle) (*runtimeCore, execution.Config, error) {
+func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools persistence.Pools, guard *contractguard.Guard, receipts journal.Store, clock applicationTime, protectedAudit artifacts.ProtectedAudit, handle *runtimeHandle) (*runtimeCore, execution.Config, error) {
 	idempotencyStore, err := idempotency.New(pools.Authority, idempotency.Config{Retention: 30 * 24 * time.Hour, MinimumLifetime: 30 * 24 * time.Hour})
 	if err != nil {
 		return nil, execution.Config{}, err
@@ -412,6 +420,9 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 	runStore := runpg.NewConfigured(pools.Authority, idempotencyStore, eventBounds, guard, nil)
 	toolExecutor, grants, err := selectToolImplementation(cfg)
 	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	if err := requireProductionEligible(cfg.Environment, "ANVILKIT_TOOL_IMPLEMENTATION", toolExecutor); err != nil {
 		return nil, execution.Config{}, err
 	}
 	// One current-authority source serves the whole runtime: run creation,
@@ -510,8 +521,14 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
+	if err := requireProductionEligible(cfg.Environment, "ANVILKIT_MODEL_IMPLEMENTATION", modelStack); err != nil {
+		return nil, execution.Config{}, err
+	}
 	contractsValidator, err := selectContractRuntime(cfg, pinnedValidator, registry, digestOfBytes(lockBytes), pools, clock, bomAuthority)
 	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	if err := requireProductionEligible(cfg.Environment, "ANVILKIT_CONTRACT_RUNTIME_IMPLEMENTATION", contractsValidator); err != nil {
 		return nil, execution.Config{}, err
 	}
 	// The apply-authorization signing material also verifies tokens at the
@@ -528,7 +545,10 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
-	artifactPort, artifactService, err := buildArtifactPort(cfg, pools, authoritySource, clock)
+	if err := requireProductionEligible(cfg.Environment, "ANVILKIT_DOMAIN_IMPLEMENTATION", domainPort); err != nil {
+		return nil, execution.Config{}, err
+	}
+	artifactPort, artifactService, err := buildArtifactPort(cfg, pools, authoritySource, protectedAudit, clock)
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
@@ -570,6 +590,12 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 	}
 	fencedTools, err := selectWorkerImplementation(ctx, cfg, pools, clock, authoritySource, toolMaterial, toolExecutor, digestOfBytes(lockBytes))
 	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	// The fenced dispatch path inherits the eligibility of the worker it
+	// dispatches to, so production machinery wrapped around a controlled
+	// worker is refused here as the controlled worker it still is.
+	if err := requireProductionEligible(cfg.Environment, "ANVILKIT_WORKER_IMPLEMENTATION", fencedTools); err != nil {
 		return nil, execution.Config{}, err
 	}
 	// The guard's decisions and the pinned running tool profile are durable
@@ -779,7 +805,7 @@ func selectDomainImplementation(cfg config.Config, pools persistence.Pools, keys
 // topology stores immutable bytes durably, enforces the lifecycle CAS, audits
 // every grant, and answers governed-effect eligibility from the finalized
 // state. There is no memory-only mode.
-func buildArtifactPort(cfg config.Config, pools persistence.Pools, authoritySource authority.Source, clock applicationTime) (execution.ArtifactPort, *artifacts.Service, error) {
+func buildArtifactPort(cfg config.Config, pools persistence.Pools, authoritySource authority.Source, protectedAudit artifacts.ProtectedAudit, clock applicationTime) (execution.ArtifactPort, *artifacts.Service, error) {
 	if pools.Artifacts == nil {
 		return nil, nil, fmt.Errorf("the artifact module requires the artifacts database for its durable metadata, objects, and grant audit")
 	}
@@ -798,7 +824,7 @@ func buildArtifactPort(cfg config.Config, pools persistence.Pools, authoritySour
 	if err != nil {
 		return nil, nil, err
 	}
-	service, err := artifacts.New(store, objects, reader, authoritySource, cfg.ArtifactPendingTTL, cfg.ArtifactGrantTTL)
+	service, err := artifacts.New(store, objects, reader, authoritySource, protectedAudit, cfg.ArtifactPendingTTL, cfg.ArtifactGrantTTL)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1177,7 +1203,12 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	if err != nil {
 		return nil, err
 	}
-	cursorReconciler, err := spool.NewReconciler(cursorSpool, cursors)
+	// Every sweep reports the backlog, the age of its oldest record, the
+	// remaining capacity, and anything it had to set aside as unreadable. A
+	// spool that is filling because the cursor store is unreachable and one
+	// that is filling because nothing is draining it look identical from a
+	// placement count alone; the reported age separates them.
+	cursorReconciler, err := spool.NewObservedReconciler(cursorSpool, cursors, observability)
 	if err != nil {
 		return nil, err
 	}
@@ -1186,18 +1217,26 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	})
 	application := runapp.New(validator, runService, reader, events.StreamConfig{Heartbeat: cfg.Limits.SSEHeartbeat, Revalidation: cfg.AuthRevalidation, ReplayLimit: 100, Bounds: core.eventBounds, Observer: observability, WriteTimeout: cfg.SSEWriteTimeout, Cursors: cursors, CursorSpool: cursorSpool, CursorFailures: observability, MaximumConnections: cfg.Limits.SSEConnections, Deltas: core.deltas}, core.authority, core.guard, core.registry)
 	application.WithInterrupts(core.interruptService)
-	// The operator recovery path is part of the production API: it is
-	// authenticated, scoped, role-gated against current authority, audited,
-	// and idempotent on its own, so no feature gate stands in front of it.
-	// Its receipts share the retention the rest of the write-idempotency
-	// record keeps; the claim lease is short because it only has to outlast a
-	// single in-flight recovery, and a claim held longer than that is one
-	// whose process died.
-	escalationReceipts, err := runapppg.NewReceipts(pools.Authority, 30*24*time.Hour, 2*time.Minute, clockOf{core.clock}.Now)
+	// The operator recovery and artifact custody paths are part of the
+	// production API: each is authenticated, scoped, role-gated against
+	// current authority, audited, and idempotent on its own, so no feature
+	// gate stands in front of either. Their receipts share the retention the
+	// rest of the write-idempotency record keeps; the claim lease is short
+	// because it only has to outlast a single in-flight command, and a claim
+	// held longer than that is one whose process died.
+	commandReceipts, err := runapppg.NewReceipts(pools.Authority, 30*24*time.Hour, 2*time.Minute, clockOf{core.clock}.Now)
 	if err != nil {
 		return nil, err
 	}
-	application.WithEscalations(core.executor, escalationReceipts)
+	application.WithEscalations(core.executor, commandReceipts)
+	// Artifact custody is composed over the same artifact service the
+	// execution pipeline produces artifacts through, so a custody decision is
+	// authorized by the same current-authority source and written to the same
+	// protected audit the rest of the lifecycle uses. There is no separate,
+	// looser custody path: an artifact service that could not be built — for
+	// want of its durable store, its grant-signing secret, or its protected
+	// audit — takes the whole composition down long before this line.
+	application.WithArtifactCustody(core.artifacts, commandReceipts, clockOf{core.clock}.Now)
 	policies := make(map[runs.State]interrupts.DwellPolicy)
 	for _, state := range []runs.State{runs.Created, runs.Preparing, runs.Planning, runs.AwaitingInput, runs.Executing, runs.Validating, runs.AwaitingReview, runs.AwaitingApproval, runs.Committing, runs.AwaitingDomainConfirmation, runs.Conflict, runs.Cancelling, runs.Failed} {
 		policies[state] = interrupts.DwellPolicy{Deadline: cfg.DwellDeadline, Owner: "agent-service-oncall"}
@@ -1212,6 +1251,15 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	// interrupts an in-flight provider call cannot be concluded at request
 	// time, and nothing else would ever come back to it, so the recovery sweep
 	// is part of the production composition rather than an operator chore.
+	// Retention and orphan reconciliation is what makes the artifact lifecycle
+	// revocable in fact rather than only in its state machine: without it an
+	// artifact past its retention stays readable and an orphaned record keeps
+	// its grants. Each sweep is audited exactly as an operator's revocation
+	// is, and one artifact's failure never stops the rest of the corpus.
+	go core.artifacts.Sweep(ctx, clockOf{core.clock}, 15*time.Minute, func(err error) {
+		slog.Error("artifact retention reconciliation failed", "error", err)
+	})
+
 	cancellationRecovery, err := interrupts.NewCancellationRecovery(core.interruptStore, core.cancellationReconciler, core.executorHandle)
 	if err != nil {
 		return nil, err
@@ -1226,13 +1274,26 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 
 type applicationTime interface{ Now() time.Time }
 
-func applicationClock(cfg config.Config) (applicationTime, error) {
+// applicationClock returns the clock the service runs on and, with it, the
+// authoritative clock the protected audit stamps its records from. They are
+// one decision: a security record timed by anything other than the approved
+// time authority is a record whose ordering cannot be relied upon, so the two
+// are never allowed to come from separate sources.
+func applicationClock(cfg config.Config) (applicationTime, *securityaudit.AuthoritativeClock, error) {
 	local := runapp.SystemClock{}
 	if cfg.AuthoritativeTime.URL == "" {
 		if cfg.Environment == config.EnvironmentProduction {
-			return nil, fmt.Errorf("authoritative time endpoint is required")
+			return nil, nil, fmt.Errorf("authoritative time endpoint is required")
 		}
-		return local, nil
+		// Development and test have no external time authority to consult, so
+		// the local clock stands in for one. It is a controlled substitution,
+		// not a fallback: production reaches this branch only by refusing to
+		// start, one line above.
+		controlled, err := securityaudit.NewAuthoritativeClock(localTimeSource{local}, local, cfg.MaximumClockSkew)
+		if err != nil {
+			return nil, nil, err
+		}
+		return local, controlled, nil
 	}
 	client := &http.Client{
 		Timeout: 2 * time.Second,
@@ -1242,13 +1303,13 @@ func applicationClock(cfg config.Config) (applicationTime, error) {
 	}
 	source, err := securityaudit.NewHTTPTimeSource(cfg.AuthoritativeTime.URL, client)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	authority, err := securityaudit.NewAuthoritativeClock(source, local, cfg.MaximumClockSkew)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return securityaudit.FailClosedClock{Authority: authority}, nil
+	return securityaudit.FailClosedClock{Authority: authority}, authority, nil
 }
 
 // runtimeSignals bridges the interrupts control surface onto the canonical
@@ -1322,10 +1383,17 @@ type authoritySeed struct {
 		ActorID string `json:"actorId"`
 		Role    string `json:"role"`
 	} `json:"subjects"`
-	Definition  json.RawMessage `json:"definition"`
-	ContractBOM json.RawMessage `json:"contractBomReference"`
-	Policy      json.RawMessage `json:"policy"`
-	Budget      json.RawMessage `json:"budget"`
+	// CustodyCapabilities are the artifact-custody capabilities this binding
+	// grants. They are named separately from the dispatch grants a tool
+	// implementation brings because they authorize a different thing: not what
+	// an agent may run, but whether an artifact it produced may be frozen or
+	// destroyed. A binding that names none grants none, so a deployment that
+	// has not decided who may destroy artifacts has nobody who can.
+	CustodyCapabilities []string        `json:"custodyCapabilities"`
+	Definition          json.RawMessage `json:"definition"`
+	ContractBOM         json.RawMessage `json:"contractBomReference"`
+	Policy              json.RawMessage `json:"policy"`
+	Budget              json.RawMessage `json:"budget"`
 }
 
 func loadAuthoritySeed(path string, guard *contractguard.Guard) (authoritySeed, error) {
@@ -1356,6 +1424,15 @@ func loadAuthoritySeed(path string, guard *contractguard.Guard) (authoritySeed, 
 	}
 	if len(payload.Definition) == 0 || len(payload.ContractBOM) == 0 || len(payload.Policy) == 0 || len(payload.Budget) == 0 {
 		return authoritySeed{}, fmt.Errorf("run authority is incomplete")
+	}
+	// Only the two governed custody capabilities may be granted here. A seed
+	// is configuration, and configuration that could name any capability
+	// string would be a way to write new authority into the register rather
+	// than to grant the authority the service defines.
+	for _, capability := range payload.CustodyCapabilities {
+		if capability != string(artifacts.LegalHoldCapability) && capability != string(artifacts.DeleteCapability) {
+			return authoritySeed{}, fmt.Errorf("run authority grants unknown custody capability %q", capability)
+		}
 	}
 	probe := runs.Snapshot{Kind: "AgentRun", RunID: "run.authority-validation", RootRunID: "run.authority-validation", WorkspaceID: "workspace.authority-validation", ActorID: "actor.authority-validation", Domain: "platform-agent", Operation: "artifact-validation", Target: runs.Target{Type: "page", ID: "page.authority-validation", WorkspaceID: "workspace.authority-validation", ProjectID: "project.authority-validation"}, Definition: payload.Definition, ContractBOM: payload.ContractBOM, Policy: payload.Policy, Budget: payload.Budget, Idempotency: runs.IdempotencyProjection{Scope: "workspace.authority-validation:create-run", Key: "authority-validation", CanonicalRequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Status: runs.Created, Version: 1, ExecutionGeneration: 1, CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0)}
 	probeBytes, err := json.Marshal(probe)
@@ -1388,6 +1465,11 @@ func seedDurableAuthority(ctx context.Context, path string, guard *contractguard
 	if err != nil {
 		return nil, err
 	}
+	// The custody capabilities the binding grants join the dispatch grants the
+	// selected tool implementation brings. They are appended rather than
+	// merged into that set at its source, so a tool implementation can never
+	// hand out custody of an artifact as a side effect of being selected.
+	grants.AllowedCapabilities = append(append([]string(nil), grants.AllowedCapabilities...), seed.CustodyCapabilities...)
 	subjects := make([]authoritypg.Subject, 0, len(seed.Subjects))
 	for _, subject := range seed.Subjects {
 		subjects = append(subjects, authoritypg.Subject{WorkspaceID: seed.Scope.WorkspaceID, ActorID: subject.ActorID, Role: subject.Role})
@@ -1404,4 +1486,117 @@ func seedDurableAuthority(ctx context.Context, path string, guard *contractguard
 		return nil, err
 	}
 	return store, nil
+}
+
+// localTimeSource serves the local clock as a time source. It is selected only
+// where no external time authority is configured, which production forbids.
+type localTimeSource struct{ clock applicationTime }
+
+func (s localTimeSource) Now(context.Context) (time.Time, error) { return s.clock.Now(), nil }
+
+// auditAlerts reports a protected audit chain that no longer verifies. A
+// tampered audit is not a condition the service can resolve on its own, so the
+// alert is the action: it names the chain and leaves the decision to an
+// operator.
+type auditAlerts struct{ logger *slog.Logger }
+
+func (a auditAlerts) Alert(_ context.Context, kind, detail string) error {
+	a.logger.Error("protected audit alert", "kind", kind, "detail", detail)
+	return nil
+}
+
+// buildProtectedAudit composes the tamper-evident record every
+// authorization-changing security decision is made through. The sink lives at
+// its own configured endpoint so the account of a decision does not depend on
+// the instance the decision was about, and the chain is verified at startup so
+// an audit that was rewritten while the service was down is discovered before
+// the service begins adding to it rather than after.
+func buildProtectedAudit(ctx context.Context, cfg config.Config, clock *securityaudit.AuthoritativeClock, receipts journal.Store, logger *slog.Logger) (*securityaudit.Service, func(), error) {
+	if clock == nil {
+		return nil, nil, fmt.Errorf("the protected audit requires the approved time authority")
+	}
+	alerts := auditAlerts{logger: logger}
+	if cfg.ProtectedAudit.URL == "" {
+		if cfg.Environment == config.EnvironmentProduction {
+			return nil, nil, fmt.Errorf("protected audit endpoint is required")
+		}
+		service, err := securityaudit.NewService(&securityaudit.MemorySink{}, clock, alerts, receipts)
+		return service, func() {}, err
+	}
+	// Schema management and runtime appending are separate privileges held on
+	// separate connections. The administrative connection establishes the
+	// table, its barriers, and the runtime role's grants, and is then closed:
+	// the pool the service actually runs on connects as the runtime role, so
+	// the process that appends to the audit holds no privilege to rewrite it.
+	if err := prepareProtectedAuditSchema(ctx, cfg.ProtectedAudit.URL); err != nil {
+		return nil, nil, err
+	}
+	pool, err := persistence.OpenPool(ctx, persistence.PoolConfig{URL: cfg.ProtectedAudit.URL, Role: securityauditpg.RuntimeRole, Maximum: protectedAuditPoolSize})
+	if err != nil {
+		return nil, nil, fmt.Errorf("open protected audit pool: %w", err)
+	}
+	sink, err := securityauditpg.New(pool)
+	if err != nil {
+		pool.Close()
+		return nil, nil, err
+	}
+	if err := sink.Check(ctx); err != nil {
+		pool.Close()
+		return nil, nil, err
+	}
+	service, err := securityaudit.NewService(sink, clock, alerts, receipts)
+	if err != nil {
+		pool.Close()
+		return nil, nil, err
+	}
+	if err := service.Verify(ctx); err != nil {
+		pool.Close()
+		return nil, nil, fmt.Errorf("the protected audit chain does not verify: %w", err)
+	}
+	return service, pool.Close, nil
+}
+
+// protectedAuditPoolSize bounds the audit connections. Every privileged
+// decision takes a few of them and nothing else uses the endpoint.
+const protectedAuditPoolSize = 4
+
+// prepareProtectedAuditSchema establishes the protected audit's schema, its
+// barriers, and the runtime role's grants on an administrative connection, and
+// proves the runtime role ended up with append and read and nothing more. The
+// connection is closed before the service opens the one it will run on, so no
+// schema-management privilege survives into the running process.
+func prepareProtectedAuditSchema(ctx context.Context, url string) error {
+	admin, err := pgxpool.New(ctx, url)
+	if err != nil {
+		return fmt.Errorf("open protected audit administration pool: %w", err)
+	}
+	defer admin.Close()
+	sink, err := securityauditpg.New(admin)
+	if err != nil {
+		return err
+	}
+	if err := sink.EnsureSchema(ctx); err != nil {
+		return err
+	}
+	return sink.VerifyRuntimePrivileges(ctx)
+}
+
+// requireProductionEligible refuses any implementation that has not declared
+// itself fit for production. The check is a positive assertion by the
+// implementation rather than a test on its name: an implementation that says
+// nothing is refused, so a port added later, or a controlled fake named
+// without the word the old substring check looked for, fails closed instead of
+// passing by accident.
+func requireProductionEligible(environment config.Environment, port string, candidate any) error {
+	if environment != config.EnvironmentProduction {
+		return nil
+	}
+	switch execution.EligibilityOf(candidate) {
+	case execution.ProductionEligible:
+		return nil
+	case execution.ControlledOnly:
+		return fmt.Errorf("%s is a controlled implementation and production never composes one", port)
+	default:
+		return fmt.Errorf("%s does not declare itself fit for production; production composes only implementations that do", port)
+	}
 }

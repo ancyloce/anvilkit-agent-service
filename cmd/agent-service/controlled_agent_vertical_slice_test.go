@@ -113,12 +113,21 @@ func TestControlledAgentVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock, err := applicationClock(cfg)
+	clock, auditClock, err := applicationClock(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	receipts := journal.NewMemoryStore()
+	// The slice composes the protected audit the same way production does, so
+	// the lifecycle decisions it makes are recorded through the real audit
+	// protocol rather than around it.
+	protectedAudit, closeAudit, err := buildProtectedAudit(ctx, cfg, auditClock, receipts, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeAudit()
 	handle := &runtimeHandle{}
-	core, err := buildRuntimeCore(ctx, cfg, pools, guard, journal.NewMemoryStore(), clock, handle)
+	core, err := buildRuntimeCore(ctx, cfg, pools, guard, receipts, clock, protectedAudit, handle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -599,7 +608,7 @@ func writeRunAuthority(t *testing.T, definitionID, definitionDigest string) stri
 	// The operator subject is admitted with the operator role: operator
 	// recovery of an escalated governed effect is role-gated against this
 	// register, not against anything the request presents.
-	raw := `{"scope":{"workspaceId":"workspace","projectId":"project"},"subjects":[{"actorId":"actor","role":"agent-actor"},{"actorId":"reviewer","role":"agent-reviewer"},{"actorId":"operator","role":"agent-operator"},{"actorId":"impostor","role":"agent-actor"}],"definition":{"definitionId":"` + definitionID + `","definitionDigest":"` + definitionDigest + `"},"contractBomReference":{"repository":"anvilkit/contracts","bomDigest":"sha256:` + strings.Repeat("a", 64) + `","ociManifestDigest":"sha256:` + strings.Repeat("b", 64) + `","evidenceManifestDigest":"sha256:` + strings.Repeat("c", 64) + `"},"policy":` + policy + `,"budget":{"kind":"AgentBudget","modelLimits":{"maximumCalls":10,"maximumConcurrentCalls":2},"tokenLimits":{"inputTokens":4096,"outputTokens":2048,"totalTokens":6144},"workerLimits":{"maximumAttempts":4,"maximumDurationMilliseconds":60000},"gpuLimits":{"maximumGpuMilliseconds":0},"currencyLimits":{"maximumCost":{"amount":"1000","currency":"USD"},"reservedCost":{"amount":"500","currency":"USD"}},"reservationId":"reservation.synthetic.001","exceedBehavior":"refuse","policy":` + policy + `}}`
+	raw := `{"scope":{"workspaceId":"workspace","projectId":"project"},"subjects":[{"actorId":"actor","role":"agent-actor"},{"actorId":"reviewer","role":"agent-reviewer"},{"actorId":"operator","role":"agent-operator"},{"actorId":"impostor","role":"agent-actor"},{"actorId":"custodian","role":"agent-artifact-custodian"},{"actorId":"pretender","role":"agent-actor"}],"custodyCapabilities":["artifact-custody.legal-hold","artifact-custody.delete"],"definition":{"definitionId":"` + definitionID + `","definitionDigest":"` + definitionDigest + `"},"contractBomReference":{"repository":"anvilkit/contracts","bomDigest":"sha256:` + strings.Repeat("a", 64) + `","ociManifestDigest":"sha256:` + strings.Repeat("b", 64) + `","evidenceManifestDigest":"sha256:` + strings.Repeat("c", 64) + `"},"policy":` + policy + `,"budget":{"kind":"AgentBudget","modelLimits":{"maximumCalls":10,"maximumConcurrentCalls":2},"tokenLimits":{"inputTokens":4096,"outputTokens":2048,"totalTokens":6144},"workerLimits":{"maximumAttempts":4,"maximumDurationMilliseconds":60000},"gpuLimits":{"maximumGpuMilliseconds":0},"currencyLimits":{"maximumCost":{"amount":"1000","currency":"USD"},"reservedCost":{"amount":"500","currency":"USD"}},"reservationId":"reservation.synthetic.001","exceedBehavior":"refuse","policy":` + policy + `}}`
 	path := filepath.Join(t.TempDir(), "authority.json")
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
@@ -618,6 +627,12 @@ type bearers struct {
 	// is not admitted under the operator role: it proves scope alone never
 	// authorizes operator recovery.
 	impostor string
+	// custodian is admitted under the artifact-custodian role and holds the
+	// custody scope. pretender holds the same scope and is admitted to the
+	// workspace under an ordinary role: it proves the scope a caller presents
+	// never substitutes for the role the register admits it under.
+	custodian string
+	pretender string
 }
 
 func mintVerifiedBearer(t *testing.T) (string, string, string) {
@@ -631,7 +646,7 @@ func mintBearers(t *testing.T) bearers {
 	if err != nil {
 		t.Fatal(err)
 	}
-	trust := fmt.Sprintf(`{"keys":{"slice-key":{"publicKey":%q,"status":"active"}},"subjects":{"actor":"active","reviewer":"active","operator":"active","impostor":"active"},"delegations":{}}`, base64.RawURLEncoding.EncodeToString(public))
+	trust := fmt.Sprintf(`{"keys":{"slice-key":{"publicKey":%q,"status":"active"}},"subjects":{"actor":"active","reviewer":"active","operator":"active","impostor":"active","custodian":"active","pretender":"active"},"delegations":{}}`, base64.RawURLEncoding.EncodeToString(public))
 	path := filepath.Join(t.TempDir(), "trust.json")
 	if err := os.WriteFile(path, []byte(trust), 0o600); err != nil {
 		t.Fatal(err)
@@ -670,5 +685,7 @@ func mintBearers(t *testing.T) bearers {
 		reviewer:  mint("reviewer", []string{"agent:read", "agent:review"}),
 		operator:  mint("operator", []string{"agent:read", "agent:operate"}),
 		impostor:  mint("impostor", []string{"agent:read", "agent:operate"}),
+		custodian: mint("custodian", []string{"agent:read", "agent:custody"}),
+		pretender: mint("pretender", []string{"agent:read", "agent:custody"}),
 	}
 }
