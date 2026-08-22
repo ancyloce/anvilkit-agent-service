@@ -193,9 +193,13 @@ func resolveEvidenceAuthority(ctx context.Context, authorizer EvidenceAccessAuth
 	if current.ActorRole == "" {
 		return EvidenceAuthority{}, evidenceAccessDenied("the scope admits no role for this actor")
 	}
-	clearance := grantedClearance(current.Grants.DataClasses)
+	// The clearance is the accessor's own, read from the scope's subject
+	// register. It is deliberately not the scope's dispatch grants: those are
+	// shared by every actor in the workspace, so a clearance held there would
+	// disclose evidence to all of them at once.
+	clearance := current.ActorGrants.Clearance()
 	if clearance == "" {
-		return EvidenceAuthority{}, evidenceAccessDenied("current authority grants no evidence data classification")
+		return EvidenceAuthority{}, evidenceAccessDenied("current authority grants this actor no evidence data classification")
 	}
 	value := EvidenceAuthority{
 		scope:     Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID},
@@ -232,18 +236,6 @@ func (a EvidenceAuthority) Revalidated(ctx context.Context) (EvidenceAuthority, 
 	return current, nil
 }
 
-// grantedClearance is the highest registered data classification the scope's
-// current authority grants the actor. An unregistered value grants nothing.
-func grantedClearance(granted []string) string {
-	clearance, rank := "", 0
-	for _, class := range granted {
-		if candidate := classificationRank(class); candidate > rank {
-			clearance, rank = class, candidate
-		}
-	}
-	return clearance
-}
-
 func evidenceAccessDenied(detail string) problem.Details {
 	value := problem.New(problem.CodeAuthorizationDenied, "")
 	value.Detail = detail
@@ -254,19 +246,12 @@ func evidenceAccessDenied(detail string) problem.Details {
 // first. A read discloses a record only when the accessor's clearance reaches
 // at least the record's classification; an unregistered value ranks zero and
 // therefore never passes.
+//
+// It defers to the one governed ranking the whole runtime reads rather than
+// keeping a second copy: a clearance ordered one way here and another way
+// where custody is decided would be two different rules wearing one name.
 func classificationRank(classification string) int {
-	switch classification {
-	case "public":
-		return 1
-	case "internal":
-		return 2
-	case "confidential":
-		return 3
-	case "restricted":
-		return 4
-	default:
-		return 0
-	}
+	return authority.ClassificationRank(classification)
 }
 
 func (a EvidenceAuthority) Validate() error {

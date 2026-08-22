@@ -84,7 +84,7 @@ func grantingAuthority(role string, classes ...string) *authority.Static {
 		PermissionActive: true,
 		PolicyActive:     true,
 		ActorRole:        role,
-		Grants:           authority.Grants{DataClasses: classes},
+		ActorGrants:      authority.ActorAuthority{DataClasses: classes},
 	})
 }
 
@@ -342,5 +342,23 @@ func TestRetentionCategoriesAndDerivedDeadlinesAreOneAuthority(t *testing.T) {
 	}
 	if _, err := DisclosureDeadline(recorded, "forever"); err == nil {
 		t.Fatal("an unregistered retention category yielded a deadline")
+	}
+}
+
+// A clearance the scope shares with everything running in it is not this
+// actor's clearance. Evidence is disclosed on what the subject register binds
+// to the accessor personally, so a workspace-wide data-class grant admits
+// nobody to internal evidence on its own.
+func TestScopeWideDataClassesConferNoEvidenceClearance(t *testing.T) {
+	material := json.RawMessage(`{"synthetic":true}`)
+	shared := authority.NewStatic(authority.Current{
+		Definition: material, ContractBOM: material, Policy: material, Budget: material,
+		WorkspaceActive: true, ActorActive: true, PermissionActive: true, PolicyActive: true,
+		ActorRole: "agent-operator",
+		// Every dispatch grant the scope has, and nothing bound to the actor.
+		Grants: authority.Grants{DataClasses: []string{"public", "internal", "confidential", "restricted"}},
+	})
+	if _, err := MintEvidenceAuthority(context.Background(), verifiedRequest{scope: operatorScope()}, shared, auth.Claims{}, "incident-debug"); err == nil {
+		t.Fatal("the scope's shared data classes were read as the accessor's own clearance")
 	}
 }
