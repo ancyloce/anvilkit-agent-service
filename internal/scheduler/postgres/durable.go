@@ -44,6 +44,56 @@ func NewDurableScheduler(database *pgxpool.Pool, register interface {
 	return &DurableScheduler{database: database, register: register, ids: ids, clock: clock, prerequisites: prerequisites, ttl: ttl}, nil
 }
 
+// dispatchAdmitted proves the fabric is currently dispatching and names the
+// epoch it is dispatching under. It is always read inside the caller's
+// transaction, and always under a share lock on the recovery row.
+//
+// A restore isolates the fabric: it advances the mirrored epoch and clears
+// dispatch, ingress, and result intake, then re-enables them stage by stage as
+// the restore proceeds. Result intake was already fenced on that state, but
+// dispatch was not — so a process that restarted inside the isolated window,
+// or one that never noticed the restore, went on creating and leasing tasks
+// into a fabric that had been deliberately stopped. Isolation that only holds
+// at the end of the pipeline is not isolation.
+//
+// Reading the admission and then mutating in a later statement is not
+// isolation either. Between the two, a restore can disable dispatch and
+// commit, and the mutation still lands — the admission was true when it was
+// read and false when it was used. The share lock closes that window: a
+// restore's rotation takes the same row FOR UPDATE, so the admission and the
+// isolation that withdraws it can no longer interleave. One waits for the
+// other to commit, and whichever loses reads the state the winner left.
+func (s *DurableScheduler) dispatchAdmitted(ctx context.Context, tx pgx.Tx) (uint64, error) {
+	if tx == nil {
+		return 0, fmt.Errorf("read recovery dispatch state: dispatch admission requires the mutating transaction")
+	}
+	var mirrored uint64
+	var enabled bool
+	err := tx.QueryRow(ctx, `SELECT mirrored_epoch,dispatch_enabled FROM agent_workflow.recovery_state WHERE register_name='platform-recovery-epoch' FOR SHARE`).Scan(&mirrored, &enabled)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// No recovery state at all is not a licence to dispatch.
+		return 0, problem.New(problem.CodeInfrastructureUnavailable, "")
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read recovery dispatch state: %w", err)
+	}
+	if !enabled {
+		return 0, problem.New(problem.CodeTaskDispatchDenied, "")
+	}
+	// The mirror and the authoritative register must agree. A register that
+	// has moved past the mirror means a restore is in progress that this
+	// instance has not adopted, and dispatching under the epoch it still
+	// believes in would put work into the superseded fabric.
+	current, err := s.register.Current(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read recovery epoch: %w", err)
+	}
+	if uint64(current) != mirrored {
+		return 0, problem.New(problem.CodeWorkerFenceStale, "")
+	}
+	return mirrored, nil
+}
+
 func (s *DurableScheduler) Create(ctx context.Context, input scheduler.Create) (scheduler.Task, error) {
 	if !input.Validate() {
 		return scheduler.Task{}, problem.New(problem.CodeTaskDispatchDenied, "")
@@ -51,9 +101,28 @@ func (s *DurableScheduler) Create(ctx context.Context, input scheduler.Create) (
 	if err := s.prerequisites.AuthorizeTask(ctx, input); err != nil {
 		return scheduler.Task{}, problem.New(problem.CodeTaskDispatchDenied, "")
 	}
-	tag, err := s.database.Exec(ctx, `INSERT INTO agent_workflow.agent_tasks(workspace_id,project_id,task_id,run_id,root_run_id,recovery_epoch,execution_generation,capability,reservation_id,input_digest,input_object_key,state,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'queued',$12) ON CONFLICT (workspace_id,project_id,task_id) DO NOTHING`,
+	// The admission and the row it admits are one transaction. Creation used
+	// to read the admission on its own connection and insert on another, so a
+	// restore that disabled dispatch in between still got the task it had
+	// just stopped the fabric to prevent.
+	tx, err := s.database.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return scheduler.Task{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	mirrored, err := s.dispatchAdmitted(ctx, tx)
+	if err != nil {
+		return scheduler.Task{}, err
+	}
+	if input.RecoveryEpoch != mirrored {
+		return scheduler.Task{}, problem.New(problem.CodeWorkerFenceStale, "")
+	}
+	tag, err := tx.Exec(ctx, `INSERT INTO agent_workflow.agent_tasks(workspace_id,project_id,task_id,run_id,root_run_id,recovery_epoch,execution_generation,capability,reservation_id,input_digest,input_object_key,state,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'queued',$12) ON CONFLICT (workspace_id,project_id,task_id) DO NOTHING`,
 		input.Scope.WorkspaceID, input.Scope.ProjectID, input.TaskID, input.RunID, input.RootRunID, input.RecoveryEpoch, input.ExecutionGeneration, input.Capability, input.ReservationID, input.InputDigest, input.InputObjectKey, input.CreatedAt)
 	if err != nil {
+		return scheduler.Task{}, fmt.Errorf("record fenced task: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return scheduler.Task{}, fmt.Errorf("record fenced task: %w", err)
 	}
 	task, err := s.Get(ctx, input.Scope, input.TaskID)
@@ -118,6 +187,10 @@ func (s *DurableScheduler) Lease(ctx context.Context, scope scheduler.Scope, id 
 		return scheduler.Lease{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	mirrored, err := s.dispatchAdmitted(ctx, tx)
+	if err != nil {
+		return scheduler.Lease{}, err
+	}
 	var state string
 	var leaseEpoch, attempts, version, recoveryEpoch, generation uint64
 	err = tx.QueryRow(ctx, `SELECT state,lease_epoch,physical_attempts,version,recovery_epoch,execution_generation FROM agent_workflow.agent_tasks WHERE workspace_id=$1 AND project_id=$2 AND task_id=$3 FOR UPDATE`, scope.WorkspaceID, scope.ProjectID, id).
@@ -143,6 +216,12 @@ func (s *DurableScheduler) Lease(ctx context.Context, scope scheduler.Scope, id 
 		}
 	} else if state != "queued" {
 		return scheduler.Lease{}, problem.New(problem.CodeInvalidTransition, "")
+	}
+	// A task recorded under a superseded epoch is never leased under the
+	// current one. A restore re-stamps the tasks it carries forward; anything
+	// still carrying the old epoch was not carried forward.
+	if recoveryEpoch != mirrored {
+		return scheduler.Lease{}, problem.New(problem.CodeWorkerFenceStale, "")
 	}
 	attempt, err := s.ids.PhysicalAttemptID()
 	if err != nil {
