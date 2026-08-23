@@ -137,22 +137,39 @@ func main() {
 			if name == "net/http" && !mediatesOutboundHTTP(relative) {
 				failures = append(failures, relative+": net/http outside the mediated egress boundary; outbound requests go through internal/security")
 			}
+			if name == "crypto/tls" && !verifiesPeersDirectly(relative) {
+				failures = append(failures, relative+": crypto/tls outside the mediated egress boundary; outbound requests go through internal/security")
+			}
 		}
-		// The same rule one level down: a package that cannot import net/http
+		// The same rule one level down: a file that cannot import net/http
 		// must not reach the network through a raw dialer either.
+		//
+		// Both spellings are caught. net.Dial and its siblings are calls
+		// through the package, and a Dialer is a value: (&net.Dialer{...}).
+		// DialContext is a dial that the call check alone never saw, because
+		// what it selects from is a composite literal rather than the package
+		// name.
 		if !dialsDirectly(relative) {
 			ast.Inspect(parsed, func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				selector, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					return true
-				}
-				identifier, ok := selector.X.(*ast.Ident)
-				if ok && identifier.Name == "net" && strings.HasPrefix(selector.Sel.Name, "Dial") {
-					failures = append(failures, relative+": direct network dial outside the mediated egress boundary")
+				switch typed := node.(type) {
+				case *ast.CallExpr:
+					selector, ok := typed.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return true
+					}
+					identifier, ok := selector.X.(*ast.Ident)
+					if ok && (identifier.Name == "net" || identifier.Name == "tls") && strings.HasPrefix(selector.Sel.Name, "Dial") {
+						failures = append(failures, relative+": direct network dial outside the mediated egress boundary")
+					}
+				case *ast.CompositeLit:
+					selector, ok := typed.Type.(*ast.SelectorExpr)
+					if !ok {
+						return true
+					}
+					identifier, ok := selector.X.(*ast.Ident)
+					if ok && (identifier.Name == "net" || identifier.Name == "tls") && strings.HasSuffix(selector.Sel.Name, "Dialer") {
+						failures = append(failures, relative+": direct network dialer outside the mediated egress boundary")
+					}
 				}
 				return true
 			})
@@ -223,47 +240,57 @@ const deliveryIdentifierPattern = `(^|[^A-Za-z0-9])` + deliveryLabelAlternation 
 // carry no hump, so they are names, not labels.
 const deliveryCamelPattern = `([a-z0-9])` + deliveryLabelCapitalAlternation + `([^a-z0-9]|$)`
 
-// outboundHTTPBoundary is every package permitted to speak HTTP directly: the
+// outboundHTTPBoundary is every file permitted to speak HTTP directly: the
 // inbound server and its streaming surface, the readiness probes, the clients
 // for the named internal authorities this service is configured with, the
 // telemetry exporter, the composition root that builds them, and the egress
-// guard itself — which is the one that carries an agent's traffic.
+// transport itself — which is the one that carries an agent's traffic.
 //
-// A tool adapter is deliberately absent from this list. That is what makes the
-// guard a boundary rather than a convention: an adapter cannot make its own
-// request, so the mediated exchange is the only exchange there is.
-func outboundHTTPBoundary() []string {
-	return []string{
-		"cmd/agent-service/",
-		"internal/api/",
-		"internal/events/",
-		"internal/lifecycle/",
-		"internal/runapp/",
-		"internal/security/",
-		"internal/securityaudit/",
-		"internal/telemetry/",
+// It is exact files rather than package prefixes, and the difference is the
+// whole point. A prefix admits every file that will ever be added under it:
+// "internal/security/" permitted the egress guard and, with it, anything
+// anyone later put beside the egress guard, and "cmd/agent-service/" permitted
+// any new file in the composition root. The boundary is meant to be a decision
+// somebody makes, and a decision that a new file inherits by where it was
+// saved is not one. Adding a file here is now a line in this list.
+//
+// A tool adapter is deliberately absent. That is what makes the guard a
+// boundary rather than a convention: an adapter cannot make its own request,
+// so the mediated exchange is the only exchange there is.
+func outboundHTTPBoundary() map[string]bool {
+	return map[string]bool{
+		"cmd/agent-service/main.go":            true,
+		"internal/api/api.go":                  true,
+		"internal/events/sse.go":               true,
+		"internal/lifecycle/checks.go":         true,
+		"internal/lifecycle/lifecycle.go":      true,
+		"internal/runapp/app.go":               true,
+		"internal/runapp/receipts.go":          true,
+		"internal/security/egresstransport.go": true,
+		"internal/securityaudit/time_http.go":  true,
+		"internal/telemetry/telemetry.go":      true,
 	}
 }
 
 func mediatesOutboundHTTP(relative string) bool {
-	for _, prefix := range outboundHTTPBoundary() {
-		if strings.HasPrefix(relative, prefix) {
-			return true
-		}
-	}
-	return false
+	return outboundHTTPBoundary()[relative]
 }
 
-// dialsDirectly names the packages permitted to open a socket themselves: the
-// egress guard, which pins its own connections, and the composition root and
-// inbound server, which listen rather than reach out.
+// dialsDirectly names the exact files permitted to open a socket themselves.
+// There is one: the egress transport, which pins every connection to the
+// addresses the guard resolved. Nothing else in the service reaches the
+// network at all — a raw dialer beside the guard is the same bypass an HTTP
+// client beside it would be, and the two used to be admitted by the same three
+// package prefixes.
 func dialsDirectly(relative string) bool {
-	for _, prefix := range []string{"cmd/agent-service/", "internal/api/", "internal/security/"} {
-		if strings.HasPrefix(relative, prefix) {
-			return true
-		}
-	}
-	return false
+	return relative == "internal/security/egresstransport.go"
+}
+
+// verifiesPeersDirectly names the exact files permitted to configure TLS. A
+// TLS client is a way to reach the network that does not go through net/http
+// at all, so it is bounded in the same place and to the same file.
+func verifiesPeersDirectly(relative string) bool {
+	return relative == "internal/security/egresstransport.go"
 }
 
 // canonicalScopeNames are the exact names ADR-018 established for the

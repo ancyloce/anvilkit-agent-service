@@ -236,3 +236,79 @@ func TestProhibitedTestIdentifierFailsTheBoundaryCommand(t *testing.T) {
 		t.Fatalf("a test was held to a production boundary rule: %v\n%s", err, output)
 	}
 }
+
+// A network-capable tool adapter cannot be compiled. Every way of reaching an
+// address is refused outside the exact files that mediate egress: an HTTP
+// client, a TLS client, a package-level dial, and a dialer value.
+//
+// The dialer value is the case the checker used to miss entirely. A call
+// through the net package selects from an identifier and was caught; a
+// (&net.Dialer{}).DialContext selects from a composite literal and was not, so
+// the one spelling anybody writing a real client would use went straight
+// through.
+//
+// The permitted file is exercised in the same run, because a boundary that
+// refuses the file it is meant to admit is not a boundary either.
+func TestReachingTheNetworkOutsideTheMediatedFilesFailsTheBoundaryCommand(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "boundarycheck")
+	build := exec.Command("go", "build", "-o", binary, ".")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build the boundary command: %v\n%s", err, output)
+	}
+	run := func(t *testing.T, relative, body string) (string, error) {
+		t.Helper()
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, filepath.Dir(relative)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, relative), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command(binary, "-root", root).CombinedOutput()
+		return string(output), err
+	}
+	for name, reach := range map[string]struct{ body, complaint string }{
+		"an HTTP client": {
+			body:      "package tool\n\nimport \"net/http\"\n\nfunc Read(address string) (*http.Response, error) { return http.Get(address) }\n",
+			complaint: "net/http outside the mediated egress boundary",
+		},
+		"a TLS client": {
+			body:      "package tool\n\nimport \"crypto/tls\"\n\nfunc Verify() *tls.Config { return &tls.Config{MinVersion: tls.VersionTLS12} }\n",
+			complaint: "crypto/tls outside the mediated egress boundary",
+		},
+		"a package-level dial": {
+			body:      "package tool\n\nimport \"net\"\n\nfunc Reach(address string) (net.Conn, error) { return net.Dial(\"tcp\", address) }\n",
+			complaint: "direct network dial outside the mediated egress boundary",
+		},
+		"a dialer value": {
+			body:      "package tool\n\nimport (\n\t\"context\"\n\t\"net\"\n)\n\nfunc Reach(ctx context.Context, address string) (net.Conn, error) {\n\treturn (&net.Dialer{}).DialContext(ctx, \"tcp\", address)\n}\n",
+			complaint: "direct network dialer outside the mediated egress boundary",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			output, err := run(t, "internal/tools/adapter.go", reach.body)
+			if err == nil {
+				t.Fatalf("a tool adapter reaching the network with %s compiled:\n%s", name, output)
+			}
+			if !strings.Contains(output, reach.complaint) || !strings.Contains(output, "internal/tools/adapter.go") {
+				t.Fatalf("the failure did not name the boundary %s crossed:\n%s", name, output)
+			}
+			// The same code in the one file that mediates egress is admitted,
+			// so what is being enforced is where the connection is made rather
+			// than that nothing connects at all.
+			if output, err := run(t, "internal/security/egresstransport.go", reach.body); err != nil {
+				t.Fatalf("the mediating file was refused %s: %v\n%s", name, err, output)
+			}
+		})
+	}
+	// The boundary is exact files, not the directories they sit in. A new file
+	// beside the one that mediates egress inherits nothing.
+	beside := "package security\n\nimport \"net/http\"\n\nfunc Read(address string) (*http.Response, error) { return http.Get(address) }\n"
+	output, err := run(t, "internal/security/shortcut.go", beside)
+	if err == nil {
+		t.Fatalf("a new file beside the egress transport inherited its permission:\n%s", output)
+	}
+	if !strings.Contains(output, "internal/security/shortcut.go") {
+		t.Fatalf("the failure did not name the file that inherited the boundary:\n%s", output)
+	}
+}
