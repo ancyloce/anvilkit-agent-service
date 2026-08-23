@@ -3,7 +3,7 @@
   "description": "Canonical Agent contract lock (ADR-018). Regenerate with check-agent-profile.ts --update after a coordinated atomic refactor; CI verifies byte equality.",
   "profile": {
     "path": "contracts/agent/profile/p0-kernel-profile.json",
-    "sha256": "sha256:bbf82b992602f12f8b27b7edbdf10f4533788ce96c9102eaa7470b21ff70ed20"
+    "sha256": "sha256:93099e5e605990212bd3f1c7310d54f941c36a154bc4a40207c29e49da0775d1"
   },
   "sources": {
     "contracts/agent/asyncapi/agent-events.asyncapi.json": "sha256:3543383bb8cd39b1aee8416d36f213ef751414be6bd28276b7f543a2606cd1ba",
@@ -104,7 +104,7 @@
     "contracts/agent/fixtures/invalid/usage-observation.unsafe-number.json": "sha256:aa9c4fee2ca1455abbd62e00f4ab26a72ba77e760afb09ef3a2ec2313a10b23a",
     "contracts/agent/fixtures/invalid/worker-lease.missing-leaseEpoch.json": "sha256:d36a4d22b2ebf7fc2486c3290b9dbb109366214ed5604fc30598d915ee4f9155",
     "contracts/agent/fixtures/invalid/worker-result.missing-leaseEpoch.json": "sha256:d71f088d7933c8ac47f8af6501f8490e0b80cf2a10a2047fabc6586cfd001939",
-    "contracts/agent/fixtures/manifest.json": "sha256:d76abfab2544cbf608b63cc3aa8eea81e79de43cb50b7d164adfec0c3a5cb454",
+    "contracts/agent/fixtures/manifest.json": "sha256:33b5d75cb7f42ce9bfd28dd36135e356cf49064472f4cb5ec539d995dad1cec2",
     "contracts/agent/fixtures/manifest.schema.json": "sha256:0b6d424e1921b2a036ee0739d99bbaae6744bba6f069f116c8ef854e96d1fdf9",
     "contracts/agent/fixtures/signing/signature-cases.json": "sha256:2ad1cff5b6bcb77060978200acc7c6b4c7faa7fdc53e26e8d1c7c00dddee76f3",
     "contracts/agent/fixtures/valid/agent-artifact.full.json": "sha256:b9d370fa6e8f963e0827bb180b14e66093bf319b7aca4697219272669e6283aa",
@@ -186,7 +186,7 @@
     "contracts/agent/fixtures/valid/worker-result.minimum.json": "sha256:27f62619891d79a3c08ec82933409025b9c9b7abf3c1544848dc8af9e9a7f2ed",
     "contracts/agent/openapi/agent-service.openapi.json": "sha256:795e764aa32333659eb2dd47b6f666ea40669933a4ac4796a59f3bcf8a65f0c7",
     "contracts/agent/openapi/pagix-agent-integration.openapi.json": "sha256:df7beaa77c923a5444b1da3115a1ff208126b07bd30aa8d6c216870ac03b17e6",
-    "contracts/agent/registries/registry-set.json": "sha256:9e91822737ec692e3c4e5fd115cf8ea87625b1dbfdbe62b55c4432b5c1060d19",
+    "contracts/agent/registries/registry-set.json": "sha256:2cd87fc7a7c0f8a1e705a267e5393d0989056bf096da9499f418d659939f5bbe",
     "contracts/agent/registries/registry-set.schema.json": "sha256:dd3b6cc4952cd8df1ffb1bfd060765deed51f230674dc5e88581c29eebc09ab3",
     "contracts/agent/schemas/agent-artifact.schema.json": "sha256:0776014482233fa9db255075fd51ca229e421b2232c624213cb09d13795aac43",
     "contracts/agent/schemas/agent-budget.schema.json": "sha256:e2942efa249ebe3c79c105b3356d50a8cc3c99e8b544616a6ed10fb44a0b8467",
@@ -229,7 +229,7 @@
   },
   "registrySnapshot": {
     "path": "contracts/agent/registries/registry-set.json",
-    "sourceSha256": "sha256:9e91822737ec692e3c4e5fd115cf8ea87625b1dbfdbe62b55c4432b5c1060d19",
+    "sourceSha256": "sha256:2cd87fc7a7c0f8a1e705a267e5393d0989056bf096da9499f418d659939f5bbe",
     "semanticSha256": "sha256:b08110ae2f032b2a2e55de7777568dece93062ac7275f054b896d6fbe024689f"
   },
   "generators": {

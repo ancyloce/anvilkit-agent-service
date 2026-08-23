@@ -1,7 +1,7 @@
 {
   "approval": {
-    "lockDigest": "sha256:3d0b42d41328dba063243172e5227b48236e1a248ee7f0c1c7c6760f79e104af",
-    "profileDigest": "sha256:bbf82b992602f12f8b27b7edbdf10f4533788ce96c9102eaa7470b21ff70ed20"
+    "lockDigest": "sha256:971ba2496eb389e76a8e57f30e7bf034b826727782b588902f1e01098ee1eb3e",
+    "profileDigest": "sha256:93099e5e605990212bd3f1c7310d54f941c36a154bc4a40207c29e49da0775d1"
   },
   "catalogVersion": 1,
   "definitions": [

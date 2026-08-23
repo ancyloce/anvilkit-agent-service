@@ -47,7 +47,7 @@
     },
     "registrySet": {
       "path": "contracts/agent/registries/registry-set.json",
-      "digest": "sha256:9e91822737ec692e3c4e5fd115cf8ea87625b1dbfdbe62b55c4432b5c1060d19"
+      "digest": "sha256:2cd87fc7a7c0f8a1e705a267e5393d0989056bf096da9499f418d659939f5bbe"
     },
     "registrySetSchema": {
       "path": "contracts/agent/registries/registry-set.schema.json",
@@ -75,7 +75,7 @@
     ],
     "fixtureManifest": {
       "path": "contracts/agent/fixtures/manifest.json",
-      "digest": "sha256:d76abfab2544cbf608b63cc3aa8eea81e79de43cb50b7d164adfec0c3a5cb454"
+      "digest": "sha256:33b5d75cb7f42ce9bfd28dd36135e356cf49064472f4cb5ec539d995dad1cec2"
     },
     "fixtureManifestSchema": {
       "path": "contracts/agent/fixtures/manifest.schema.json",
