@@ -1769,16 +1769,17 @@ func buildProtectedAudit(ctx context.Context, cfg config.Config, clock *security
 	// through. The administrative check proves the grants were made correctly;
 	// this proves the process that ends up running is confined by them.
 	//
-	// It is asked where the separation is claimed. A controlled stack has one
-	// credential and administers the audit with it, so the answer there is
-	// known in advance and refusing on it would mean a local stack could not
-	// start; production is where the separation is required, and the
-	// configuration requiring it is refused above.
-	if cfg.Environment == config.EnvironmentProduction {
-		if err := sink.VerifyRuntimeIsolation(ctx); err != nil {
-			pool.Close()
-			return nil, nil, err
-		}
+	// It is asked in every environment that has an audit endpoint at all,
+	// which is what it means for the least-privilege identity to be a
+	// boundary rather than a production convention. It used to be asked only
+	// in production, and the reason it could be skipped elsewhere — that a
+	// controlled stack administers the audit with the credential it runs as —
+	// stopped being true when provisioning became a separate workload: every
+	// deployment that configures this endpoint has had the audit established
+	// for it by a credential this process is not given.
+	if err := sink.VerifyRuntimeIsolation(ctx); err != nil {
+		pool.Close()
+		return nil, nil, err
 	}
 	service, err := securityaudit.NewService(sink, clock, alerts, receipts)
 	if err != nil {

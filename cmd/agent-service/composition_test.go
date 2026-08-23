@@ -370,7 +370,7 @@ func TestTheProtectedAuditRunsOnAnAppendOnlyRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtimeURL := auditRuntimeLogin(t, ctx, databaseURL)
+	runtimeURL := auditRuntimeLogin(t, ctx, databaseURL, auditCompositionLogin, "agent-audit-composition-secret")
 	cfg := config.Config{Environment: config.EnvironmentProduction}
 	cfg.ProtectedAudit.URL = runtimeURL
 	// Nothing has established the chain yet, and the service holds no
@@ -460,10 +460,8 @@ func provisionCompositionAudit(t *testing.T, ctx context.Context, administrative
 // auditRuntimeLogin creates the login the service connects to the protected
 // audit as: an ordinary unprivileged role, distinct from the one that
 // administers the audit, which is the whole point of the separation.
-func auditRuntimeLogin(t *testing.T, ctx context.Context, administrativeURL string) string {
+func auditRuntimeLogin(t *testing.T, ctx context.Context, administrativeURL, login, secret string) string {
 	t.Helper()
-	const login = auditCompositionLogin
-	const secret = "agent-audit-composition-secret"
 	admin, err := pgxpool.New(ctx, administrativeURL)
 	if err != nil {
 		t.Fatal(err)
@@ -649,26 +647,35 @@ func TestTheComposedEgressPolicyIsEnforcedWhereTheConnectionIsMade(t *testing.T)
 	})
 }
 
+// controlledAuditLogin is the login a controlled stack's service connects to
+// the protected audit as. It is a second name because a controlled stack and
+// the composition suite can hold their logins at the same time, and a role is
+// cluster-global.
+const controlledAuditLogin = "agent_audit_controlled_runtime"
+
 // provisionControlledAudit establishes the protected audit for a controlled
-// stack, which administers it with the same credential it runs as. It is the
-// operator step a deployment runs before the service starts, and the service
-// refuses to start without it — so a stack that composes the durable audit has
-// to run it exactly as a deployment does.
-func provisionControlledAudit(t *testing.T, ctx context.Context, databaseURL string) {
+// stack and returns the connection the service appends through.
+//
+// A controlled stack used to administer the audit with the same credential it
+// then ran as, and claim no separation on the grounds that it had only one.
+// That is the single configuration in which every barrier on the audit is
+// decoration: the running service owns the table, so the append-only trigger,
+// the payload guard, and the narrow grant are all things it could remove, and
+// a stack proving custody decisions are audited was proving it against an
+// audit the audited process could rewrite. Provisioning refuses it now, in
+// every environment, so the stack does what a deployment does — an ordinary
+// unprivileged login for the service, and the administrative credential left
+// with the one-shot run that exits.
+func provisionControlledAudit(t *testing.T, ctx context.Context, databaseURL string) string {
 	t.Helper()
-	parsed, err := pgxpool.ParseConfig(databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if parsed.ConnConfig.User == "" {
-		t.Fatal("the protected audit connection names no login role")
-	}
+	runtimeURL := auditRuntimeLogin(t, ctx, databaseURL, controlledAuditLogin, "agent-audit-controlled-secret")
 	admin, err := pgxpool.New(ctx, databaseURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer admin.Close()
-	if err := securityauditpg.Provision(ctx, admin, parsed.ConnConfig.User, false); err != nil {
+	if err := securityauditpg.Provision(ctx, admin, controlledAuditLogin, true); err != nil {
 		t.Fatal(err)
 	}
+	return runtimeURL
 }

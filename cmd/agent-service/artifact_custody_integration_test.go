@@ -68,11 +68,11 @@ func newCustodyStack(t *testing.T, ctx context.Context) *custodyStack {
 	}
 	// The protected audit is established before the service starts, by the
 	// separate provisioning workload, because the service holds no credential
-	// that could establish it. A controlled stack has one credential and
-	// administers the audit with it, so the separation between the
-	// administering and runtime logins is not claimed here — it is required
-	// where it is the control, which is production.
-	provisionControlledAudit(t, ctx, databaseURL)
+	// that could establish it. The login the service then appends through is
+	// its own, distinct from the one that administered the audit and confined
+	// to appending and reading: an audit the audited process owns proves
+	// nothing about the decisions recorded in it.
+	auditURL := provisionControlledAudit(t, ctx, databaseURL)
 	managerID, managerDigest := managerReference(t)
 	authorityPath := writeRunAuthority(t, managerID, managerDigest)
 	minted := mintBearers(t)
@@ -84,7 +84,7 @@ func newCustodyStack(t *testing.T, ctx context.Context) *custodyStack {
 		"ANVILKIT_EVENTS_DATABASE_URL":             databaseURL,
 		"ANVILKIT_ARTIFACTS_DATABASE_URL":          databaseURL,
 		"ANVILKIT_EVALUATION_DATABASE_URL":         databaseURL,
-		"ANVILKIT_PROTECTED_AUDIT_URL":             databaseURL,
+		"ANVILKIT_PROTECTED_AUDIT_URL":             auditURL,
 		"ANVILKIT_MODEL_IMPLEMENTATION":            "controlled-fake",
 		"ANVILKIT_TOOL_IMPLEMENTATION":             "controlled-fake",
 		"ANVILKIT_DOMAIN_IMPLEMENTATION":           "controlled-fake",
