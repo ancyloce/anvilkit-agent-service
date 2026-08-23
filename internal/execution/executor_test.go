@@ -3,6 +3,7 @@ package execution_test
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -345,6 +346,11 @@ type harness struct {
 	// executor is the underlying pipeline, exposed for the operator-facing
 	// entry points that live outside the workflow.Operations surface.
 	executor *execution.Executor
+	// retrieving is the retrieval-capable worker this harness composed, when
+	// it composed one. It holds what the mediated exchange handed each tool
+	// call, so a test can prove the pipeline made the connection rather than
+	// passing an address on.
+	retrieving *retrievingToolExecutor
 }
 
 // toolMaterial returns the running tool material this harness built from the
@@ -382,6 +388,27 @@ type harnessOptions struct {
 	memoryAdmissionBytes int
 	egressAllowedHosts   map[string]struct{}
 	egressResolver       security.Resolver
+	// egressDial and egressTrustRoots let a test give the deployment's egress
+	// policy a peer it can actually connect to. The policy refuses every
+	// address a local listener can have, which is the point of the policy, so
+	// a conformance suite that needs the exchange to complete supplies the
+	// connection primitive and the trust material the same way a deployment
+	// leaves both nil.
+	egressDial       func(ctx context.Context, network, address string) (net.Conn, error)
+	egressTrustRoots *x509.CertPool
+	// retrievalTools names the catalogued tools the composed worker declares
+	// it needs the mediated exchange for. Empty composes the explicitly
+	// networkless controlled worker, which is what every other test uses.
+	retrievalTools []string
+	// budget wraps the budget authority the pipeline reserves through, so a
+	// test can hold one of its calls open at an exact point instead of racing
+	// the work that makes it.
+	budget func(execution.BudgetController) execution.BudgetController
+	// compositionRefusal receives the error a refused composition returned,
+	// for the tests whose subject is the refusal itself. Composition failure
+	// is otherwise fatal, which is right for every test that needs a pipeline
+	// and useless for the ones proving a pipeline is not built.
+	compositionRefusal *error
 	// modelAdapter wraps the controlled provider adapter, so a test can hold a
 	// real billable provider call open across a concurrent control-plane
 	// operation instead of simulating one.
@@ -546,6 +573,11 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 	h.repo = interrupts.NewMemoryRepository()
 	h.journal = journal.NewMemoryStore()
 	h.tool = execution.NewControlledToolExecutor()
+	var worker execution.ToolExecutor = h.tool
+	if len(options.retrievalTools) > 0 {
+		h.retrieving = &retrievingToolExecutor{controlled: h.tool, declared: append([]string(nil), options.retrievalTools...)}
+		worker = h.retrieving
+	}
 	h.domain = execution.NewControlledDomainPort(options.domainOutcome)
 	h.submissions = domaincommit.NewMemoryStore()
 	var submissions domaincommit.Store = h.submissions
@@ -618,7 +650,7 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	fencedTools, err := execution.NewScheduledToolExecutor(dispatchScheduler, dispatchRegister, h.authoritySource, approvedMaterial, h.tool, usagePipeline, execution.NewMemoryToolReservations(), clock, "executor-test", "sha256:"+hex.EncodeToString(lockDigest[:]))
+	fencedTools, err := execution.NewScheduledToolExecutor(dispatchScheduler, dispatchRegister, h.authoritySource, approvedMaterial, worker, usagePipeline, execution.NewMemoryToolReservations(), clock, "executor-test", "sha256:"+hex.EncodeToString(lockDigest[:]))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -628,6 +660,10 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		t.Fatal(err)
 	}
 	h.budgetController = budgetController
+	var budgetAuthority execution.BudgetController = budgetController
+	if options.budget != nil {
+		budgetAuthority = options.budget(budgetAuthority)
+	}
 	// The guards are composed exactly as production composes them, from the
 	// same constructors and the same policy shape. The security corpus below
 	// drives the pipeline these are wired into rather than guard instances of
@@ -649,6 +685,8 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		AllowedHosts:    options.egressAllowedHosts,
 		MaximumBytes:    1 << 20,
 		MaximumDuration: time.Second,
+		Dial:            options.egressDial,
+		TrustRoots:      options.egressTrustRoots,
 	}, options.egressResolver)
 	if err != nil {
 		t.Fatal(err)
@@ -671,7 +709,7 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		Evidence:          evidenceRecorder,
 		Deltas:            deltaBroker,
 		Decisions:         h.journal,
-		Budget:            budgetController,
+		Budget:            budgetAuthority,
 		Memory:            h.memoryGuard,
 		Egress:            h.egressGuard,
 		ArtifactMetadata:  h.artifactService,
@@ -687,6 +725,10 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		DomainRetryCap:    options.domainRetryCap,
 	})
 	if err != nil {
+		if options.compositionRefusal != nil {
+			*options.compositionRefusal = err
+			return nil
+		}
 		t.Fatal(err)
 	}
 	h.executor = executor
@@ -1321,3 +1363,46 @@ func (harnessArtifactReader) Verify(context.Context, artifacts.Record, artifacts
 	return nil
 }
 func (harnessArtifactReader) Revoke(context.Context, artifacts.Record) error { return nil }
+
+// retrievingToolExecutor is a worker whose declared tools need something read
+// from an address the run named. It is the counterpart of the explicitly
+// networkless controlled worker: it declares the tools it needs the mediated
+// exchange for, and it receives what that exchange read.
+//
+// It reaches nothing itself and it holds no address. That is the whole shape
+// of a network-capable tool in this service — the module boundary refuses an
+// HTTP client or a dialer outside the files that mediate egress, so a worker
+// receives retrieved content or it receives nothing.
+type retrievingToolExecutor struct {
+	controlled *execution.ControlledToolExecutor
+	declared   []string
+	lock       sync.Mutex
+	received   [][]execution.RetrievedDocument
+}
+
+func (e *retrievingToolExecutor) RetrievalTools() []string {
+	return append([]string(nil), e.declared...)
+}
+
+func (e *retrievingToolExecutor) Execute(ctx context.Context, invocation execution.ToolInvocation) (execution.ToolResult, error) {
+	e.lock.Lock()
+	e.received = append(e.received, invocation.Retrieved)
+	e.lock.Unlock()
+	// The controlled worker refuses retrieved content, being networkless, so
+	// what is echoed onward is the invocation without it.
+	networkless := invocation
+	networkless.Retrieved = nil
+	return e.controlled.Execute(ctx, networkless)
+}
+
+// documents returns what the mediated exchange handed each call, in order.
+func (e *retrievingToolExecutor) documents() [][]execution.RetrievedDocument {
+	e.lock.Lock()
+	defer e.lock.Unlock()
+	return append([][]execution.RetrievedDocument(nil), e.received...)
+}
+
+var (
+	_ execution.ToolExecutor     = (*retrievingToolExecutor)(nil)
+	_ execution.RetrievalCapable = (*retrievingToolExecutor)(nil)
+)

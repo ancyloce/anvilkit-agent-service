@@ -86,6 +86,13 @@ type ToolInvocation struct {
 	ActorID             string
 	ExecutionGeneration uint64
 	Traceparent         string
+	// Retrieved is what the mediated exchange read for this call, in the
+	// order the arguments named the destinations. A tool receives content
+	// rather than addresses: the pipeline made every connection under the
+	// deployment's egress policy, so there is nothing left for a tool to
+	// reach and no second resolution for anything to answer differently.
+	// It is empty for every explicitly networkless tool.
+	Retrieved []RetrievedDocument
 }
 
 type ToolResult struct {
@@ -322,6 +329,12 @@ type Config struct {
 
 type Executor struct {
 	cfg Config
+	// retrieval is the exact set of tools this composition performs a
+	// mediated exchange for. It is derived once, at composition, from what
+	// the tool executor declares and what the approved catalog attests, so a
+	// tool's standing to cause an outbound connection is settled before any
+	// run exists rather than decided from a proposal.
+	retrieval map[string]struct{}
 }
 
 // traceparentOf returns the caller trace context or a deterministic derived
@@ -358,7 +371,47 @@ func New(cfg Config) (*Executor, error) {
 	if !validDigestString(cfg.ValidatorIdentity) {
 		return nil, fmt.Errorf("agent execution: validator identity must be the pinned contract material digest")
 	}
-	return &Executor{cfg: cfg}, nil
+	retrieval, err := retrievalTools(cfg.Tools, cfg.ToolMaterial, cfg.Egress)
+	if err != nil {
+		return nil, err
+	}
+	return &Executor{cfg: cfg, retrieval: retrieval}, nil
+}
+
+// retrievalTools settles which tools this composition will perform a mediated
+// exchange for, and refuses to compose one that cannot be settled.
+//
+// A tool executor declares what it needs read; the approved catalog decides
+// whether that tool exists at all. Both are required, and requiring the second
+// is what stops the declaration from being a way to widen a deployment: an
+// executor that claims retrieval for a tool the catalog does not attest is
+// claiming standing over something no run can dispatch, and a composition that
+// accepted it would have an outbound capability attached to a name nobody
+// approved.
+//
+// An executor that declares nothing is explicitly networkless, which is not an
+// error and is the ordinary case: the resulting set is empty and every
+// destination a tool call names is refused.
+func retrievalTools(executor ToolExecutor, material ToolMaterial, guard DestinationGuard) (map[string]struct{}, error) {
+	declaring, capable := executor.(RetrievalCapable)
+	if !capable {
+		return map[string]struct{}{}, nil
+	}
+	declared := declaring.RetrievalTools()
+	if len(declared) > 0 && guard == nil {
+		return nil, fmt.Errorf("agent execution: the tool executor claims the mediated exchange, which requires the deployment's egress guard")
+	}
+	retrieval := make(map[string]struct{}, len(declared))
+	for _, toolID := range declared {
+		if toolID == "" {
+			return nil, fmt.Errorf("agent execution: the tool executor claims the mediated exchange for a tool without identity")
+		}
+		if _, attested := material.ToolDefinition(toolID); !attested {
+			return nil, fmt.Errorf("agent execution: the tool executor claims the mediated exchange for %q, which the approved catalog does not attest", toolID)
+		}
+		retrieval[toolID] = struct{}{}
+	}
+	return retrieval, nil
 }
 
 var _ workflow.Operations = (*Executor)(nil)
@@ -779,25 +832,61 @@ func (e *Executor) ExecuteAction(ctx context.Context, op workflow.OpID, input wo
 			return workflow.ActionResult{}, err
 		}
 		// The tool is allowed; where it is being pointed is a separate
-		// question. Every outbound destination the proposal names is resolved
-		// against the deployment's egress policy before anything is
-		// dispatched, so a model that proposes an allowed tool aimed at the
-		// cloud metadata service, an internal address, or any host outside the
-		// policy is stopped here rather than after the request has been made.
+		// question, and it is answered by making the connection here rather
+		// than by asking about one somebody else will make.
+		//
+		// Every outbound destination the proposal names is fetched through
+		// the deployment's egress policy: the name is resolved once, the
+		// connection is pinned to that resolution, every redirect is
+		// re-decided, and the duration and the response are bounded. The tool
+		// then receives what was read. This used to be a preflight — the
+		// destination was resolved, found permitted, and the address handed
+		// on for the tool to reach itself — which decided nothing that
+		// survived: the second resolution could answer the cloud metadata
+		// address the first one was refused for, a redirect was a destination
+		// nothing re-decided, and the body arrived unbounded.
+		//
+		// A tool that was never granted the mediated exchange does not get
+		// one made for it. Naming an address is refused outright, because a
+		// networkless tool has nothing to do with an address and the
+		// connection would be made on behalf of something that never asked
+		// for the standing.
 		//
 		// A denied destination is a durable, typed refusal on the same terms a
 		// denied tool is: the run continues, the denial is recorded, and the
 		// next turn observes it.
-		for _, destination := range proposedDestinations(proposal.Arguments) {
-			if _, err := e.cfg.Egress.Resolve(ctx, destination); err != nil {
-				if err := e.recordEvidence(ctx, op, input.Run, snapshot, "tool.egress-denied", "audit", map[string]string{"toolId": proposal.ToolID, "destinationDigest": destinationDigest(destination)}); err != nil {
+		var retrieved []RetrievedDocument
+		destinations := proposedDestinations(proposal.Arguments)
+		if len(destinations) > 0 {
+			if _, granted := e.retrieval[proposal.ToolID]; !granted {
+				if err := e.recordEvidence(ctx, op, input.Run, snapshot, "tool.egress-denied", "audit", map[string]string{"toolId": proposal.ToolID, "destinationDigest": destinationDigest(destinations[0])}); err != nil {
 					return workflow.ActionResult{}, err
 				}
-				// The refused address is never carried into the notes: those
-				// become the next prompt, and naming the destination there
-				// hands the model exactly what the guard refused to reach.
 				carry.Notes = boundNotes(append(carry.Notes, "tool denied (EGRESS_DENIED): "+proposal.ToolID))
 				return workflow.ActionResult{Carry: carry}, nil
+			}
+			for _, destination := range destinations {
+				answer, err := e.cfg.Egress.Fetch(ctx, destination)
+				if err != nil {
+					if err := e.recordEvidence(ctx, op, input.Run, snapshot, "tool.egress-denied", "audit", map[string]string{"toolId": proposal.ToolID, "destinationDigest": destinationDigest(destination)}); err != nil {
+						return workflow.ActionResult{}, err
+					}
+					// The refused address is never carried into the notes:
+					// those become the next prompt, and naming the destination
+					// there hands the model exactly what the guard refused to
+					// reach.
+					carry.Notes = boundNotes(append(carry.Notes, "tool denied (EGRESS_DENIED): "+proposal.ToolID))
+					return workflow.ActionResult{Carry: carry}, nil
+				}
+				retrieved = append(retrieved, RetrievedDocument{
+					DestinationDigest: destinationDigest(destination),
+					StatusCode:        answer.StatusCode,
+					MediaType:         answer.MediaType,
+					Body:              answer.Body,
+				})
+			}
+			if err := e.recordEvidence(ctx, op, input.Run, snapshot, "tool.egress-retrieved", "audit", map[string]string{"toolId": proposal.ToolID, "destinationDigest": destinationDigest(destinations[0]), "documents": strconv.Itoa(len(retrieved))}); err != nil {
+				return workflow.ActionResult{}, err
 			}
 		}
 		// The guard returned the signed execution envelope of the tool it
@@ -815,6 +904,7 @@ func (e *Executor) ExecuteAction(ctx context.Context, op workflow.OpID, input wo
 			ActorID:             snapshot.ActorID,
 			ExecutionGeneration: snapshot.ExecutionGeneration,
 			Traceparent:         traceparentOf(input.Run),
+			Retrieved:           retrieved,
 		})
 		if err != nil {
 			return workflow.ActionResult{}, fmt.Errorf("execute authorized tool: %w", err)

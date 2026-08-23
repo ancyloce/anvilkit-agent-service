@@ -25,17 +25,57 @@ type MemoryAdmission interface {
 	Admit(security.MemoryCandidate) error
 }
 
-// DestinationGuard resolves one outbound destination against the deployment's
-// egress policy. The egress guard satisfies it.
+// DestinationGuard is the mediated outbound exchange, and it is the whole of
+// what the pipeline can do with an address: the name is resolved once, the
+// connection is pinned to exactly that resolution, every redirect is
+// re-decided, and the duration and the response are bounded. The egress guard
+// satisfies it.
+//
+// It carries Fetch alone deliberately. The port used to offer Resolve as
+// well, and the pipeline used it as a preflight: it asked whether a
+// destination was permitted, and then handed the tool the address to reach on
+// its own. Everything the guard decides is undone by that second act — the
+// name resolves again and can answer differently, a redirect is a destination
+// nothing re-decided, and a body arrives with no bound. Asking a question
+// about a connection somebody else is going to make is not a boundary, so the
+// question is no longer on this port: the exchange is made here or it is not
+// made.
 type DestinationGuard interface {
-	Resolve(ctx context.Context, raw string) (security.Destination, error)
-	// Fetch is the pipeline's only way to reach an address at all. It is on
-	// this port rather than beside it so a tool adapter that needs to read
-	// something outside receives the mediated exchange as its capability —
-	// the name resolved once, the connection pinned to that resolution, every
-	// redirect re-decided, and the duration and response bounded — instead of
-	// a decision it is trusted to have asked for.
 	Fetch(ctx context.Context, raw string) (security.Response, error)
+}
+
+// RetrievalCapable is implemented by a tool executor whose catalogued tools
+// need something read from an address a run named. It is how a network-capable
+// tool is declared, and declaring it is the only way to become one: nothing
+// under this service can open a connection of its own — the module boundary
+// check refuses an HTTP client or a dialer outside the exact files that
+// mediate egress — so a tool reaches outside through the exchange the pipeline
+// performs for it or it does not reach outside at all.
+//
+// An executor that does not implement this is explicitly networkless, and a
+// tool call it makes that names an outbound destination is refused rather than
+// fetched.
+type RetrievalCapable interface {
+	// RetrievalTools names every tool this executor requires the mediated
+	// exchange for. Each must be a tool the approved catalog attests; the
+	// pipeline refuses to compose an executor that claims retrieval for
+	// anything else, so the declaration cannot widen what a deployment
+	// dispatches.
+	RetrievalTools() []string
+}
+
+// RetrievedDocument is what one mediated exchange returned, handed to the tool
+// that needed it.
+//
+// The address is not on it. A tool receives what was read, never a place to
+// read from: the destination is named by digest so evidence and a tool's own
+// output can be correlated without the tool ever holding an address it might
+// be tempted — or instructed by the content it is processing — to reach.
+type RetrievedDocument struct {
+	DestinationDigest string
+	StatusCode        int
+	MediaType         string
+	Body              []byte
 }
 
 // memoryRetention bounds how long admitted tool output is treated as live

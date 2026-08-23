@@ -240,29 +240,54 @@ func TestServingEventStreamsRequiresADurableCursorSpool(t *testing.T) {
 // chose not to after startup. A control that depends on the process not using
 // what it was given is not a control.
 //
-// So the credential is not delivered to this workload. The whole environment
-// is loaded with an administrative URL present and the resulting configuration
-// is walked field by field: the value must appear nowhere in it, which is a
-// statement about the surface rather than about one field somebody remembered
-// to remove. Establishing the audit belongs to the one-shot provisioner, which
-// reads its own configuration and exits.
+// So the credential is not delivered to this workload, and a workload that is
+// handed one does not start. Two things are proved. A deployment whose
+// environment carries either provisioning variable is refused by name, which
+// is what makes the separation observable rather than a property of which
+// fields somebody remembered to leave out of the struct. And a deployment
+// configured only with its own narrow endpoint is walked field by field: the
+// administrative host and secret appear nowhere in it, while the credential
+// the service is meant to hold does. Establishing the audit belongs to the
+// one-shot provisioner, which reads its own configuration and exits.
 func TestTheServiceConfigurationCarriesNoProtectedAuditAdministrativeCredential(t *testing.T) {
 	const administrative = "postgres://audit-owner:owner-secret@audit-admin.internal:5432/anvilkit"
+	const runtime = "postgres://audit-appender:appender-secret@audit.internal:5432/anvilkit"
+	for name, value := range map[string]string{
+		"ANVILKIT_PROTECTED_AUDIT_ADMIN_URL":     administrative,
+		"ANVILKIT_PROTECTED_AUDIT_RUNTIME_LOGIN": "agent_audit_runtime",
+	} {
+		t.Run(name, func(t *testing.T) {
+			for setting, value := range requiredProductionSettings() {
+				t.Setenv(setting, value)
+			}
+			t.Setenv("ANVILKIT_SIGNING_KEY", "production-signing-material-0123456789")
+			t.Setenv("ANVILKIT_ENCRYPTION_KEY", "production-encryption-material-0123456789")
+			t.Setenv(name, value)
+			var details problem.Details
+			if _, err := Load(); !errors.As(err, &details) || !strings.Contains(err.Error(), "provisioner") {
+				t.Fatalf("a workload handed %s started anyway: %v", name, err)
+			}
+		})
+	}
+
 	for name, value := range requiredProductionSettings() {
 		t.Setenv(name, value)
 	}
 	t.Setenv("ANVILKIT_SIGNING_KEY", "production-signing-material-0123456789")
 	t.Setenv("ANVILKIT_ENCRYPTION_KEY", "production-encryption-material-0123456789")
-	t.Setenv("ANVILKIT_PROTECTED_AUDIT_ADMIN_URL", administrative)
+	t.Setenv("ANVILKIT_PROTECTED_AUDIT_URL", runtime)
 	loaded, err := Load()
 	if err != nil {
-		t.Fatalf("a production deployment without an administrative audit credential was refused: %v", err)
+		t.Fatalf("a production deployment carrying only its own audit credential was refused: %v", err)
 	}
 	if found := stringFieldContaining(reflect.ValueOf(loaded), "audit-admin.internal"); found != "" {
 		t.Fatalf("the service configuration carries the protected audit administrative credential at %s", found)
 	}
 	if found := stringFieldContaining(reflect.ValueOf(loaded), "owner-secret"); found != "" {
 		t.Fatalf("the service configuration carries the protected audit administrative secret at %s", found)
+	}
+	if found := stringFieldContaining(reflect.ValueOf(loaded), "audit-appender"); found == "" {
+		t.Fatal("the service configuration does not carry the narrow audit credential it is meant to hold, so the walk above proves nothing")
 	}
 }
 

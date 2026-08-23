@@ -49,13 +49,26 @@ const maximumRedirects = 3
 // nothing gets to re-answer where that name points. Redirects come back
 // through the guard. The deadline and the size bound are the policy's, applied
 // to the exchange rather than offered as advice to whoever is making it.
+//
+// That deadline is one deadline. Reaching an address an agent named is a
+// single outbound act, and resolving the name is the first part of it, not a
+// preliminary to it: the resolver is spoken to over the network, by a peer the
+// destination's owner controls. Establishing the bound only after resolution
+// returned gave the act two budgets — a name that took the whole of
+// MaximumDuration to answer was followed by an exchange that then began its
+// own full MaximumDuration, so a destination could hold a run for twice what
+// the policy permits, and longer again once a redirect resolved another name.
+// The bound is therefore established before anything outbound happens and
+// every later part spends what is left of it: resolution, the dial, each
+// redirect and its resolution, the wait for headers, and the read of the body.
 func (g *EgressGuard) Fetch(ctx context.Context, raw string) (Response, error) {
-	destination, err := g.Resolve(ctx, raw)
+	bounded, cancel := context.WithTimeout(ctx, g.policy.MaximumDuration)
+	defer cancel()
+
+	destination, err := g.Resolve(bounded, raw)
 	if err != nil {
 		return Response{}, err
 	}
-	bounded, cancel := context.WithTimeout(ctx, g.policy.MaximumDuration)
-	defer cancel()
 
 	exchange := &pinnedExchange{guard: g, pinned: map[string][]net.IP{destination.host: destination.IPs}, from: destination}
 	client := &http.Client{
@@ -63,12 +76,15 @@ func (g *EgressGuard) Fetch(ctx context.Context, raw string) (Response, error) {
 			// No proxy. A proxy is a destination the policy never decided,
 			// and one configured in the process environment would silently
 			// become the address every permitted name resolves to.
-			Proxy:                 nil,
-			DialContext:           exchange.dial,
-			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: g.policy.TrustRoots},
-			ForceAttemptHTTP2:     true,
-			MaxIdleConnsPerHost:   1,
-			DisableCompression:    false,
+			Proxy:               nil,
+			DialContext:         exchange.dial,
+			TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: g.policy.TrustRoots},
+			ForceAttemptHTTP2:   true,
+			MaxIdleConnsPerHost: 1,
+			DisableCompression:  false,
+			// Subordinate to the exchange's deadline, never an addition to
+			// it: the request already carries the bounded context, so this
+			// can only refuse a silent peer sooner, never wait longer.
 			ResponseHeaderTimeout: g.policy.MaximumDuration,
 		},
 		CheckRedirect: exchange.redirect,

@@ -206,11 +206,23 @@ func LoadProtectedAuditProvisioning() (ProtectedAuditProvisioning, error) {
 }
 
 // RequiresSeparateLogins reports whether the provisioner must prove the
-// administering login and the runtime login are two identities. Production is
-// where the separation is the control; a controlled stack has one credential
-// and administers the audit with it.
+// administering login is neither a superuser nor an owner of what it
+// established, beyond the two identities being different at all.
+//
+// That the identities differ is not a question this answers: EnsureSchema
+// refuses to grant the runtime role to the login administering the audit in
+// every environment, so there is no configuration in which the service runs
+// as the credential that owns its own audit. What is asked here is the
+// stronger standing proof, and it is asked of every deployed environment
+// rather than of production alone — a staging deployment whose runtime login
+// is a superuser is confined by no grant either.
 func (p ProtectedAuditProvisioning) RequiresSeparateLogins() bool {
-	return p.Environment == EnvironmentProduction
+	switch p.Environment {
+	case EnvironmentDevelopment, EnvironmentTest:
+		return false
+	default:
+		return true
+	}
 }
 
 // Load reads the complete typed configuration surface. No other package may
@@ -366,11 +378,36 @@ func Load() (Config, error) {
 	if cfg.Limits, err = loadLimits(); err != nil {
 		return Config{}, err
 	}
+	if err := refuseAdministrativeAuditCredential(); err != nil {
+		return Config{}, err
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// refuseAdministrativeAuditCredential stops the service from starting in a
+// workload that was handed the credential which owns the protected audit.
+//
+// The service is meant to hold one audit credential and it is the narrow one.
+// Holding the administrative credential is not a thing that has to be used to
+// matter: a long-running process configured with a login that owns the audit
+// table can drop its barriers and rewrite its own record of every security
+// decision for as long as it runs, so the separation is only real if the
+// credential is absent from this workload rather than merely unused by it.
+//
+// It is checked here because this package is the only one permitted to read
+// process environment, and refusing at load is what makes the misconfiguration
+// a startup failure rather than a property nobody can observe.
+func refuseAdministrativeAuditCredential() error {
+	for _, name := range []string{"ANVILKIT_PROTECTED_AUDIT_ADMIN_URL", "ANVILKIT_PROTECTED_AUDIT_RUNTIME_LOGIN"} {
+		if _, present := os.LookupEnv(name); present {
+			return problem.InvalidConfiguration(name, "belongs to the one-shot protected-audit provisioner and must not be delivered to the Agent Service workload")
+		}
+	}
+	return nil
 }
 
 func (c Config) Validate() error {

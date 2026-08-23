@@ -305,9 +305,27 @@ func NewControlledToolExecutor() *ControlledToolExecutor {
 	return &ControlledToolExecutor{results: make(map[string]ToolResult)}
 }
 
+// RetrievalTools declares this executor explicitly networkless: none of its
+// tools needs anything read from an address a run named, so the pipeline
+// performs no exchange on their behalf and a tool call naming a destination is
+// refused rather than fetched.
+//
+// It is declared rather than left unimplemented so the property is a statement
+// this executor makes about itself, which is what a reader and a test can hold
+// it to.
+func (e *ControlledToolExecutor) RetrievalTools() []string { return nil }
+
+var _ RetrievalCapable = (*ControlledToolExecutor)(nil)
+
 func (e *ControlledToolExecutor) Execute(_ context.Context, invocation ToolInvocation) (ToolResult, error) {
 	if invocation.IdempotencyKey == "" || invocation.ToolID == "" {
 		return ToolResult{}, fmt.Errorf("controlled tool executor: idempotency key and tool identity are required")
+	}
+	// A networkless executor handed retrieved content is a composition that
+	// went wrong somewhere above it, and running anyway would quietly make
+	// this tool the consumer of an exchange it never declared a need for.
+	if len(invocation.Retrieved) != 0 {
+		return ToolResult{}, fmt.Errorf("controlled tool executor: %q is networkless and was handed retrieved content", invocation.ToolID)
 	}
 	e.lock.Lock()
 	defer e.lock.Unlock()

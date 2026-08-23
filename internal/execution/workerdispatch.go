@@ -106,6 +106,21 @@ func NewScheduledToolExecutor(taskScheduler TaskScheduler, epochs RecoveryEpochs
 
 var _ ToolExecutor = (*ScheduledToolExecutor)(nil)
 
+// RetrievalTools forwards the declaration of the worker this fenced dispatch
+// path wraps. The fencing changes when and how often a tool runs, never what
+// it needs, so a networkless worker stays networkless behind it and a worker
+// that needs the mediated exchange does not lose the declaration by being
+// dispatched through a lease.
+func (e *ScheduledToolExecutor) RetrievalTools() []string {
+	declaring, capable := e.worker.(RetrievalCapable)
+	if !capable {
+		return nil
+	}
+	return declaring.RetrievalTools()
+}
+
+var _ RetrievalCapable = (*ScheduledToolExecutor)(nil)
+
 func (e *ScheduledToolExecutor) Execute(ctx context.Context, invocation ToolInvocation) (ToolResult, error) {
 	if invocation.IdempotencyKey == "" || invocation.ToolID == "" || invocation.WorkspaceID == "" || invocation.ProjectID == "" || invocation.RunID == "" || invocation.RootRunID == "" || invocation.ActorID == "" || invocation.ExecutionGeneration == 0 || invocation.Traceparent == "" {
 		return ToolResult{}, fmt.Errorf("scheduled tool executor: a complete fenced invocation identity is required")

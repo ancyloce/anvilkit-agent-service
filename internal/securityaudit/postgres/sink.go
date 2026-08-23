@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -82,30 +83,118 @@ func Provision(ctx context.Context, admin *pgxpool.Pool, runtimeLogin string, re
 	return sink.VerifyRuntimeSeparation(ctx, runtimeLogin)
 }
 
+// barrier is one database-side guard the protected audit depends on, named
+// completely enough that startup can tell the guard it established from a
+// guard that merely carries its name.
+//
+// A trigger is identified by four things that can each be changed
+// independently, and changing any one of them turns the barrier off while
+// leaving the name in place: whether it is enabled at all, when and on what
+// it fires, which function it executes, and what that function does. Only the
+// name used to be checked, so a barrier that had been disabled, re-pointed at
+// a permissive function, or whose function body had been replaced all
+// reported themselves as present.
+type barrier struct {
+	// trigger and function are the names the barrier is established under.
+	trigger, function string
+	// firing is the trigger's tgtype: the timing, the level, and the events
+	// it fires on, packed exactly as PostgreSQL packs them. A trigger
+	// re-created under the same name for a different event is a different
+	// barrier and this is what says so.
+	firing int16
+	// body is the exact source of the function the trigger executes. It is
+	// the same text EnsureSchema installs, so a function replaced in place —
+	// which needs no privilege beyond owning it, and leaves every catalog
+	// name unchanged — is caught by comparison rather than trusted.
+	body string
+}
+
+// Trigger type bits, as PostgreSQL packs them in pg_trigger.tgtype. They are
+// spelled out here because the barriers are verified against these exact
+// values and a bare number in a comparison says nothing about what fires.
+const (
+	firesPerRow       int16 = 1 << 0
+	firesBefore       int16 = 1 << 1
+	firesOnInsert     int16 = 1 << 2
+	firesOnDelete     int16 = 1 << 3
+	firesOnUpdate     int16 = 1 << 4
+	firesOnTruncate   int16 = 1 << 5
+	auditSchemaName         = "agent_protected_audit"
+	auditRecordsTable       = "agent_protected_audit.records"
+)
+
+// refuseRewriteBody raises on every statement that would change or remove a
+// record. It is the append-only barrier's whole behaviour.
+const refuseRewriteBody = `
+BEGIN
+ RAISE EXCEPTION 'the protected audit chain is append-only';
+END;
+`
+
+// guardAuthenticatedColumnsBody checks every column duplicated from the
+// authenticated payload against that payload on the way in.
+const guardAuthenticatedColumnsBody = `
+DECLARE authenticated jsonb;
+BEGIN
+ authenticated := convert_from(NEW.chain_payload,'UTF8')::jsonb;
+ IF NEW.record_id IS DISTINCT FROM (authenticated->>'ID') THEN
+  RAISE EXCEPTION 'the protected audit record identity does not match its authenticated payload';
+ END IF;
+ IF NEW.previous_digest IS DISTINCT FROM coalesce(authenticated->>'PreviousDigest','') THEN
+  RAISE EXCEPTION 'the protected audit predecessor does not match its authenticated payload';
+ END IF;
+ IF NEW.record_digest IS DISTINCT FROM 'sha256:'||encode(sha256(NEW.chain_payload),'hex') THEN
+  RAISE EXCEPTION 'the protected audit digest does not match its authenticated payload';
+ END IF;
+ RETURN NEW;
+END;
+`
+
+// barriers is the complete set of database-side guards, and it is the single
+// source both EnsureSchema and RequireProvisioned read. Establishing and
+// verifying from one description is what keeps the two from drifting into a
+// state where the audit is provisioned correctly and checked for something
+// else.
+func barriers() []barrier {
+	return []barrier{
+		{
+			trigger:  "protected_audit_is_append_only",
+			function: "refuse_rewrite",
+			firing:   firesBefore | firesOnUpdate | firesOnDelete | firesOnTruncate,
+			body:     refuseRewriteBody,
+		},
+		{
+			trigger:  "protected_audit_columns_match_payload",
+			function: "guard_authenticated_columns",
+			firing:   firesPerRow | firesBefore | firesOnInsert,
+			body:     guardAuthenticatedColumnsBody,
+		},
+	}
+}
+
 // RequireProvisioned proves the protected audit was established before the
 // service starts appending to it, on the connection the service will use.
 //
 // The service cannot create the chain it is audited in — that is the whole
 // point of provisioning it separately — so it has to be able to tell an audit
-// that is not there from one that is. Both barriers are asked for by name: a
-// table that exists with its append-only trigger dropped is not a protected
-// audit, and starting on one would produce records that look exactly like
-// records that mean something.
+// that is not there from one that is. Every barrier is asked for completely:
+// a table whose append-only trigger was dropped is not a protected audit, and
+// neither is one whose trigger was disabled, re-pointed at a function that
+// permits what it was meant to refuse, or whose function body was replaced in
+// place. Starting on any of those would produce records that look exactly
+// like records that mean something.
 func (s *Sink) RequireProvisioned(ctx context.Context) error {
-	var table, appendOnly, columnGuard bool
-	err := s.database.QueryRow(ctx, `SELECT
-	 to_regclass('agent_protected_audit.records') IS NOT NULL,
-	 EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass('agent_protected_audit.records') AND tgname='protected_audit_is_append_only' AND NOT tgisinternal),
-	 EXISTS(SELECT 1 FROM pg_trigger WHERE tgrelid=to_regclass('agent_protected_audit.records') AND tgname='protected_audit_columns_match_payload' AND NOT tgisinternal)`).
-		Scan(&table, &appendOnly, &columnGuard)
-	if err != nil {
+	var table bool
+	if err := s.database.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, auditRecordsTable).Scan(&table); err != nil {
 		return fmt.Errorf("read protected audit provisioning state: %w", err)
 	}
 	if !table {
 		return fmt.Errorf("the protected audit is not provisioned: establish it with the protected-audit provisioner before starting the service")
 	}
-	if !appendOnly || !columnGuard {
-		return fmt.Errorf("the protected audit is provisioned without its append-only and payload barriers")
+	for _, expected := range barriers() {
+		if err := s.requireBarrier(ctx, expected); err != nil {
+			return err
+		}
 	}
 	var appends, reads bool
 	if err := s.database.QueryRow(ctx, `SELECT
@@ -115,6 +204,52 @@ func (s *Sink) RequireProvisioned(ctx context.Context) error {
 	}
 	if !appends || !reads {
 		return fmt.Errorf("the protected audit runtime login cannot append and read the chain it is granted")
+	}
+	return nil
+}
+
+// requireBarrier proves one guard is present, enabled, firing on what it was
+// established to fire on, and executing exactly the function that was
+// installed under it.
+func (s *Sink) requireBarrier(ctx context.Context, expected barrier) error {
+	var enabled string
+	var firing int16
+	var arguments int16
+	var unconditional bool
+	var schema, function, body string
+	err := s.database.QueryRow(ctx, `SELECT trigger.tgenabled, trigger.tgtype, trigger.tgnargs, trigger.tgqual IS NULL,
+	 namespace.nspname, routine.proname, routine.prosrc
+	FROM pg_trigger AS trigger
+	JOIN pg_proc AS routine ON routine.oid = trigger.tgfoid
+	JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
+	WHERE trigger.tgrelid = to_regclass($1) AND trigger.tgname = $2 AND NOT trigger.tgisinternal`,
+		auditRecordsTable, expected.trigger).
+		Scan(&enabled, &firing, &arguments, &unconditional, &schema, &function, &body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("the protected audit is provisioned without its %s barrier", expected.trigger)
+	}
+	if err != nil {
+		return fmt.Errorf("read protected audit %s barrier: %w", expected.trigger, err)
+	}
+	// 'O' fires for ordinary sessions and 'A' fires always. 'D' is disabled
+	// and 'R' fires only on a replica, and both leave a row in the catalog
+	// that a check for the trigger's mere existence reads as present.
+	if enabled != "O" && enabled != "A" {
+		return fmt.Errorf("the protected audit %s barrier is disabled", expected.trigger)
+	}
+	if firing != expected.firing {
+		return fmt.Errorf("the protected audit %s barrier fires on something other than what it guards", expected.trigger)
+	}
+	// A WHEN clause or bound arguments make the barrier conditional, and a
+	// condition that is never true is a barrier that never runs.
+	if !unconditional || arguments != 0 {
+		return fmt.Errorf("the protected audit %s barrier is conditional", expected.trigger)
+	}
+	if schema != auditSchemaName || function != expected.function {
+		return fmt.Errorf("the protected audit %s barrier executes %s.%s rather than the function it was established with", expected.trigger, schema, function)
+	}
+	if body != expected.body {
+		return fmt.Errorf("the protected audit %s barrier executes a function whose body is not the one it was established with", expected.trigger)
 	}
 	return nil
 }
@@ -133,9 +268,26 @@ func (s *Sink) RequireProvisioned(ctx context.Context) error {
 // even if a barrier above it were removed. None of these is the evidence —
 // the chain digests are what make a rewrite that got past all three
 // detectable afterwards.
+//
+// The trigger functions are installed from the same descriptions
+// RequireProvisioned verifies against, so what startup asks for is what
+// provisioning put there rather than a second copy of it written down twice.
 func (s *Sink) EnsureSchema(ctx context.Context, runtimeLogin string) error {
 	if !identifier(runtimeLogin) {
 		return fmt.Errorf("protected audit schema: the runtime login role must be named so the grant can be made to it and to nothing else")
+	}
+	// The administering identity and the runtime identity are two identities
+	// or there is no separation to speak of, and this is asked before
+	// anything is established rather than as a later proof a deployment can
+	// be configured out of. An audit whose runtime login owns the table is an
+	// audit the running service can rewrite: the barriers below are on
+	// objects it would own, and an owner drops its own triggers.
+	var administrator, session string
+	if err := s.database.QueryRow(ctx, `SELECT current_user, session_user`).Scan(&administrator, &session); err != nil {
+		return fmt.Errorf("read protected audit administrative identity: %w", err)
+	}
+	if runtimeLogin == administrator || runtimeLogin == session {
+		return fmt.Errorf("protected audit schema: the runtime login %q is the login administering the audit, so no barrier established here confines the running service", runtimeLogin)
 	}
 	_, err := s.database.Exec(ctx, `CREATE SCHEMA IF NOT EXISTS agent_protected_audit;
 CREATE SEQUENCE IF NOT EXISTS agent_protected_audit.record_order_seq;
@@ -148,34 +300,7 @@ CREATE TABLE IF NOT EXISTS agent_protected_audit.records (
  recorded_at timestamptz NOT NULL DEFAULT transaction_timestamp());
 ALTER TABLE agent_protected_audit.records ALTER COLUMN record_order SET DEFAULT nextval('agent_protected_audit.record_order_seq');
 SELECT setval('agent_protected_audit.record_order_seq', GREATEST(COALESCE((SELECT max(record_order) FROM agent_protected_audit.records), 0), 1), COALESCE((SELECT max(record_order) FROM agent_protected_audit.records), 0) > 0);
-CREATE OR REPLACE FUNCTION agent_protected_audit.refuse_rewrite() RETURNS trigger AS $$
-BEGIN
- RAISE EXCEPTION 'the protected audit chain is append-only';
-END;
-$$ LANGUAGE plpgsql;
-DROP TRIGGER IF EXISTS protected_audit_is_append_only ON agent_protected_audit.records;
-CREATE TRIGGER protected_audit_is_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON agent_protected_audit.records
- FOR EACH STATEMENT EXECUTE FUNCTION agent_protected_audit.refuse_rewrite();
-CREATE OR REPLACE FUNCTION agent_protected_audit.guard_authenticated_columns() RETURNS trigger AS $$
-DECLARE authenticated jsonb;
-BEGIN
- authenticated := convert_from(NEW.chain_payload,'UTF8')::jsonb;
- IF NEW.record_id IS DISTINCT FROM (authenticated->>'ID') THEN
-  RAISE EXCEPTION 'the protected audit record identity does not match its authenticated payload';
- END IF;
- IF NEW.previous_digest IS DISTINCT FROM coalesce(authenticated->>'PreviousDigest','') THEN
-  RAISE EXCEPTION 'the protected audit predecessor does not match its authenticated payload';
- END IF;
- IF NEW.record_digest IS DISTINCT FROM 'sha256:'||encode(sha256(NEW.chain_payload),'hex') THEN
-  RAISE EXCEPTION 'the protected audit digest does not match its authenticated payload';
- END IF;
- RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-DROP TRIGGER IF EXISTS protected_audit_columns_match_payload ON agent_protected_audit.records;
-CREATE TRIGGER protected_audit_columns_match_payload BEFORE INSERT ON agent_protected_audit.records
- FOR EACH ROW EXECUTE FUNCTION agent_protected_audit.guard_authenticated_columns();
-DO $$ BEGIN CREATE ROLE agent_protected_audit_rw NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+`+establishBarriers()+`DO $x$ BEGIN CREATE ROLE agent_protected_audit_rw NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $x$;
 REVOKE ALL ON SCHEMA agent_protected_audit FROM PUBLIC;
 REVOKE ALL ON agent_protected_audit.records FROM PUBLIC;
 REVOKE ALL ON agent_protected_audit.records FROM agent_protected_audit_rw;
@@ -203,6 +328,54 @@ GRANT USAGE, SELECT ON SEQUENCE agent_protected_audit.record_order_seq TO agent_
 		return fmt.Errorf("grant the protected audit runtime role to %q: %w", runtimeLogin, err)
 	}
 	return nil
+}
+
+// establishBarriers renders the statements that install every guard, from the
+// same descriptions RequireProvisioned checks. Each one is dropped and
+// re-created rather than left alone, so re-provisioning an audit whose
+// barriers were disabled, re-pointed, or rewritten restores exactly what was
+// meant to be there.
+func establishBarriers() string {
+	var statements strings.Builder
+	for _, guard := range barriers() {
+		statements.WriteString("CREATE OR REPLACE FUNCTION " + auditSchemaName + "." + guard.function + "() RETURNS trigger AS $x$" + guard.body + "$x$ LANGUAGE plpgsql;\n")
+		statements.WriteString("DROP TRIGGER IF EXISTS " + guard.trigger + " ON " + auditRecordsTable + ";\n")
+		statements.WriteString("CREATE TRIGGER " + guard.trigger + " " + guard.timing() + " ON " + auditRecordsTable + "\n FOR EACH " + guard.level() + " EXECUTE FUNCTION " + auditSchemaName + "." + guard.function + "();\n")
+	}
+	return statements.String()
+}
+
+// timing renders the trigger's timing and events from the firing bits, so the
+// statement that creates a barrier and the check that verifies it are derived
+// from one description rather than kept in step by hand.
+func (b barrier) timing() string {
+	events := make([]string, 0, 4)
+	for _, event := range []struct {
+		bit  int16
+		name string
+	}{
+		{firesOnInsert, "INSERT"},
+		{firesOnUpdate, "UPDATE"},
+		{firesOnDelete, "DELETE"},
+		{firesOnTruncate, "TRUNCATE"},
+	} {
+		if b.firing&event.bit != 0 {
+			events = append(events, event.name)
+		}
+	}
+	when := "AFTER"
+	if b.firing&firesBefore != 0 {
+		when = "BEFORE"
+	}
+	return when + " " + strings.Join(events, " OR ")
+}
+
+// level renders whether the barrier fires once per row or once per statement.
+func (b barrier) level() string {
+	if b.firing&firesPerRow != 0 {
+		return "ROW"
+	}
+	return "STATEMENT"
 }
 
 // identifier admits an ordinary lower-case SQL identifier: a letter or

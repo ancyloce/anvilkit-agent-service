@@ -2,11 +2,21 @@ package execution_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -498,18 +508,28 @@ func aForbiddenDestinationIsNeverDispatched(t *testing.T) security.Guard {
 }
 
 // The guards are wired into the production action boundary, and the wiring is
-// proved in both directions: what the policy permits still runs, and what it
-// refuses does not. A guard that refused everything would pass the corpus
-// above while making the service useless, and one that was never consulted
-// would pass it while making the service defenceless.
-func TestTheActionBoundaryConsultsTheDeploymentEgressPolicy(t *testing.T) {
+// proved in both directions: what the policy permits is fetched and run, and
+// what it refuses does not run. A guard that refused everything would pass the
+// refusal cases while making the service useless, and one that was never
+// consulted would pass them while making the service defenceless.
+//
+// Both directions are now proved against a connection rather than against an
+// opinion about one. The boundary used to resolve the destination, find it
+// permitted, and hand the address to the tool to reach on its own — so the
+// permitted case proved only that a URL had been looked at. Here the pipeline
+// makes the exchange itself, and the permitted case is a real TLS peer whose
+// body arrives in the tool's hands.
+func TestTheActionBoundaryFetchesThroughTheDeploymentEgressPolicy(t *testing.T) {
 	ctx := context.Background()
-	for name, destination := range map[string]struct {
-		url        string
-		dispatched bool
+	const document = `{"answer":"permitted"}`
+	// Every case a run can name. Only the first is reachable; the rest are the
+	// ways an allowed tool gets pointed somewhere the policy does not admit.
+	cases := map[string]struct {
+		url     string
+		fetched bool
 	}{
-		"a destination the policy permits is dispatched": {
-			url: "https://api.allowed.test/v1/resource", dispatched: true,
+		"a destination the policy permits is fetched and dispatched": {
+			url: "https://api.allowed.test/v1/resource", fetched: true,
 		},
 		"a permitted name resolving to the metadata service is refused": {
 			url: "https://metadata.allowed.test/latest/meta-data/iam/security-credentials/",
@@ -526,9 +546,19 @@ func TestTheActionBoundaryConsultsTheDeploymentEgressPolicy(t *testing.T) {
 		"a destination carrying credentials is refused": {
 			url: "https://attacker:secret@api.allowed.test/v1/resource",
 		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			h := newHarness(t, [][]byte{finalPlan()})
+	}
+
+	// A tool the deployment granted the mediated exchange. The permitted
+	// destination is connected to, its body is bounded and handed to the tool,
+	// and every refused destination stops before any connection is attempted.
+	for name, destination := range cases {
+		t.Run("granted the mediated exchange: "+name, func(t *testing.T) {
+			peer := newActionEgressPeer(t, document)
+			h := newHarness(t, [][]byte{finalPlan()}, func(options *harnessOptions) {
+				options.retrievalTools = []string{"anvilkit.tool.context-echo"}
+				options.egressDial = peer.dial
+				options.egressTrustRoots = peer.roots
+			})
 			input := h.seedRun("artifact-validation")
 			prepare(t, h, input)
 			before := h.tool.Executions()
@@ -542,28 +572,204 @@ func TestTheActionBoundaryConsultsTheDeploymentEgressPolicy(t *testing.T) {
 				t.Fatalf("the action boundary failed rather than deciding: %v", err)
 			}
 			dispatched := h.tool.Executions() > before
-			if dispatched != destination.dispatched {
-				t.Fatalf("dispatched=%v, want %v for %s", dispatched, destination.dispatched, destination.url)
+			if dispatched != destination.fetched {
+				t.Fatalf("dispatched=%v, want %v for %s", dispatched, destination.fetched, destination.url)
 			}
-			if destination.dispatched {
+			if !destination.fetched {
+				// Nothing was connected to. A refusal that still opened a
+				// socket would be a refusal announced after the fact.
+				if peer.dials() != 0 {
+					t.Fatalf("a refused destination reached the dialer %d times", peer.dials())
+				}
+				assertDurableEgressDenial(t, result.Carry.Notes, destination.url)
 				return
 			}
-			// A refusal is durable and typed, and it never names the address
-			// the model was reaching for: those notes become the next prompt.
-			var denial string
-			for _, note := range result.Carry.Notes {
-				if strings.Contains(note, "EGRESS_DENIED") {
-					denial = note
-				}
-				if strings.Contains(note, destination.url) {
-					t.Fatalf("the refused destination was carried into run memory: %q", note)
-				}
+			// The tool received what was read, and never an address to read
+			// from: the destination it named is on the record only as a
+			// digest.
+			handed := h.retrieving.documents()
+			if len(handed) != 1 || len(handed[0]) != 1 {
+				t.Fatalf("the tool was handed %v", handed)
 			}
-			if denial == "" {
-				t.Fatalf("a refused destination left no durable denial: %v", result.Carry.Notes)
+			retrieved := handed[0][0]
+			if string(retrieved.Body) != document || retrieved.StatusCode != 200 || retrieved.MediaType != "application/json" {
+				t.Fatalf("the mediated exchange handed the tool %+v", retrieved)
+			}
+			if strings.Contains(retrieved.DestinationDigest, "allowed.test") {
+				t.Fatalf("the tool was handed the address it named: %q", retrieved.DestinationDigest)
+			}
+			if peer.dials() == 0 {
+				t.Fatal("the permitted destination was dispatched without any connection being made")
 			}
 		})
 	}
+
+	// The same calls from a tool that was never granted the exchange. Nothing
+	// is fetched, including the destination the policy would otherwise admit:
+	// a networkless tool has no business naming an address, and the pipeline
+	// does not open a connection on behalf of something that never declared it
+	// needed one.
+	for name, destination := range cases {
+		t.Run("explicitly networkless: "+name, func(t *testing.T) {
+			peer := newActionEgressPeer(t, document)
+			h := newHarness(t, [][]byte{finalPlan()}, func(options *harnessOptions) {
+				options.egressDial = peer.dial
+				options.egressTrustRoots = peer.roots
+			})
+			input := h.seedRun("artifact-validation")
+			prepare(t, h, input)
+			before := h.tool.Executions()
+			result, err := h.ops.ExecuteAction(ctx, opID(input, "action-0000"), workflow.ActionInput{
+				Run:      input,
+				Turn:     0,
+				Phase:    workflow.PhasePlan,
+				Decision: agent.TurnDecision{Kind: agent.DecisionToolCall, ToolCall: &agent.ToolCallDecision{ToolID: "anvilkit.tool.context-echo", Arguments: hostileArguments(destination.url)}},
+			})
+			if err != nil {
+				t.Fatalf("the action boundary failed rather than deciding: %v", err)
+			}
+			if h.tool.Executions() > before {
+				t.Fatalf("a networkless tool naming %s was dispatched", destination.url)
+			}
+			if peer.dials() != 0 {
+				t.Fatalf("a networkless tool caused %d connections", peer.dials())
+			}
+			assertDurableEgressDenial(t, result.Carry.Notes, destination.url)
+		})
+	}
+
+	// And the boundary is not simply refusing everything: the same networkless
+	// tool, naming no address at all, runs.
+	t.Run("a call naming no destination is dispatched", func(t *testing.T) {
+		h := newHarness(t, [][]byte{finalPlan()})
+		input := h.seedRun("artifact-validation")
+		prepare(t, h, input)
+		before := h.tool.Executions()
+		if _, err := h.ops.ExecuteAction(ctx, opID(input, "action-0000"), workflow.ActionInput{
+			Run:      input,
+			Turn:     0,
+			Phase:    workflow.PhasePlan,
+			Decision: agent.TurnDecision{Kind: agent.DecisionToolCall, ToolCall: &agent.ToolCallDecision{ToolID: "anvilkit.tool.context-echo", Arguments: hostileArguments("summarize the pinned contract")}},
+		}); err != nil {
+			t.Fatalf("the action boundary failed rather than deciding: %v", err)
+		}
+		if h.tool.Executions() == before {
+			t.Fatal("a tool call naming no destination was refused, so the refusals above prove nothing")
+		}
+	})
+}
+
+// A network-capable tool cannot be composed without the mediated exchange, and
+// cannot claim it for a tool the approved catalog does not attest.
+//
+// The declaration is what makes a worker network-capable, so it is also the
+// place a deployment could be widened by one: a worker that named a tool
+// nobody approved would hold outbound standing over a name no run can
+// dispatch. Composition refuses instead, before any run exists.
+func TestComposingARetrievalToolRequiresTheApprovedCatalog(t *testing.T) {
+	for name, declared := range map[string][]string{
+		"a tool the approved catalog does not attest": {"anvilkit.tool.exfiltrate"},
+		"a tool without identity":                     {""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var refusal error
+			composed := newHarness(t, [][]byte{finalPlan()}, func(options *harnessOptions) {
+				options.retrievalTools = declared
+				options.compositionRefusal = &refusal
+			})
+			if composed != nil || refusal == nil {
+				t.Fatal("a worker claiming the mediated exchange for an unapproved tool was composed")
+			}
+			if !strings.Contains(refusal.Error(), "mediated exchange") {
+				t.Fatalf("composition was refused for some other reason: %v", refusal)
+			}
+		})
+	}
+}
+
+// assertDurableEgressDenial proves a refusal was recorded for the next turn to
+// observe, and that it carried none of the address it refused: those notes
+// become the next prompt, and naming the destination there hands the model
+// exactly what the guard refused to reach.
+func assertDurableEgressDenial(t *testing.T, notes []string, destination string) {
+	t.Helper()
+	denial := ""
+	for _, note := range notes {
+		if strings.Contains(note, "EGRESS_DENIED") {
+			denial = note
+		}
+		if strings.Contains(note, destination) {
+			t.Fatalf("the refused destination was carried into run memory: %q", note)
+		}
+	}
+	if denial == "" {
+		t.Fatalf("a refused destination left no durable denial: %v", notes)
+	}
+}
+
+// actionEgressPeer is a real HTTPS peer the deployment's egress policy can be
+// given, together with the authority that makes its name verifiable and a
+// count of every connection the exchange actually opened.
+//
+// It exists because the policy refuses every address a local listener can
+// have, which is exactly what the policy is for: the dial hook is how a
+// conformance suite stands up a peer without loosening the addresses the
+// policy admits.
+type actionEgressPeer struct {
+	server *httptest.Server
+	roots  *x509.CertPool
+	lock   sync.Mutex
+	opened int
+}
+
+func newActionEgressPeer(t *testing.T, body string) *actionEgressPeer {
+	t.Helper()
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "api.allowed.test"},
+		DNSNames:              []string{"api.allowed.test", "metadata.allowed.test"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	encoded, err := x509.CreateCertificate(rand.Reader, &template, &template, public, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, err := x509.ParseCertificate(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(certificate)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, _ = response.Write([]byte(body))
+	}))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{encoded}, PrivateKey: private, Leaf: certificate}}}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	return &actionEgressPeer{server: server, roots: roots}
+}
+
+func (p *actionEgressPeer) dial(ctx context.Context, network, _ string) (net.Conn, error) {
+	p.lock.Lock()
+	p.opened++
+	p.lock.Unlock()
+	return (&net.Dialer{}).DialContext(ctx, network, p.server.Listener.Addr().String())
+}
+
+func (p *actionEgressPeer) dials() int {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	return p.opened
 }
 
 // Untrusted tool output is admitted to the run's memory or it is not carried,

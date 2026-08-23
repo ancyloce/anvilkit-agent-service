@@ -3769,6 +3769,61 @@ func assertProtectedAuditChain(t *testing.T, ctx context.Context, pool *pgxpool.
 	if err := sink.RequireProvisioned(ctx); err != nil {
 		t.Fatalf("re-provisioning did not restore the protected audit barriers: %v", err)
 	}
+	// A barrier is not a name in a catalog. It can be turned off, re-pointed
+	// at a function that permits what it was meant to refuse, rewritten in
+	// place, re-created to fire on something else, or made conditional on a
+	// predicate that is never true — and every one of those leaves a row
+	// under the original name that a check for mere existence reads as
+	// present. Each is applied, refused, and undone by re-provisioning, so
+	// what is proved is that startup distinguishes the barrier it established
+	// from anything that merely carries its name.
+	for name, disable := range map[string]string{
+		"the append-only barrier disabled": `ALTER TABLE agent_protected_audit.records DISABLE TRIGGER protected_audit_is_append_only`,
+		"the payload barrier disabled":     `ALTER TABLE agent_protected_audit.records DISABLE TRIGGER protected_audit_columns_match_payload`,
+		"every barrier disabled at once":   `ALTER TABLE agent_protected_audit.records DISABLE TRIGGER ALL`,
+		"the append-only barrier re-pointed": `CREATE OR REPLACE FUNCTION agent_protected_audit.permit_rewrite() RETURNS trigger AS $permit$ BEGIN RETURN NEW; END; $permit$ LANGUAGE plpgsql;
+DROP TRIGGER protected_audit_is_append_only ON agent_protected_audit.records;
+CREATE TRIGGER protected_audit_is_append_only BEFORE UPDATE OR DELETE OR TRUNCATE ON agent_protected_audit.records FOR EACH STATEMENT EXECUTE FUNCTION agent_protected_audit.permit_rewrite()`,
+		"the append-only function rewritten in place": `CREATE OR REPLACE FUNCTION agent_protected_audit.refuse_rewrite() RETURNS trigger AS $permit$ BEGIN RETURN NEW; END; $permit$ LANGUAGE plpgsql`,
+		"the payload function rewritten in place":     `CREATE OR REPLACE FUNCTION agent_protected_audit.guard_authenticated_columns() RETURNS trigger AS $permit$ BEGIN RETURN NEW; END; $permit$ LANGUAGE plpgsql`,
+		"the append-only barrier re-armed on another event": `DROP TRIGGER protected_audit_is_append_only ON agent_protected_audit.records;
+CREATE TRIGGER protected_audit_is_append_only BEFORE INSERT ON agent_protected_audit.records FOR EACH ROW EXECUTE FUNCTION agent_protected_audit.refuse_rewrite()`,
+		"the payload barrier made conditional": `DROP TRIGGER protected_audit_columns_match_payload ON agent_protected_audit.records;
+CREATE TRIGGER protected_audit_columns_match_payload BEFORE INSERT ON agent_protected_audit.records FOR EACH ROW WHEN (false) EXECUTE FUNCTION agent_protected_audit.guard_authenticated_columns()`,
+	} {
+		if _, err := pool.Exec(ctx, disable); err != nil {
+			t.Fatalf("could not apply %s: %v", name, err)
+		}
+		if err := sink.RequireProvisioned(ctx); err == nil {
+			t.Fatalf("a protected audit with %s reported itself ready", name)
+		}
+		if err := securityauditpg.Provision(ctx, pool, runtimeLogin, true); err != nil {
+			t.Fatalf("re-provisioning after %s failed: %v", name, err)
+		}
+		// DISABLE TRIGGER leaves the catalog row in place, so re-establishing
+		// the trigger is what re-enables it; a barrier that came back
+		// disabled would still be reported as such here.
+		if err := sink.RequireProvisioned(ctx); err != nil {
+			t.Fatalf("re-provisioning did not restore the audit after %s: %v", name, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `DROP FUNCTION IF EXISTS agent_protected_audit.permit_rewrite()`); err != nil {
+		t.Fatal(err)
+	}
+
+	// Provisioning refuses to grant the runtime role to the login that
+	// administers the audit, in every environment rather than as a production
+	// proof a deployment can be configured out of. Without this the whole
+	// separation is a naming convention: the service would run as the account
+	// that owns the table and could drop every barrier above.
+	var administering string
+	if err := pool.QueryRow(ctx, `SELECT current_user`).Scan(&administering); err != nil {
+		t.Fatal(err)
+	}
+	if err := securityauditpg.Provision(ctx, pool, administering, false); err == nil {
+		t.Fatal("the protected audit was provisioned with the administering login as its runtime login")
+	}
+
 	record := func(id, action string) securityaudit.Record {
 		return securityaudit.Record{
 			ID: id, Action: action, Actor: "operator-01", Workload: "audit-suite",

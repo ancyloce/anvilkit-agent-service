@@ -204,6 +204,81 @@ func TestEgressIsEnforcedAtTheConnection(t *testing.T) {
 	})
 }
 
+// One outbound act spends one duration budget.
+//
+// Resolving a name is part of reaching a destination, not a preliminary to it:
+// the resolver is a peer on the network, and a name whose owner is hostile
+// answers as slowly as it likes. The bound used to be established only after
+// resolution returned, which handed the same act two budgets — the resolver
+// could spend a whole MaximumDuration and the peer would then start a fresh
+// one of its own. This holds a destination that stalls in both places and
+// requires the two stalls to come out of the same budget.
+func TestEgressSpendsOneDurationBudgetAcrossResolutionAndExchange(t *testing.T) {
+	const (
+		// The share resolution takes is most of the budget but not all of
+		// it, so a correct exchange still reaches the peer and the peer's
+		// share is visibly the remainder rather than a window of its own.
+		budget           = time.Second
+		resolutionShare  = 700 * time.Millisecond
+		schedulingMargin = 300 * time.Millisecond
+	)
+
+	waited := make(chan time.Duration, 1)
+	peer := newEgressPeer(t, func(_ http.ResponseWriter, request *http.Request) {
+		// The peer never answers. How long it is held is how much of the
+		// budget the exchange believed it still had.
+		started := time.Now()
+		select {
+		case <-request.Context().Done():
+		case <-time.After(30 * time.Second):
+		}
+		waited <- time.Since(started)
+	})
+
+	// A name that answers slowly. It is charged against the exchange's budget
+	// or it is not, and that is the whole question.
+	slow := resolverFunc(func(ctx context.Context, _ string) ([]net.IPAddr, error) {
+		select {
+		case <-time.After(resolutionShare):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return []net.IPAddr{{IP: net.ParseIP(permittedAddress)}}, nil
+	})
+	guard, dialed := peer.guardWithResolver(t, slow, func(policy *security.EgressPolicy) {
+		policy.MaximumDuration = budget
+	})
+
+	started := time.Now()
+	if _, err := guard.Fetch(context.Background(), "https://allowed.example/resource"); err == nil {
+		t.Fatal("a destination that stalled in resolution and again at the peer answered successfully")
+	}
+	elapsed := time.Since(started)
+
+	// The exchange did begin: resolution succeeded and the peer was connected
+	// to, so what follows measures the budget rather than an early refusal.
+	if got := dialed.addresses(); len(got) != 1 || got[0] != net.JoinHostPort(permittedAddress, "443") {
+		t.Fatalf("the exchange connected to %v, so the peer never received any of the budget", got)
+	}
+	peerShare := <-waited
+
+	// The proof: what resolution spent and what the peer was then given are
+	// parts of one budget. Two windows would put this at nearly twice it.
+	if spent := resolutionShare + peerShare; spent > budget+schedulingMargin {
+		t.Fatalf("resolution spent %s and the peer was then given %s, %s in all, against a single %s bound: the exchange received two timeout windows", resolutionShare, peerShare, spent, budget)
+	}
+	// Stated the other way, so a regression is caught even if the peer's own
+	// clock is read generously: the whole call fits inside one bound.
+	if elapsed > budget+schedulingMargin {
+		t.Fatalf("the whole exchange ran for %s against a single %s bound", elapsed, budget)
+	}
+	// And the peer was given the remainder rather than a window of its own,
+	// which is what distinguishes one budget from two that happen to overlap.
+	if peerShare >= budget {
+		t.Fatalf("the peer was given %s, a full %s window of its own rather than what resolution left", peerShare, budget)
+	}
+}
+
 // isDenied reports whether an error is the governed refusal the egress policy
 // answers with.
 func isDenied(err error) bool {
