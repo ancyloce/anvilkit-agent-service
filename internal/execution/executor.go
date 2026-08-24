@@ -1959,6 +1959,45 @@ func validEvidenceReference(value string) bool {
 	return true
 }
 
+// operatorRecoveryProblem classifies an error escaping the audited operator
+// recovery path before it reaches the operator who is holding the pager.
+//
+// Every deliberate refusal on this path is already a typed problem and is
+// returned unchanged, so classification only ever applies to an error that no
+// guard decided: a store conflict raised as the run's own commit
+// reconciliation moves underneath the resolution, which is most likely as the
+// bounded commit hold window closes and the workflow releases the run.
+//
+// Such an error is answered as DOMAIN_OUTCOME_UNCERTAIN — 503,
+// "safe-after-backoff" — rather than as an unclassified internal error. The
+// distinction is not cosmetic. The whole sequence converges under repetition:
+// the journal resolution is a compare-and-set that admits one winner and
+// returns the recorded decision to an identical replay, the evidence is
+// idempotent by its derived identity, and settlement is idempotent by the
+// operation. Repeating the identical decision is therefore always safe, and
+// is the action that succeeds. INTERNAL_ERROR carries retryability "never",
+// which tells the operator the opposite of the truth about the one condition
+// this path can transiently be in.
+//
+// Context cancellation is the caller's own deadline, not a decision about the
+// run, and passes through unchanged.
+func operatorRecoveryProblem(err error) error {
+	if err == nil {
+		return nil
+	}
+	var details problem.Details
+	if errors.As(err, &details) {
+		return err
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	uncertain := problem.New(problem.CodeDomainOutcomeUncertain, "")
+	uncertain.Retryability = "safe-after-backoff"
+	uncertain.Detail = "the audited resolution raced the run's own commit reconciliation; repeat the identical decision"
+	return uncertain
+}
+
 func stableProblem(code problem.Code, detail string) problem.Details {
 	value := problem.New(code, "")
 	value.Detail = detail
@@ -1981,7 +2020,19 @@ func stableProblem(code problem.Code, detail string) problem.Details {
 // winner and one conflict; and a replay of the same decision converges on the
 // recorded one instead of deciding twice. It never contacts the domain owner
 // and never resends anything.
+// An error that no guard on this path decided is classified before it reaches
+// the operator, so a transient race with the run's own reconciliation is
+// answered as retryable rather than as an unclassified internal error: see
+// operatorRecoveryProblem.
 func (e *Executor) ResolveEscalation(ctx context.Context, scope runs.Scope, id runs.ID, expectedVersion uint64, command OperatorResolution) (runs.Snapshot, error) {
+	snapshot, err := e.resolveEscalation(ctx, scope, id, expectedVersion, command)
+	if err != nil {
+		return runs.Snapshot{}, operatorRecoveryProblem(err)
+	}
+	return snapshot, nil
+}
+
+func (e *Executor) resolveEscalation(ctx context.Context, scope runs.Scope, id runs.ID, expectedVersion uint64, command OperatorResolution) (runs.Snapshot, error) {
 	if err := command.Validate(); err != nil {
 		return runs.Snapshot{}, err
 	}
@@ -2191,7 +2242,17 @@ func submissionStatusOf(outcome string) (domaincommit.Status, bool) {
 // answer finalized the journal and only the run transition is outstanding. It
 // never contacts the domain owner and never resends anything; the decided
 // journal is its only input, and settling converges under replay.
+// An error that no guard on this path decided is classified the same way
+// ResolveEscalation classifies it: see operatorRecoveryProblem.
 func (e *Executor) ResolveEscalatedSubmission(ctx context.Context, scope runs.Scope, id runs.ID) (runs.Snapshot, error) {
+	snapshot, err := e.resolveEscalatedSubmission(ctx, scope, id)
+	if err != nil {
+		return runs.Snapshot{}, operatorRecoveryProblem(err)
+	}
+	return snapshot, nil
+}
+
+func (e *Executor) resolveEscalatedSubmission(ctx context.Context, scope runs.Scope, id runs.ID) (runs.Snapshot, error) {
 	snapshot, err := e.cfg.Runs.Get(ctx, scope, id)
 	if err != nil {
 		return runs.Snapshot{}, fmt.Errorf("load run for operator settlement: %w", err)

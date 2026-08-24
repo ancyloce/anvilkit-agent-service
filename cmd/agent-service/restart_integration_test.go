@@ -690,7 +690,31 @@ func resolveEscalationOverAPI(ctx context.Context, t *testing.T, composition *re
 		t.Fatalf("prose basis status=%d body=%s, want the canonical contract to reject it", status, payload)
 	}
 
-	status, payload, headers := call(identities.operator, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve", held, body)
+	// The settle half of operator recovery can transiently lose a race with
+	// the run's own commit reconciliation, most likely as the bounded commit
+	// hold window closes and the workflow releases the run. The governed
+	// answer to that is DOMAIN_OUTCOME_UNCERTAIN — 503, "safe-after-backoff":
+	// the audited decision is already durable, the sequence converges under
+	// repetition, and repeating the identical command is the action that
+	// succeeds. Honouring that contract is what makes this scenario
+	// deterministic. The idempotency key and the observed revision are held
+	// fixed across the repeat, so it stays the same command rather than
+	// becoming a new one, and a run that did not hold at the submit boundary
+	// still fails the precondition rather than being retried into success.
+	var status int
+	var payload []byte
+	var headers http.Header
+	uncertainDeadline := time.Now().Add(30 * time.Second)
+	for {
+		status, payload, headers = call(identities.operator, runPath+"/domain-operations/"+operationID+"/resolution", "restart-resolve", held, body)
+		if status != http.StatusServiceUnavailable || !bytes.Contains(payload, []byte(`"DOMAIN_OUTCOME_UNCERTAIN"`)) {
+			break
+		}
+		if time.Now().After(uncertainDeadline) {
+			t.Fatalf("operator resolution stayed uncertain past its deadline: body=%s", payload)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	if status != http.StatusOK {
 		t.Fatalf("operator resolution status=%d body=%s", status, payload)
 	}

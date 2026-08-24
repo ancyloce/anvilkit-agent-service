@@ -763,3 +763,103 @@ func TestOperatorResolutionConvergesWhenEvidenceFailsAfterTheJournalIsDecided(t 
 		t.Fatalf("operator-recovery evidence records after retries=%d, want exactly one", stored)
 	}
 }
+
+// TestOperatorResolutionClassifiesAnUnclassifiedSettleConflict fixes the
+// operator-facing answer to a transient fault in the settle half of operator
+// recovery.
+//
+// The settle half runs after the audited decision is already durable, and it
+// converges under repetition by construction. So the only honest answer to a
+// fault there is "this is uncertain, repeat the identical decision" — a
+// governed, retryable problem. What escaped before was the raw error, which
+// the surface rendered as INTERNAL_ERROR with retryability "never": both
+// unclassified, and precisely backwards about the one thing an on-call
+// operator needs to know. CLAUDE.md is explicit that a misclassified error is
+// a reliability bug.
+//
+// Every deliberate refusal must still answer with its own code, so the
+// classification is proved not to swallow the guards it sits behind.
+func TestOperatorResolutionClassifiesAnUnclassifiedSettleConflict(t *testing.T) {
+	var recorder *refusingEvidence
+	h := newHarness(t, [][]byte{finalPlan()}, func(options *harnessOptions) {
+		options.evidence = func(inner execution.EvidenceRecorder) execution.EvidenceRecorder {
+			recorder = newRefusingEvidence(inner, "domain.submission-operator-resolved")
+			return recorder
+		}
+	})
+	operation, done := escalatedRun(t, h, "approve-crash")
+	defer done()
+	h.grantRole(authority.RoleOperator)
+	command := execution.OperatorResolution{
+		OperationID: operation.ID,
+		Outcome:     execution.DomainRejected,
+		OperatorID:  "operator.oncall",
+		Basis:       operatorEvidenceBasis,
+	}
+
+	// A decided guard keeps its own classification. This one returns before
+	// the settle half is reached, so it also proves the wrapper does not
+	// reclassify a refusal the path deliberately made.
+	if _, err := h.executor.ResolveEscalation(context.Background(), testScope(), testRunID, h.snapshot().Version+7, command); !hasProblemCode(err, problem.CodeVersionConflict) {
+		t.Fatalf("stale precondition err=%v, want the guard's own VERSION_CONFLICT", err)
+	}
+
+	// The settle half now fails with an error no guard decided.
+	_, err := h.executor.ResolveEscalation(context.Background(), testScope(), testRunID, h.snapshot().Version, command)
+	var details problem.Details
+	if !errors.As(err, &details) {
+		t.Fatalf("err=%v, want a governed problem rather than an unclassified error reaching the operator", err)
+	}
+	if details.Code != string(problem.CodeDomainOutcomeUncertain) {
+		t.Fatalf("code=%s, want %s", details.Code, problem.CodeDomainOutcomeUncertain)
+	}
+	if details.Retryability != "safe-after-backoff" {
+		t.Fatalf("retryability=%q, want safe-after-backoff: repeating the identical decision is the action that succeeds", details.Retryability)
+	}
+	if details.Status != 503 {
+		t.Fatalf("status=%d, want 503 rather than an unclassified 500", details.Status)
+	}
+	if recorder.count("domain.submission-operator-resolved") != 0 {
+		t.Fatalf("evidence appended %d times, want none once the append failed", recorder.count("domain.submission-operator-resolved"))
+	}
+
+	// The run is still held and the decision is still the recorded one, so the
+	// advice the problem carries is true rather than merely reassuring.
+	if snapshot := h.snapshot(); snapshot.Status != runs.AwaitingDomainConfirmation {
+		t.Fatalf("run=%s, want it still held for the repeat", snapshot.Status)
+	}
+	settled, err := h.executor.ResolveEscalation(context.Background(), testScope(), testRunID, h.snapshot().Version, command)
+	if err != nil || settled.Status != runs.Failed {
+		t.Fatalf("repeat=%+v err=%v, want the identical decision to converge and settle", settled, err)
+	}
+}
+
+// TestSettlementOnlyRecoveryClassifiesAnUnclassifiedConflict proves the second
+// operator-recovery entry point answers a settle-path fault the same way. It
+// exists for the case where the owner's late answer decided the journal and
+// only the run transition is outstanding, and it reaches the same settle half,
+// so an unclassified error must not escape from it either.
+func TestSettlementOnlyRecoveryClassifiesAnUnclassifiedConflict(t *testing.T) {
+	h := newHarness(t, [][]byte{finalPlan()}, func(options *harnessOptions) {
+		options.evidence = func(inner execution.EvidenceRecorder) execution.EvidenceRecorder {
+			return newRefusingEvidence(inner, "domain.submission-operator-resolved")
+		}
+	})
+	operation, done := escalatedRun(t, h, "approve-crash")
+	defer done()
+	h.grantRole(authority.RoleOperator)
+	journalScope := domaincommit.Scope{WorkspaceID: testWorkspace, ProjectID: testProject}
+
+	// The owner's late answer decides the journal directly; only the run
+	// transition is left for the settlement-only path.
+	if _, err := h.submissions.Resolve(context.Background(), journalScope, operation.ID, domaincommit.Rejected, "owner.late-answer", operatorEvidenceBasis, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	settled, err := h.executor.ResolveEscalatedSubmission(context.Background(), testScope(), testRunID)
+	if err != nil {
+		t.Fatalf("settlement-only recovery=%+v err=%v, want the decided journal to settle the run", settled, err)
+	}
+	if settled.Status != runs.Failed {
+		t.Fatalf("settlement-only recovery=%s, want the recorded outcome", settled.Status)
+	}
+}
