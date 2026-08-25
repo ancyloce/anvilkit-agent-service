@@ -148,11 +148,40 @@ func (p *ServiceArtifactPort) ensure(ctx context.Context, query ArtifactQuery, t
 	if err != nil {
 		return fmt.Errorf("read candidate artifact: %w", err)
 	}
+	// Product compatibility is decided here, before the record advances out of
+	// a revocable state. The lifecycle already proved the transition is legal;
+	// this proves the artifact is one the admitted operation may produce, so a
+	// run cannot carry another domain's artifact to a final state.
+	//
+	// The gate is on crossing into finalization, not on the requested target
+	// being exactly Finalized: advance walks one state at a time, so a commit
+	// requested over a still-valid record passes through Finalized on its way
+	// and must be judged by the same rule.
+	if crossesFinalization(record.State, target) && !artifacts.FinalizableBy(query.Operation, record.Kind) {
+		return fmt.Errorf("artifact port: operation %q may not finalize a %q artifact", query.Operation, record.Kind)
+	}
 	now := p.clock.Now()
 	if now.IsZero() {
 		return fmt.Errorf("artifact port: authoritative time is unavailable")
 	}
 	return p.advance(ctx, record, target, now)
+}
+
+// crossesFinalization reports whether advancing a record from current to
+// target enters the finalized state. A record already at or past Finalized has
+// been judged once and is not re-judged; a record short of it that is being
+// carried to Finalized or beyond is.
+func crossesFinalization(current, target artifacts.State) bool {
+	currentRank, ok := lifecycleRank(current)
+	if !ok {
+		return false
+	}
+	targetRank, ok := lifecycleRank(target)
+	if !ok {
+		return false
+	}
+	finalRank, _ := lifecycleRank(artifacts.Finalized)
+	return currentRank < finalRank && targetRank >= finalRank
 }
 
 // lifecycleRank orders the forward lifecycle so convergence can tell an

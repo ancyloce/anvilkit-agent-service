@@ -170,6 +170,12 @@ type ArtifactQuery struct {
 	ProjectID      string
 	RunID          string
 	ArtifactDigest string
+	// Operation is the operation the run was admitted under. Finalization
+	// uses it to decide whether the artifact being finalized is one this
+	// operation was ever admitted to produce, so a page run cannot finalize a
+	// component design and a component-design run cannot finalize a page
+	// candidate. It is a server-owned fact carried from the run snapshot.
+	Operation string
 }
 
 // ArtifactEligibility is the authoritative answer to whether the candidate
@@ -309,8 +315,12 @@ type Config struct {
 	// changed access to them, and an incident reads one chain rather than
 	// two.
 	DisclosureAudit DisclosureAudit
-	Clock           Clock
-	InputTTL        time.Duration
+	// ArtifactContentGrants signs bounded, expiring read access to artifact
+	// bytes. It is separate from ArtifactMetadata because content and metadata
+	// are different disclosures: one describes an artifact, the other is it.
+	ArtifactContentGrants ArtifactContentGrantIssuer
+	Clock                 Clock
+	InputTTL              time.Duration
 	// BudgetTTL bounds how long a run's standing reservation stays
 	// dispatchable before requiring settlement or review.
 	BudgetTTL         time.Duration
@@ -1398,6 +1408,7 @@ func (e *Executor) ResolveReview(ctx context.Context, op workflow.OpID, input wo
 			ProjectID:      snapshot.Target.ProjectID,
 			RunID:          string(id),
 			ArtifactDigest: input.ArtifactDigest,
+			Operation:      snapshot.Operation,
 		})
 	}
 	if !governedEffect(snapshot) {
@@ -2391,6 +2402,7 @@ func (e *Executor) settleDomain(ctx context.Context, scope runs.Scope, snapshot 
 		if err := e.cfg.Artifacts.EnsureCommitted(ctx, ArtifactQuery{
 			WorkspaceID:    snapshot.WorkspaceID,
 			ProjectID:      snapshot.Target.ProjectID,
+			Operation:      snapshot.Operation,
 			RunID:          string(id),
 			ArtifactDigest: input.ArtifactDigest,
 		}); err != nil {

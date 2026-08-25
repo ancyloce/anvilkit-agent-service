@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
+	"github.com/ancyloce/anvilkit-agent-service/internal/artifacts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/modelgateway"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
@@ -492,11 +493,20 @@ func (a *ControlledCommitAuthority) Issue(_ context.Context, request Authorizati
 // review acceptance finalizes them, a confirmed effect commits them, and only
 // a finalized artifact is eligible for a governed effect. Withdraw models
 // quarantine, deletion, or expiry between approval and commit.
+//
+// It also enforces the product-compatibility rule, because a corpus that
+// cannot fail a rule cannot be evidence that the rule holds: an artifact whose
+// kind the run's operation was never admitted to produce is refused here for
+// the same reason and with the same vocabulary the real owner refuses it.
 type ControlledArtifactPort struct {
 	lock       sync.Mutex
 	ineligible map[string]string
 	states     map[string]string
-	queries    []ArtifactQuery
+	// kinds is what each recorded digest is. The real owner reads it off the
+	// stored record; here it is kept from the candidate that declared it, so
+	// finalization can ask the same question.
+	kinds   map[string]artifacts.Kind
+	queries []ArtifactQuery
 }
 
 // Queries returns every eligibility question the commit gate asked.
@@ -507,7 +517,7 @@ func (p *ControlledArtifactPort) Queries() []ArtifactQuery {
 }
 
 func NewControlledArtifactPort() *ControlledArtifactPort {
-	return &ControlledArtifactPort{ineligible: make(map[string]string), states: make(map[string]string)}
+	return &ControlledArtifactPort{ineligible: make(map[string]string), states: make(map[string]string), kinds: make(map[string]artifacts.Kind)}
 }
 
 // Withdraw makes one artifact digest ineligible from the next check onwards.
@@ -525,6 +535,7 @@ func (p *ControlledArtifactPort) RecordCandidate(_ context.Context, candidate Ar
 	defer p.lock.Unlock()
 	if _, recorded := p.states[candidate.Digest]; !recorded {
 		p.states[candidate.Digest] = "valid"
+		p.kinds[candidate.Digest] = candidate.Kind
 	}
 	return nil
 }
@@ -534,6 +545,12 @@ func (p *ControlledArtifactPort) EnsureFinalized(_ context.Context, query Artifa
 	defer p.lock.Unlock()
 	switch p.states[query.ArtifactDigest] {
 	case "valid":
+		// Only this transition crosses finalization: EnsureCommitted below
+		// refuses anything that is not already finalized, so a candidate can
+		// never reach committed without passing through here.
+		if kind := p.kinds[query.ArtifactDigest]; !artifacts.FinalizableBy(query.Operation, kind) {
+			return fmt.Errorf("controlled artifact port: operation %q may not finalize a %q artifact", query.Operation, kind)
+		}
 		p.states[query.ArtifactDigest] = "finalized"
 		return nil
 	case "finalized", "committed":
