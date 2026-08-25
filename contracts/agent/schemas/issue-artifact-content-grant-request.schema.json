@@ -1,0 +1,50 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/issue-artifact-content-grant-request.schema.json",
+  "title": "IssueArtifactContentGrantRequest contract",
+  "description": "Intent-only command asking for bounded, expiring read access to one immutable artifact's bytes. It states which artifact is to be read and the governed purpose the reader declares for reading it. The purpose travels in the command body rather than in a header so that it is covered by the request digest the idempotency key binds: a retry under the same key that declares a different purpose is a different request and is refused as key reuse, instead of silently returning a capability issued for a purpose nobody asked for. No identity is carried on the wire: the acting reader, the workspace, and the project are derived by Agent Service from the verified request authority and the current authority register, and whether that reader may read this artifact for this purpose is decided against current authority rather than against anything the command asserts.",
+  "type": "object",
+  "minProperties": 3,
+  "maxProperties": 3,
+  "required": [
+    "kind",
+    "artifactId",
+    "purpose"
+  ],
+  "properties": {
+    "kind": {
+      "const": "IssueArtifactContentGrantRequest"
+    },
+    "artifactId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "purpose": {
+      "enum": [
+        "producer",
+        "scanner",
+        "review",
+        "approval",
+        "finalization",
+        "commit",
+        "read"
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "IssueArtifactContentGrantRequest",
+    "componentName": "anvilkit.contract.schema.issue-artifact-content-grant-request",
+    "owner": "Agent Service Metadata owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/artifactId",
+      "/purpose"
+    ],
+    "maximumSerializedBytes": 1024,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json"
+    ]
+  }
+}

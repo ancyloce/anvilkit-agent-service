@@ -1,0 +1,282 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/agent-runtime-manifest.schema.json",
+  "title": "AgentRuntimeManifest contract",
+  "description": "Immutable binding between one Agent Runtime Unit and the single AgentDefinition it is permitted to execute. It pins the image, provenance, and invocation protocol the unit was released with, the workload identity and the closed set of control-plane endpoints it may reach, and the queue, concurrency, resource, scaling, telemetry, drain, and rollback profile it is operated under. It carries execution-plane binding only: it never confers AgentRun, workflow, Tool, budget, approval, artifact, or business authority, and a runtime unit cannot reach another Agent Runtime Unit through it.",
+  "type": "object",
+  "minProperties": 10,
+  "maxProperties": 10,
+  "required": [
+    "kind",
+    "runtimeUnitId",
+    "definition",
+    "image",
+    "protocol",
+    "workload",
+    "execution",
+    "scaling",
+    "telemetry",
+    "release"
+  ],
+  "properties": {
+    "kind": {
+      "const": "AgentRuntimeManifest"
+    },
+    "runtimeUnitId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "definition": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/DefinitionReference"
+    },
+    "image": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "required": [
+        "imageDigest",
+        "sourceCommit",
+        "provenanceDigest",
+        "signatureDigest"
+      ],
+      "properties": {
+        "imageDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "sourceCommit": {
+          "type": "string",
+          "minLength": 40,
+          "maxLength": 40,
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "provenanceDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "signatureDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "protocol": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "invocationProtocolDigest",
+        "contractBomReference"
+      ],
+      "properties": {
+        "invocationProtocolDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "contractBomReference": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ContractBomReference"
+        }
+      },
+      "additionalProperties": false
+    },
+    "workload": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "required": [
+        "workloadIdentity",
+        "audience",
+        "allowedControlPlaneEndpoints",
+        "networkPolicy"
+      ],
+      "properties": {
+        "workloadIdentity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^urn:anvilkit:workload:[a-z0-9][a-z0-9-]{1,63}$"
+        },
+        "audience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$"
+        },
+        "allowedControlPlaneEndpoints": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^/v1/[A-Za-z0-9._~/{}-]{1,240}$"
+          }
+        },
+        "networkPolicy": {
+          "enum": [
+            "deny-all-except-allowed-endpoints"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "execution": {
+      "type": "object",
+      "minProperties": 6,
+      "maxProperties": 6,
+      "required": [
+        "taskChannel",
+        "maxConcurrency",
+        "timeoutMilliseconds",
+        "resourceClass",
+        "cpuMillis",
+        "memoryBytes"
+      ],
+      "properties": {
+        "taskChannel": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^anvilkit\\.agent\\.task\\.[a-z0-9][a-z0-9-]{1,63}$"
+        },
+        "maxConcurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "timeoutMilliseconds": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 3600000
+        },
+        "resourceClass": {
+          "enum": [
+            "interactive-cpu",
+            "batch-cpu",
+            "interactive-gpu",
+            "batch-gpu"
+          ]
+        },
+        "cpuMillis": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64000
+        },
+        "memoryBytes": {
+          "type": "integer",
+          "minimum": 1048576,
+          "maximum": 68719476736
+        }
+      },
+      "additionalProperties": false
+    },
+    "scaling": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "minReplicas",
+        "maxReplicas",
+        "targetConcurrency"
+      ],
+      "properties": {
+        "minReplicas": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        },
+        "maxReplicas": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        },
+        "targetConcurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1024
+        }
+      },
+      "additionalProperties": false
+    },
+    "telemetry": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "namespace",
+        "healthPath",
+        "readinessPath"
+      ],
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^anvilkit_agent_runtime_[a-z0-9][a-z0-9_]{1,63}$"
+        },
+        "healthPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^/[A-Za-z0-9._~/-]{0,127}$"
+        },
+        "readinessPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^/[A-Za-z0-9._~/-]{0,127}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "release": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "required": [
+        "owner",
+        "rolloutPolicy",
+        "drainSeconds",
+        "rollbackTarget"
+      ],
+      "properties": {
+        "owner": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "rolloutPolicy": {
+          "enum": [
+            "new-runs-only"
+          ]
+        },
+        "drainSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600
+        },
+        "rollbackTarget": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "AgentRuntimeManifest",
+    "componentName": "anvilkit.contract.schema.agent-runtime-manifest",
+    "owner": "Agent Runtime Release owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/runtimeUnitId",
+      "/definition",
+      "/image",
+      "/protocol",
+      "/workload",
+      "/execution",
+      "/scaling",
+      "/telemetry",
+      "/release"
+    ],
+    "maximumSerializedBytes": 65536,
+    "descriptions": []
+  }
+}

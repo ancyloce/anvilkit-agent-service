@@ -1,0 +1,76 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/artifact-content-grant.schema.json",
+  "title": "ArtifactContentGrant contract",
+  "description": "Bounded, expiring permission to read one artifact's bytes.\n\nThe governed metadata route describes an artifact; it never returns content. This grant is the separate, explicitly governed channel content travels on, so a disclosure of bytes is always a decision that was made, recorded, and time-boxed rather than a side effect of reading metadata.\n\nA grant is scoped to one artifact at one content digest, for one actor, for one declared purpose from the governed access vocabulary, and it expires. `securityGeneration` pins the generation the grant was issued under: an artifact whose access is revoked advances its generation, and a grant issued before that no longer matches, so revocation takes effect on grants already in flight rather than only on new ones.\n\n`url` is a capability. Anyone holding it holds the access it names for as long as it lives, so it is bounded, short-lived, and never logged. The grant conveys read access to bytes and nothing else: it approves nothing, finalizes nothing, and cannot change an artifact's custody or lifecycle.",
+  "type": "object",
+  "minProperties": 8,
+  "maxProperties": 8,
+  "required": [
+    "kind",
+    "artifactId",
+    "digest",
+    "securityGeneration",
+    "purpose",
+    "actorId",
+    "url",
+    "expiresAt"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ArtifactContentGrant"
+    },
+    "artifactId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactId"
+    },
+    "digest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "securityGeneration": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "purpose": {
+      "enum": [
+        "producer",
+        "scanner",
+        "review",
+        "approval",
+        "finalization",
+        "commit",
+        "read"
+      ]
+    },
+    "actorId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ActorId"
+    },
+    "url": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "expiresAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ArtifactContentGrant",
+    "componentName": "anvilkit.contract.schema.artifact-content-grant",
+    "owner": "Agent Service Metadata owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/artifactId",
+      "/digest",
+      "/securityGeneration",
+      "/purpose",
+      "/actorId",
+      "/expiresAt"
+    ],
+    "maximumSerializedBytes": 8192,
+    "descriptions": [
+      "contracts/agent/openapi/agent-service.openapi.json"
+    ]
+  }
+}

@@ -16,7 +16,7 @@
       "const": "IssuedApplyAuthorization"
     },
     "authorization": {
-      "$ref": "anvilkit://schema/apply-authorization?digest=sha256:ad07f9d74ca750dac5b682247ee8109501c4d165aea4d1024f1fa316b92e3e1b"
+      "$ref": "anvilkit://schema/apply-authorization?digest=sha256:f9605d14fe8ea298ca523316c947202d5b3e43f87d6b31519cb36c1051ecd1f8"
     },
     "compactJws": {
       "type": "string",

@@ -2,7 +2,7 @@
   "traceVersion": 1,
   "language": "go",
   "packageVersion": "0.1.0",
-  "sourceSetSha256": "4b52f59fbbe4c55ff37818c3705cfa9e76fc38f1b0f2344e672fbdbe7849a763",
+  "sourceSetSha256": "e966f8fa88e6f67f510b939f5da27b804f390407f70309a941682c83637fd6e3",
   "sources": [
     {
       "path": "contracts/agent/schemas/agent-artifact.schema.json",
@@ -33,6 +33,14 @@
       "sha256": "e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564"
     },
     {
+      "path": "contracts/agent/schemas/agent-runtime-manifest.schema.json",
+      "sha256": "de8a0324315e3f25201113a5b03dd320c1025bba2ef313cbbd25e4e910b10136"
+    },
+    {
+      "path": "contracts/agent/schemas/agent-runtime-result.schema.json",
+      "sha256": "8272047727a6a468e4bddbd579cf26c7c7307fce63b5f50297c933dbda2392d1"
+    },
+    {
       "path": "contracts/agent/schemas/agent-stream-delta.schema.json",
       "sha256": "0d64114cedd078202f1046fbadd7291544a590b9019422af77ce2f8c4cb8f590"
     },
@@ -42,15 +50,27 @@
     },
     {
       "path": "contracts/agent/schemas/apply-authorization.schema.json",
-      "sha256": "ad07f9d74ca750dac5b682247ee8109501c4d165aea4d1024f1fa316b92e3e1b"
+      "sha256": "f9605d14fe8ea298ca523316c947202d5b3e43f87d6b31519cb36c1051ecd1f8"
     },
     {
       "path": "contracts/agent/schemas/approval-request.schema.json",
       "sha256": "0c12c96f59986ac18d9d689f0051aa6c74023ccf4ac7746436ffc90a3cdfeec8"
     },
     {
+      "path": "contracts/agent/schemas/artifact-content-grant.schema.json",
+      "sha256": "d4608f216d773faf2747d5350440deb844e17d93a7602e06397d0f18d1c81a3c"
+    },
+    {
+      "path": "contracts/agent/schemas/catalog-snapshot.schema.json",
+      "sha256": "b5eeea33cae5a3d543ecffaf9ce39cd0401d651468963174db6414b699a12573"
+    },
+    {
       "path": "contracts/agent/schemas/compiled-context.schema.json",
       "sha256": "e535dd923ac156840b06932f5a54aa7e70ea6dcc6f0bce8314a6e562ad784c33"
+    },
+    {
+      "path": "contracts/agent/schemas/component-design-spec.schema.json",
+      "sha256": "6d27019db26929dca79a2d30871952e3e2c7b902ef4e67e30e2d6520d1702236"
     },
     {
       "path": "contracts/agent/schemas/component-package-spec.schema.json",
@@ -101,8 +121,32 @@
       "sha256": "653d8dba345b8e1fae093dd491321a6cb4b5b7b56b896efe88c38739be0e8bca"
     },
     {
+      "path": "contracts/agent/schemas/issue-artifact-content-grant-request.schema.json",
+      "sha256": "2270580ea7b2e0226b8450130e4ee7312db2b101650fc012ea2f90823892c0b1"
+    },
+    {
       "path": "contracts/agent/schemas/issued-apply-authorization.schema.json",
-      "sha256": "6b6daee532a781483e8d3ccdc1a152e65837ad3529ba47d2b0c01e39a354dacf"
+      "sha256": "c9a436fa08c5e1c43c1bbfda5ad87e0b7aa4c1d2ada620929284028fbb7b3b5e"
+    },
+    {
+      "path": "contracts/agent/schemas/page-candidate.schema.json",
+      "sha256": "21292ad166afb23da381528343829ea2be75d7520364839759e9bd1d05f38e69"
+    },
+    {
+      "path": "contracts/agent/schemas/page-preview-result.schema.json",
+      "sha256": "c71851a8c237da766ba1ae3a8986277949f6c2bfb9fda5319dc2b4a3a92041c7"
+    },
+    {
+      "path": "contracts/agent/schemas/page-preview-task.schema.json",
+      "sha256": "e3e10aac6800a116f1a9e61154a97f41d0b3a749fdfdacccbf1ee506ad8fc1e2"
+    },
+    {
+      "path": "contracts/agent/schemas/pagix-commit-receipt.schema.json",
+      "sha256": "cd7684170789b89099f2fb7fea40530414e4d40107341434bfec7b6e566ff9a2"
+    },
+    {
+      "path": "contracts/agent/schemas/persist-authorized-page-request.schema.json",
+      "sha256": "cf5c0112f9781b881023c475657e7048e189bbdca7b399f001d963ae50d3eaa6"
     },
     {
       "path": "contracts/agent/schemas/problem-details.schema.json",
@@ -150,18 +194,18 @@
     },
     {
       "path": "contracts/agent/openapi/agent-service.openapi.json",
-      "sha256": "795e764aa32333659eb2dd47b6f666ea40669933a4ac4796a59f3bcf8a65f0c7"
+      "sha256": "475d66561676066313d47d3e9aaf7168b284db1828e22709beec895dbf469953"
     },
     {
       "path": "contracts/agent/openapi/pagix-agent-integration.openapi.json",
-      "sha256": "df7beaa77c923a5444b1da3115a1ff208126b07bd30aa8d6c216870ac03b17e6"
+      "sha256": "1176b1d382cc64c51cef747efec0a83025237ece6b422a443c0802afe451a4be"
     }
   ],
   "projections": {
-    "schemaBundleSha256": "c22fb29a5601cddde2a967f4a3d5f81170774d4708000d5710192cd36e9dfe6b",
+    "schemaBundleSha256": "bd5d617fbced5e7a10a5de3e7abe6447d435b04f3e5dad6c08b286f2559299a4",
     "openapi": {
-      "agent-service": "bdf43c31ee6e8f027a564c8aab5792efc6f22ea256a56505674cb9a45135d5f7",
-      "pagix-agent-integration": "11df5357ff193bb05a96cb75828c4edc6ddc7e4b35bcf28ec68e17f9c8996ca9"
+      "agent-service": "6236ad2bff2dbafdb312f21db97432d491c98606f9df05a55f908234e16f99fc",
+      "pagix-agent-integration": "5dc57a15e1ba0305315d33b36668b7eaf62b7902ac1eceeb295b3abb943a65cd"
     }
   },
   "generators": {
@@ -175,15 +219,15 @@
     }
   },
   "output": {
-    "bytes": 699245,
+    "bytes": 898122,
     "files": 3,
-    "sha256": "f348ce76cd14fd2a152c589e73ce4d64d7519e431f79e667365bb0933168f48c",
+    "sha256": "9d7ba2f5f309f9f7bf2b40654fe750272943b75e731c93afed0ca98047171125",
     "directories": [
       {
         "directory": "generated",
-        "bytes": 699245,
+        "bytes": 898122,
         "files": 3,
-        "sha256": "e31228c78ee76adea3bb9a798b7d998b6d71bc54e633da1ab25951a280b4e645"
+        "sha256": "d2f71f066f4fbb29e913b0f2bbb83326d315e2dcd0c67a4c5032b404ac65c74d"
       }
     ]
   }

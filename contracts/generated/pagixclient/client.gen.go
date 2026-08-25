@@ -87,6 +87,7 @@ type ApplyAuthorization struct {
 	Audience          interface{}                     `json:"audience"`
 	AuthorizationId   SharedPrimitivesAuthorizationId `json:"authorizationId"`
 	BaseRevision      SharedPrimitivesOpaqueId        `json:"baseRevision"`
+	CatalogDigest     SharedPrimitivesDigest          `json:"catalogDigest"`
 	ContractBomDigest SharedPrimitivesDigest          `json:"contractBomDigest"`
 	DefinitionDigest  SharedPrimitivesDigest          `json:"definitionDigest"`
 	ExpiresAt         SharedPrimitivesTimestamp       `json:"expiresAt"`
@@ -107,6 +108,49 @@ type IssuedApplyAuthorization struct {
 	Authorization ApplyAuthorization `json:"authorization"`
 	CompactJws    string             `json:"compactJws"`
 	Kind          interface{}        `json:"kind"`
+}
+
+// PagixCommitReceipt Domain result Pagix returns after committing one approved page candidate. It names the Apply Authorization it redeemed, the previous and new revision identifiers, the committed Puck Data digest and the candidate digest it came from, the durable outbox identifier written in the same transaction, the acting actor and the effective permission decision, whether this call committed or replayed an earlier identical commit, and the commit timestamp and trace. The authorization redemption, the new revision, the idempotency outcome, and the outbox event are persisted in one database transaction; an asynchronous publication is not evidence of that invariant. The receipt reports a commit that already happened — it authorizes nothing and cannot be replayed to cause one. permissionDecision.decision admits only 'allowed', so a receipt for a denied commit is unrepresentable.
+type PagixCommitReceipt struct {
+	ActorId                 SharedPrimitivesActorId   `json:"actorId"`
+	CandidateDigest         SharedPrimitivesDigest    `json:"candidateDigest"`
+	CommittedAt             SharedPrimitivesTimestamp `json:"committedAt"`
+	CommittedPageDataDigest SharedPrimitivesDigest    `json:"committedPageDataDigest"`
+	IdempotencyOutcome      interface{}               `json:"idempotencyOutcome"`
+	Kind                    interface{}               `json:"kind"`
+	NewRevision             SharedPrimitivesOpaqueId  `json:"newRevision"`
+	OutboxId                SharedPrimitivesOpaqueId  `json:"outboxId"`
+	PermissionDecision      struct {
+		Decision interface{}                     `json:"decision"`
+		Policy   SharedPrimitivesPolicyReference `json:"policy"`
+	} `json:"permissionDecision"`
+	PreviousRevision        SharedPrimitivesOpaqueId        `json:"previousRevision"`
+	RedeemedAuthorizationId SharedPrimitivesAuthorizationId `json:"redeemedAuthorizationId"`
+	TraceContext            SharedPrimitivesTraceContext    `json:"traceContext"`
+}
+
+// PersistAuthorizedPageRequest The complete command to commit one approved page candidate. It carries the issued Apply Authorization, the reviewed PageCandidate that authorization was issued over, and the page document that candidate names, because the domain owner cannot create a revision from a document it never receives and must not fetch page bytes over a channel the authorization does not cover.
+//
+// `pageCandidate` is the reviewed PageCandidate serialized as JSON and `pageDocument` is the canonical Puck Data serialized as JSON. Both are carried verbatim as strings rather than as embedded objects: their digests are taken over exact bytes, and re-serializing an embedded object would change those bytes and break every check below. `candidateDigest` is the SHA-256 of the `pageCandidate` bytes and `pageDocumentDigest` is the SHA-256 of the `pageDocument` bytes.
+//
+// The bindings that make this safe, all four verifiable by the domain owner from this request alone:
+//
+// 1. `candidateDigest` MUST equal the authorization's `artifactDigest`. The authorized artifact is the reviewed PageCandidate — the run's one final product — so an authorization can only ever commit the candidate it was issued for.
+// 2. `candidateDigest` MUST equal the SHA-256 of the `pageCandidate` bytes, so the carried candidate is the one the authorization names rather than another candidate with a borrowed digest.
+// 3. `pageDocumentDigest` MUST equal the SHA-256 of the `pageDocument` bytes.
+// 4. `pageDocumentDigest` MUST equal the `digest` of the `pageData` reference inside `pageCandidate`. `pageData` is one of the candidate's identity fields, so the candidate's own digest already covers it: the document is bound to the candidate, and the candidate to the authorization. Substituting either the document or the candidate breaks the chain and the commit is refused.
+//
+// `pageDocument` is bounded at 744 KiB rather than the 768 KiB a document alone could occupy: the reviewed candidate is carried in the same request at its own contract's full 256 KiB, and the governed 1 MiB ceiling for a canonical document is not negotiable. Carrying the candidate is what lets the domain owner verify the chain itself, and this is what that costs.
+//
+// The request authorizes nothing on its own. It carries an authorization issued elsewhere and is refused unless that authorization verifies, is unspent, and still matches the page's current revision.
+type PersistAuthorizedPageRequest struct {
+	// Authorization Issued Apply Authorization response governed by ADR-021: the canonical ApplyAuthorization document plus its compact JWS carrier. The document must be byte-equivalent to the decoded JWS payload after canonicalization.
+	Authorization      IssuedApplyAuthorization `json:"authorization"`
+	CandidateDigest    SharedPrimitivesDigest   `json:"candidateDigest"`
+	Kind               interface{}              `json:"kind"`
+	PageCandidate      string                   `json:"pageCandidate"`
+	PageDocument       string                   `json:"pageDocument"`
+	PageDocumentDigest SharedPrimitivesDigest   `json:"pageDocumentDigest"`
 }
 
 // ProblemDetails Bounded ProblemDetails wire contract governed by PRD 0012.
@@ -327,7 +371,7 @@ type ReserveAgentAssetJSONRequestBody = SharedPrimitivesBoundedStringMap
 type CreateTargetSnapshotJSONRequestBody = SharedPrimitivesBoundedStringMap
 
 // PersistAuthorizedPageJSONRequestBody defines body for PersistAuthorizedPage for application/json ContentType.
-type PersistAuthorizedPageJSONRequestBody = IssuedApplyAuthorization
+type PersistAuthorizedPageJSONRequestBody = PersistAuthorizedPageRequest
 
 // CheckAgentEntitlementJSONRequestBody defines body for CheckAgentEntitlement for application/json ContentType.
 type CheckAgentEntitlementJSONRequestBody = SharedPrimitivesBoundedStringMap
@@ -1829,7 +1873,7 @@ type PersistAuthorizedPageResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *SharedPrimitivesBoundedStringMap
+	JSON200 *PagixCommitReceipt
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
 	ApplicationproblemJSON400 *ProblemDetails
 	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
@@ -1849,7 +1893,7 @@ type PersistAuthorizedPageResponse struct {
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r PersistAuthorizedPageResponse) GetJSON200() *SharedPrimitivesBoundedStringMap {
+func (r PersistAuthorizedPageResponse) GetJSON200() *PagixCommitReceipt {
 	return r.JSON200
 }
 
@@ -2817,7 +2861,7 @@ func ParsePersistAuthorizedPageResponse(rsp *http.Response) (*PersistAuthorizedP
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest SharedPrimitivesBoundedStringMap
+		var dest PagixCommitReceipt
 		if err := decodeStrictResponseJSON(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

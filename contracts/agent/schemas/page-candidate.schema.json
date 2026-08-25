@@ -1,0 +1,222 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/page-candidate.schema.json",
+  "title": "PageCandidate contract",
+  "description": "Reviewable page-generation proposal bound to the exact inputs that produced it. It names the target and the base revision it was generated against, references the canonical Puck Data document that is the authoritative page content, and pins the target, catalog, contract-BOM, definition, and policy digests so a reviewer and the apply path resolve the same bytes the run saw. It carries validation receipts, the preview task and accepted preview result, a bounded generation summary and declared assumptions, bounded model, tool, delegation, and evidence references, and stable coded warnings a reviewer must see. Canonical Puck Data is authoritative within the candidate; pageIr is optional and derived, and never becomes the page document. The candidate is a proposal only: it commits nothing, approves nothing, and grants no authority to persist a page.",
+  "type": "object",
+  "minProperties": 11,
+  "maxProperties": 12,
+  "required": [
+    "kind",
+    "target",
+    "baseRevision",
+    "pageData",
+    "digests",
+    "candidateDigest",
+    "validationReceipts",
+    "preview",
+    "generation",
+    "references",
+    "warnings"
+  ],
+  "properties": {
+    "kind": {
+      "const": "PageCandidate"
+    },
+    "target": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TargetReference"
+    },
+    "baseRevision": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "pageData": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+    },
+    "digests": {
+      "type": "object",
+      "minProperties": 5,
+      "maxProperties": 5,
+      "required": [
+        "targetDigest",
+        "catalogDigest",
+        "contractBomDigest",
+        "definitionDigest",
+        "policyDigest"
+      ],
+      "properties": {
+        "targetDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "catalogDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "contractBomDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "definitionDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "policyDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "candidateDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "validationReceipts": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 16,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+      }
+    },
+    "preview": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "taskId",
+        "resultArtifact"
+      ],
+      "properties": {
+        "taskId": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TaskId"
+        },
+        "resultArtifact": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+        }
+      },
+      "additionalProperties": false
+    },
+    "generation": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "summary",
+        "assumptions"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "assumptions": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "references": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "required": [
+        "modelInvocations",
+        "toolInvocations",
+        "delegations",
+        "evidence"
+      ],
+      "properties": {
+        "modelInvocations": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+          }
+        },
+        "toolInvocations": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+          }
+        },
+        "delegations": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+          }
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "code",
+          "detail"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "pageIr": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "pageIr": "omitted when no derived PageIR was produced; PageIR is derived from canonical Puck Data and never authoritative"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "PageCandidate",
+    "componentName": "anvilkit.contract.schema.page-candidate",
+    "owner": "Platform Page Generation owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/target",
+      "/baseRevision",
+      "/pageData",
+      "/digests",
+      "/candidateDigest",
+      "/preview",
+      "/generation",
+      "/references",
+      "/warnings"
+    ],
+    "maximumSerializedBytes": 262144,
+    "descriptions": []
+  }
+}

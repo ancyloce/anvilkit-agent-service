@@ -1,0 +1,103 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/pagix-commit-receipt.schema.json",
+  "title": "PagixCommitReceipt contract",
+  "description": "Domain result Pagix returns after committing one approved page candidate. It names the Apply Authorization it redeemed, the previous and new revision identifiers, the committed Puck Data digest and the candidate digest it came from, the durable outbox identifier written in the same transaction, the acting actor and the effective permission decision, whether this call committed or replayed an earlier identical commit, and the commit timestamp and trace. The authorization redemption, the new revision, the idempotency outcome, and the outbox event are persisted in one database transaction; an asynchronous publication is not evidence of that invariant. The receipt reports a commit that already happened \u2014 it authorizes nothing and cannot be replayed to cause one. permissionDecision.decision admits only 'allowed', so a receipt for a denied commit is unrepresentable.",
+  "type": "object",
+  "minProperties": 12,
+  "maxProperties": 12,
+  "required": [
+    "kind",
+    "redeemedAuthorizationId",
+    "previousRevision",
+    "newRevision",
+    "committedPageDataDigest",
+    "candidateDigest",
+    "outboxId",
+    "actorId",
+    "permissionDecision",
+    "idempotencyOutcome",
+    "committedAt",
+    "traceContext"
+  ],
+  "properties": {
+    "kind": {
+      "const": "PagixCommitReceipt"
+    },
+    "redeemedAuthorizationId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/AuthorizationId"
+    },
+    "previousRevision": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "newRevision": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "committedPageDataDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "candidateDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "outboxId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "actorId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ActorId"
+    },
+    "permissionDecision": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "decision",
+        "policy"
+      ],
+      "properties": {
+        "decision": {
+          "enum": [
+            "allowed"
+          ]
+        },
+        "policy": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PolicyReference"
+        }
+      },
+      "additionalProperties": false
+    },
+    "idempotencyOutcome": {
+      "enum": [
+        "committed",
+        "replayed"
+      ]
+    },
+    "committedAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    },
+    "traceContext": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TraceContext"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "PagixCommitReceipt",
+    "componentName": "anvilkit.contract.schema.pagix-commit-receipt",
+    "owner": "Pagix Page Domain owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/redeemedAuthorizationId",
+      "/previousRevision",
+      "/newRevision",
+      "/committedPageDataDigest",
+      "/candidateDigest",
+      "/outboxId",
+      "/actorId",
+      "/permissionDecision",
+      "/idempotencyOutcome"
+    ],
+    "maximumSerializedBytes": 16384,
+    "descriptions": [
+      "contracts/agent/openapi/pagix-agent-integration.openapi.json"
+    ]
+  }
+}

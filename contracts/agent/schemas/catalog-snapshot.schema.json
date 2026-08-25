@@ -1,0 +1,222 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/catalog-snapshot.schema.json",
+  "title": "CatalogSnapshot contract",
+  "description": "Immutable snapshot of the component catalog a page-generation run is permitted to compose from. It freezes the catalog revision and digest, the exact Puck schema and runtime revisions, every allowed component with its package revision, prop schema, defaults, slot rules, and nesting bound, the components that are forbidden or deprecated with their replacements, and the approved design-token, asset, and font references. It is produced by the catalog authority rather than by an editor client, and its digest is the value carried by TargetSnapshot's catalogDigest so that admission, candidate validation, preview, and apply all resolve the same catalog bytes. It confers no authority: it states what may be composed, never who may compose or commit it.",
+  "type": "object",
+  "minProperties": 10,
+  "maxProperties": 10,
+  "required": [
+    "kind",
+    "catalogRevision",
+    "catalogDigest",
+    "puckRuntime",
+    "allowedComponents",
+    "forbiddenComponents",
+    "designTokens",
+    "approvedAssets",
+    "approvedFonts",
+    "capturedAt"
+  ],
+  "properties": {
+    "kind": {
+      "const": "CatalogSnapshot"
+    },
+    "catalogRevision": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "catalogDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "puckRuntime": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "schemaRevision",
+        "runtimeRevision"
+      ],
+      "properties": {
+        "schemaRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"
+        },
+        "runtimeRevision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "allowedComponents": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "minProperties": 6,
+        "maxProperties": 6,
+        "required": [
+          "componentId",
+          "packageRevision",
+          "propSchema",
+          "defaults",
+          "slots",
+          "maxNestingDepth"
+        ],
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,127}$"
+          },
+          "packageRevision": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"
+          },
+          "propSchema": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/SchemaReference"
+          },
+          "defaults": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+          },
+          "slots": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 32,
+            "items": {
+              "type": "object",
+              "minProperties": 3,
+              "maxProperties": 3,
+              "required": [
+                "slotName",
+                "allowedComponentIds",
+                "maxChildren"
+              ],
+              "properties": {
+                "slotName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+                },
+                "allowedComponentIds": {
+                  "type": "array",
+                  "minItems": 0,
+                  "maxItems": 256,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,127}$"
+                  }
+                },
+                "maxChildren": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1024
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "maxNestingDepth": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "forbiddenComponents": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "componentId",
+          "reason",
+          "replacementComponentId"
+        ],
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,127}$"
+          },
+          "reason": {
+            "enum": [
+              "deprecated",
+              "forbidden"
+            ]
+          },
+          "replacementComponentId": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 128,
+            "pattern": "^([A-Za-z][A-Za-z0-9._-]{0,127})?$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "designTokens": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+      }
+    },
+    "approvedAssets": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 512,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+      }
+    },
+    "approvedFonts": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+      }
+    },
+    "capturedAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "CatalogSnapshot",
+    "componentName": "anvilkit.contract.schema.catalog-snapshot",
+    "owner": "Pagix Catalog owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/catalogRevision",
+      "/catalogDigest",
+      "/puckRuntime",
+      "/allowedComponents",
+      "/forbiddenComponents",
+      "/designTokens",
+      "/approvedAssets",
+      "/approvedFonts"
+    ],
+    "maximumSerializedBytes": 1048576,
+    "descriptions": []
+  }
+}

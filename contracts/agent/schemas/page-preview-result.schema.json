@@ -1,0 +1,270 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/page-preview-result.schema.json",
+  "title": "PagePreviewResult contract",
+  "description": "Bounded evidence payload returned by one deterministic page-preview render, carried as an artifact on the canonical worker result envelope. It binds the candidate digest it rendered, the per-viewport screenshots and render statuses, how each component resolved or was substituted, the console and network-policy violations observed, accessibility findings with their impact, measured resource usage, and the worker image and environment digests that produced it. It is render evidence a reviewer and the apply path consult: it approves nothing, commits nothing, and cannot mark a candidate fit to publish.",
+  "type": "object",
+  "minProperties": 11,
+  "maxProperties": 11,
+  "required": [
+    "kind",
+    "candidateDigest",
+    "screenshots",
+    "viewportStatuses",
+    "componentResolution",
+    "policyViolations",
+    "accessibilityFindings",
+    "resourceUsage",
+    "workerEnvironment",
+    "traceContext",
+    "evidence"
+  ],
+  "properties": {
+    "kind": {
+      "const": "PagePreviewResult"
+    },
+    "candidateDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "screenshots": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "viewportIndex",
+          "artifact"
+        ],
+        "properties": {
+          "viewportIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 31
+          },
+          "artifact": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "viewportStatuses": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "viewportIndex",
+          "status"
+        ],
+        "properties": {
+          "viewportIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 31
+          },
+          "status": {
+            "enum": [
+              "rendered",
+              "failed",
+              "timed-out"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "componentResolution": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "componentId",
+          "status",
+          "detail"
+        ],
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,127}$"
+          },
+          "status": {
+            "enum": [
+              "resolved",
+              "substituted",
+              "missing",
+              "forbidden"
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "policyViolations": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "channel",
+          "severity",
+          "detail"
+        ],
+        "properties": {
+          "channel": {
+            "enum": [
+              "console",
+              "network"
+            ]
+          },
+          "severity": {
+            "enum": [
+              "info",
+              "warning",
+              "error"
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "accessibilityFindings": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "ruleId",
+          "impact",
+          "nodeCount"
+        ],
+        "properties": {
+          "ruleId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9-]{0,127}$"
+          },
+          "impact": {
+            "enum": [
+              "minor",
+              "moderate",
+              "serious",
+              "critical"
+            ]
+          },
+          "nodeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100000
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "resourceUsage": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "durationMilliseconds",
+        "peakMemoryBytes",
+        "cpuMillis"
+      ],
+      "properties": {
+        "durationMilliseconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000
+        },
+        "peakMemoryBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 68719476736
+        },
+        "cpuMillis": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000
+        }
+      },
+      "additionalProperties": false
+    },
+    "workerEnvironment": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "imageDigest",
+        "environmentDigest"
+      ],
+      "properties": {
+        "imageDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "environmentDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "traceContext": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TraceContext"
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "PagePreviewResult",
+    "componentName": "anvilkit.contract.schema.page-preview-result",
+    "owner": "Page Preview Worker owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/candidateDigest",
+      "/screenshots",
+      "/viewportStatuses",
+      "/componentResolution",
+      "/policyViolations",
+      "/accessibilityFindings",
+      "/resourceUsage",
+      "/workerEnvironment"
+    ],
+    "maximumSerializedBytes": 262144,
+    "descriptions": []
+  }
+}

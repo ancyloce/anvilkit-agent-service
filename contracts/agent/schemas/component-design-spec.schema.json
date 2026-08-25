@@ -1,0 +1,394 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/component-design-spec.schema.json",
+  "title": "ComponentDesignSpec contract",
+  "description": "Reviewable design-only proposal for a new component. It states the intent and rationale, the namespace and component name, the props with kinds and defaults, the variants and state model, the slot and composition rules, the design tokens it consumes, its accessibility requirements, the approved assets it needs, the preview scenarios a reviewer should see, and the decisions still open for a human to settle. It is semantically distinct from ComponentPackageSpec, which remains the later build-oriented boundary and is untouched by this contract. ComponentDesignSpec carries no source bundle, no dependency request, no lifecycle script, no build authorization, and no publication grant, so approving one authorizes further design work only and can never be read as permission to execute code, build, publish, or promote anything into a catalog.",
+  "type": "object",
+  "minProperties": 12,
+  "maxProperties": 12,
+  "required": [
+    "kind",
+    "intent",
+    "namespace",
+    "props",
+    "variants",
+    "stateModel",
+    "composition",
+    "designTokenUsage",
+    "accessibilityRequirements",
+    "approvedAssetNeeds",
+    "previewScenarios",
+    "unresolvedDecisions"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ComponentDesignSpec"
+    },
+    "intent": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "summary",
+        "rationale"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "additionalProperties": false
+    },
+    "namespace": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "namespace",
+        "componentName"
+      ],
+      "properties": {
+        "namespace": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z][a-z0-9.-]{0,127}$"
+        },
+        "componentName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "props": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 48,
+      "items": {
+        "type": "object",
+        "minProperties": 5,
+        "maxProperties": 5,
+        "required": [
+          "name",
+          "valueKind",
+          "required",
+          "defaultValue",
+          "description"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "valueKind": {
+            "enum": [
+              "string",
+              "integer",
+              "boolean",
+              "enum",
+              "token-reference",
+              "asset-reference",
+              "slot"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "defaultValue": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 256
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "variants": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "name",
+          "description"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "stateModel": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "state",
+          "trigger",
+          "description"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "trigger": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "composition": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "slotName",
+          "allowedComponentIds",
+          "maxChildren"
+        ],
+        "properties": {
+          "slotName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "allowedComponentIds": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z][A-Za-z0-9._-]{0,127}$"
+            }
+          },
+          "maxChildren": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1024
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "designTokenUsage": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 48,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "tokenName",
+          "usage"
+        ],
+        "properties": {
+          "tokenName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9.-]{0,127}$"
+          },
+          "usage": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "accessibilityRequirements": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "requirement",
+          "criterion"
+        ],
+        "properties": {
+          "requirement": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "criterion": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "approvedAssetNeeds": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 24,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "purpose",
+          "assetReference"
+        ],
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "assetReference": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "previewScenarios": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "name",
+          "description",
+          "propValues"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "propValues": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "unresolvedDecisions": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "question",
+          "options"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "options": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ComponentDesignSpec",
+    "componentName": "anvilkit.contract.schema.component-design-spec",
+    "owner": "Platform Component Design owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/intent",
+      "/namespace",
+      "/props",
+      "/variants",
+      "/stateModel",
+      "/composition",
+      "/designTokenUsage",
+      "/accessibilityRequirements",
+      "/approvedAssetNeeds",
+      "/previewScenarios",
+      "/unresolvedDecisions"
+    ],
+    "maximumSerializedBytes": 262144,
+    "descriptions": []
+  }
+}
