@@ -64,20 +64,79 @@ type SchemaIdentity struct{ Component, Version, Digest string }
 type Kind string
 
 const (
-	CompiledContext  Kind = "compiled-context"
-	TargetSnapshot   Kind = "target-snapshot"
-	AgentPlan        Kind = "agent-plan"
-	WorkerResult     Kind = "worker-result"
-	ValidationReport Kind = "validation-report"
+	CompiledContext   Kind = "compiled-context"
+	TargetSnapshot    Kind = "target-snapshot"
+	AgentPlan         Kind = "agent-plan"
+	WorkerResult      Kind = "worker-result"
+	ValidationReport  Kind = "validation-report"
+	CatalogSnapshot   Kind = "catalog-snapshot"
+	PageCandidate     Kind = "page-candidate"
+	PagePreviewTask   Kind = "page-preview-task"
+	PagePreviewResult Kind = "page-preview-result"
+	ComponentDesign   Kind = "component-design-spec"
 )
 
-// ValidKind reports whether a kind is one the governed vocabulary names.
+// ValidKind reports whether a kind is one the governed vocabulary names. The
+// set mirrors the artifact-kind registry in contracts/agent/registries; a kind
+// the registry does not name is not an artifact this service will record.
 func ValidKind(value Kind) bool {
 	switch value {
-	case CompiledContext, TargetSnapshot, AgentPlan, WorkerResult, ValidationReport:
+	case CompiledContext, TargetSnapshot, AgentPlan, WorkerResult, ValidationReport,
+		CatalogSnapshot, PageCandidate, PagePreviewTask, PagePreviewResult, ComponentDesign:
 		return true
 	}
 	return false
+}
+
+// FinalizableBy reports whether a run declaring the given operation may
+// finalize an artifact of the given kind.
+//
+// It is the product-compatibility rule, not the lifecycle rule: `allowed`
+// decides which state transitions are legal, this decides whether the artifact
+// being finalized is one this operation was ever admitted to produce. A
+// page-change run cannot finalize a component design, and a component-design
+// run cannot finalize a page candidate, however valid either artifact is on its
+// own terms.
+//
+// Kinds produced by the platform for every operation — compiled context, the
+// target snapshot, a worker result, a validation report — stay finalizable
+// everywhere, because they describe the run rather than its product. They are
+// checked before the operation is, so an unrecognized operation still admits
+// no *product*: a new operation must state its product here before it can
+// finalize one. It cannot reach this point in production anyway, because run
+// creation refuses an operation that belongs to no domain.
+//
+// An operation admits exactly the kind its definitions declare as their output
+// contract, and nothing else it merely handles along the way. A page-change run
+// reads a catalog snapshot, sends a preview task, and receives a preview
+// result, but it produces none of them: the catalog snapshot is the catalog
+// authority's (a run that could finalize one would be minting the catalog it is
+// then validated against), and the preview task and result are an instruction
+// and the evidence answering it. Their durable home is the worker result and
+// validation report above, which stay finalizable for every operation.
+//
+// The distinction is what "every final artifact kind matches its admitted
+// product contract" means: finalization is the claim that this is what the run
+// was asked to make, so admitting inputs and evidence alongside the product
+// would make the claim say nothing.
+func FinalizableBy(operation string, kind Kind) bool {
+	if !ValidKind(kind) {
+		return false
+	}
+	switch kind {
+	case CompiledContext, TargetSnapshot, WorkerResult, ValidationReport, AgentPlan:
+		return true
+	}
+	switch operation {
+	case "page-change":
+		return kind == PageCandidate
+	case "component-design":
+		return kind == ComponentDesign
+	case "artifact-validation", "image-operation", "component-package":
+		return false
+	default:
+		return false
+	}
 }
 
 // Check is one thing that was proved about an artifact's content, and the

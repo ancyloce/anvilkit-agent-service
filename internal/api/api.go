@@ -260,7 +260,8 @@ func (h *Handler) serveAgent(response http.ResponseWriter, request *http.Request
 const unroutedDetail = "the addressed operation is declared but no production handler answered it"
 
 // serveArtifact carries the artifact surface inward: reading one artifact's
-// governed metadata, and deciding its custody. Transport
+// governed metadata, issuing bounded access to its content, and deciding its
+// custody. Transport
 // reads the addressed workspace and artifact out of the path and the
 // concurrency, idempotency, digest, and trace headers off the request, and
 // decides nothing else: who is deciding, in which project, and whether they
@@ -285,6 +286,31 @@ func (h *Handler) serveArtifact(response http.ResponseWriter, request *http.Requ
 			Traceparent: request.Header.Get("traceparent"),
 		})
 		h.writeRepresentation(response, result, err, request)
+		return
+	}
+	// Issuing bounded, expiring access to the artifact's bytes. Unlike the
+	// metadata read above this is a decision rather than a description, so it
+	// carries the full governed write contract: the revision the reader
+	// observed, the idempotency key the issuance is recorded under, and the
+	// canonical digest of the command — which covers the declared purpose,
+	// because the purpose travels in the body precisely so the key binds it.
+	if len(parts) == 6 && parts[5] == "content-grant" && request.Method == http.MethodPost {
+		raw, err := readBoundedCommand(response, request)
+		if err != nil {
+			writeProblem(response, err, request.Header.Get("traceparent"))
+			return
+		}
+		result, err := h.core.IssueArtifactContentGrant(request.Context(), claims, runapp.ContentGrantInput{
+			WorkspaceID: parts[2],
+			ArtifactID:  parts[4],
+			ETag:        request.Header.Get("If-Match"),
+			Key:         request.Header.Get("Idempotency-Key"),
+			Digest:      request.Header.Get("X-AnvilKit-Request-Digest"),
+			Traceparent: request.Header.Get("traceparent"),
+		}, raw)
+		// The grant is a new capability rather than a change to the artifact,
+		// so a successful issuance answers 201 with the grant itself.
+		h.writeRepresentationStatus(response, result, err, request, http.StatusCreated)
 		return
 	}
 	if len(parts) != 6 || parts[5] != "custody" || request.Method != http.MethodPost {

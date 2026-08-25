@@ -99,6 +99,13 @@ type App struct {
 	authorizations        ApplyAuthorizationIssuer
 	authorizationReceipts CommandReceipts
 	artifactMetadata      ArtifactMetadataReader
+	// The governed artifact content path, the receipt store its idempotency
+	// is kept in, and the time authority its grants are bounded from. Content
+	// is a separate surface from metadata because disclosing an artifact's
+	// bytes is a decision rather than a description.
+	contentGrants        ArtifactContentGrantIssuer
+	contentGrantReceipts CommandReceipts
+	contentGrantNow      TimeAuthority
 }
 
 func (a *App) WithInterrupts(service *interrupts.Service) *App { a.interrupts = service; return a }

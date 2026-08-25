@@ -73,6 +73,8 @@ func operationDomain(operation string) string {
 		return "pagix-page"
 	case "artifact-validation":
 		return "contract-runtime"
+	case "component-design":
+		return "pagix-component"
 	case "component-package":
 		return "platform-agent"
 	default:
@@ -249,7 +251,7 @@ func DecodeCreateRequest(raw []byte) (CreateRequest, error) {
 	if !validOpaqueID(request.Definition.DefinitionID) || !validDigest(request.Definition.DefinitionDigest) {
 		return CreateRequest{}, requestProblem("definition reference must carry a bounded identity and digest")
 	}
-	if !oneOf(request.Operation, "page-change", "artifact-validation", "image-operation", "component-package") || !validTargetType(request.Target.Type) || !validOpaqueID(request.Target.ID) || !validOpaqueID(request.Target.WorkspaceID) || !validOpaqueID(request.Target.ProjectID) {
+	if !oneOf(request.Operation, "page-change", "artifact-validation", "image-operation", "component-package", "component-design") || !validTargetType(request.Target.Type) || !validOpaqueID(request.Target.ID) || !validOpaqueID(request.Target.WorkspaceID) || !validOpaqueID(request.Target.ProjectID) {
 		return CreateRequest{}, requestProblem("operation and fully scoped target must use bounded values")
 	}
 	if request.Input != nil {
@@ -328,6 +330,40 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CreateOutcome,
 	if len(input.Authority.Definition) == 0 || len(input.Authority.ContractBOM) == 0 || len(input.Authority.Policy) == 0 || len(input.Authority.Budget) == 0 {
 		return CreateOutcome{}, fmt.Errorf("create run: server authority is incomplete")
 	}
+	// The definition must belong to the domain that owns the declared
+	// operation. Both facts are server-owned — the domain is derived from the
+	// operation, and the definition is the one current authority pinned, never
+	// one the caller named — so this compares two things the request could not
+	// influence.
+	//
+	// Without it a generic Manager serves a page or component operation: it
+	// resolves, it is pinned, its digests all agree, and the run proceeds under
+	// a definition whose prompt, tools, delegates, and output contract were
+	// written for something else. Nothing downstream would notice, because
+	// every downstream check asks whether the run matches its definition, and
+	// it does. The mismatch is between the definition and the work.
+	//
+	// An operation that maps to no domain is refused for the same reason rather
+	// than admitted with an empty one: a run whose domain is blank belongs to
+	// no owner, and every later domain check would pass it by comparing nothing
+	// to nothing.
+	domain := operationDomain(request.Operation)
+	if domain == "" {
+		ineligible := problem.New(problem.CodeContractInvalid, "")
+		ineligible.Detail = "the declared operation belongs to no governed domain"
+		return CreateOutcome{}, ineligible
+	}
+	var pinned struct {
+		Domain string `json:"domain"`
+	}
+	if err := json.Unmarshal(input.Authority.Definition, &pinned); err != nil {
+		return CreateOutcome{}, fmt.Errorf("create run: decode pinned definition domain: %w", err)
+	}
+	if pinned.Domain != domain {
+		ineligible := problem.New(problem.CodeContractInvalid, "")
+		ineligible.Detail = "the pinned definition does not belong to the domain that owns the declared operation"
+		return CreateOutcome{}, ineligible
+	}
 	runID, err := s.ids.NewID()
 	if err != nil {
 		return CreateOutcome{}, fmt.Errorf("allocate run identity: %w", err)
@@ -339,7 +375,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CreateOutcome,
 	if now.IsZero() {
 		return CreateOutcome{}, problem.New(problem.CodeAuthorityStale, "")
 	}
-	snapshot := Snapshot{Kind: "AgentRun", RunID: runID, RootRunID: runID, WorkspaceID: input.Scope.WorkspaceID, ActorID: input.Scope.ActorID, Domain: operationDomain(request.Operation), Operation: request.Operation, Target: Target{Type: request.Target.Type, ID: request.Target.ID, WorkspaceID: input.Scope.WorkspaceID, ProjectID: input.Scope.ProjectID}, Definition: append(json.RawMessage(nil), input.Authority.Definition...), ContractBOM: append(json.RawMessage(nil), input.Authority.ContractBOM...), Policy: append(json.RawMessage(nil), input.Authority.Policy...), Budget: append(json.RawMessage(nil), input.Authority.Budget...), Idempotency: IdempotencyProjection{Scope: input.Scope.WorkspaceID + ":create-run", Key: input.Key, CanonicalRequestDigest: digest}, Status: Created, Version: 1, ExecutionGeneration: 1, LatestEventID: string(runID) + ":1", CreatedAt: now, UpdatedAt: now}
+	snapshot := Snapshot{Kind: "AgentRun", RunID: runID, RootRunID: runID, WorkspaceID: input.Scope.WorkspaceID, ActorID: input.Scope.ActorID, Domain: domain, Operation: request.Operation, Target: Target{Type: request.Target.Type, ID: request.Target.ID, WorkspaceID: input.Scope.WorkspaceID, ProjectID: input.Scope.ProjectID}, Definition: append(json.RawMessage(nil), input.Authority.Definition...), ContractBOM: append(json.RawMessage(nil), input.Authority.ContractBOM...), Policy: append(json.RawMessage(nil), input.Authority.Policy...), Budget: append(json.RawMessage(nil), input.Authority.Budget...), Idempotency: IdempotencyProjection{Scope: input.Scope.WorkspaceID + ":create-run", Key: input.Key, CanonicalRequestDigest: digest}, Status: Created, Version: 1, ExecutionGeneration: 1, LatestEventID: string(runID) + ":1", CreatedAt: now, UpdatedAt: now}
 	outcome, err := s.store.Create(ctx, CreateRecord{Scope: input.Scope, Key: input.Key, Digest: digest, Traceparent: input.Traceparent, Snapshot: snapshot})
 	if err != nil {
 		return CreateOutcome{}, err
