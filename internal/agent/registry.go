@@ -371,6 +371,10 @@ func cloneDigests(value map[string]string) map[string]string {
 //go:embed definitions/definition.platform.manager.instruction.txt
 //go:embed definitions/definition.platform.component-spec-specialist.json
 //go:embed definitions/definition.platform.component-spec-specialist.instruction.txt
+//go:embed definitions/definition.platform.page-change-manager.json
+//go:embed definitions/definition.platform.page-change-manager.instruction.txt
+//go:embed definitions/definition.platform.page-candidate-specialist.json
+//go:embed definitions/definition.platform.page-candidate-specialist.instruction.txt
 //go:embed definitions/policy.model.default.json
 //go:embed definitions/policy.memory.none.json
 //go:embed definitions/policy.guardrail.baseline.json

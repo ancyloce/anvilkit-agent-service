@@ -1,7 +1,7 @@
 {
   "approval": {
-    "lockDigest": "sha256:971ba2496eb389e76a8e57f30e7bf034b826727782b588902f1e01098ee1eb3e",
-    "profileDigest": "sha256:93099e5e605990212bd3f1c7310d54f941c36a154bc4a40207c29e49da0775d1"
+    "lockDigest": "sha256:9929f0b22d508a88dfacc121ff215a377a68154ba33c1d32d5254be8c552ed61",
+    "profileDigest": "sha256:3a27b4d7bbbe7d6a1107da6c23ee59cae0d50ab9bb3c8fd8b96e54defa9ba384"
   },
   "catalogVersion": 1,
   "definitions": [
@@ -20,6 +20,22 @@
       "documentDigest": "sha256:510043ec98be79a4e1735ad3d2f30869d5c5fc028d56affa4325238032d82e0c",
       "instruction": "definition.platform.manager.instruction.txt",
       "instructionDigest": "sha256:33e04839cbe737047a70176afc6f81016feac5defb535d47772d3f46161c9902"
+    },
+    {
+      "definitionDigest": "sha256:e44b23633802a25bdb52198acfa938223460f9adc806fd9c0482be3b591314d6",
+      "definitionId": "definition.platform.page-candidate-specialist",
+      "document": "definition.platform.page-candidate-specialist.json",
+      "documentDigest": "sha256:0f21e045e1714efa82ffe364d9eebcd61a06219b60a32584e06376e1da5e257a",
+      "instruction": "definition.platform.page-candidate-specialist.instruction.txt",
+      "instructionDigest": "sha256:5cfc42f4c2a354c7b0acaf3ef733c88b3ada2cb95f34466a1f7491f743ef1065"
+    },
+    {
+      "definitionDigest": "sha256:7929fba75592852e916af6e66baf225bb9077b5c90898e735ebdbea07b7d4d36",
+      "definitionId": "definition.platform.page-change-manager",
+      "document": "definition.platform.page-change-manager.json",
+      "documentDigest": "sha256:04a88e85e85b50a2805b6b75d4b93fd3f9ecaba7882ff8d02eafa31f9fda8c54",
+      "instruction": "definition.platform.page-change-manager.instruction.txt",
+      "instructionDigest": "sha256:61f6f13acf519da60fb3de8f0fa1f9779df241f2432c1eb0f5a970c0d0553030"
     }
   ],
   "kind": "AgentDefinitionCatalog",
