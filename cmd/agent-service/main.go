@@ -697,6 +697,11 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 		Memory:           memoryGuard,
 		Egress:           egressGuard,
 		ArtifactMetadata: artifactService,
+		// Content is signed and revoked by the same service that owns the
+		// record, so the grant port is the artifact service too. It is a
+		// separate port from metadata because the two are different
+		// disclosures: one describes an artifact, the other is it.
+		ArtifactContentGrants: artifactService,
 		// A governed metadata read is a disclosure, and it is recorded in the
 		// same tamper-evident chain the artifact lifecycle records its
 		// authorization changes in. Who was told what about a tenant's
@@ -1272,6 +1277,12 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	// authority read the rest of the artifact lifecycle uses.
 	application.WithApplyAuthorization(core.executor, commandReceipts)
 	application.WithArtifactMetadata(core.executor)
+	// Content grants are composed over the executor for the same reason
+	// metadata is, and carry the receipt store and clock custody carries:
+	// issuing a capability is a governed write whose replay must reproduce
+	// the capability it issued, and whose expiry is only a bound if it came
+	// from the approved time authority.
+	application.WithArtifactContentGrants(core.executor, commandReceipts, core.clock)
 	policies := make(map[runs.State]interrupts.DwellPolicy)
 	for _, state := range []runs.State{runs.Created, runs.Preparing, runs.Planning, runs.AwaitingInput, runs.Executing, runs.Validating, runs.AwaitingReview, runs.AwaitingApproval, runs.Committing, runs.AwaitingDomainConfirmation, runs.Conflict, runs.Cancelling, runs.Failed} {
 		policies[state] = interrupts.DwellPolicy{Deadline: cfg.DwellDeadline, Owner: "agent-service-oncall"}
