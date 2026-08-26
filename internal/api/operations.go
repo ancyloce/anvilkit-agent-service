@@ -51,6 +51,7 @@ func operations() []Operation {
 		{ID: "issueApplyAuthorization", Method: "POST", Template: "/workspaces/{workspaceId}/agent-runs/{runId}/apply-authorizations"},
 		{ID: "getAgentArtifact", Method: "GET", Template: "/workspaces/{workspaceId}/artifacts/{artifactId}"},
 		{ID: "decideAgentArtifactCustody", Method: "POST", Template: "/workspaces/{workspaceId}/artifacts/{artifactId}/custody"},
+		{ID: "issueAgentArtifactContentGrant", Method: "POST", Template: "/workspaces/{workspaceId}/artifacts/{artifactId}/content-grant"},
 	}
 }
 

@@ -70,6 +70,11 @@
       "operationId": "decideAgentArtifactCustody",
       "method": "POST",
       "template": "/workspaces/{workspaceId}/artifacts/{artifactId}/custody"
+    },
+    {
+      "operationId": "issueAgentArtifactContentGrant",
+      "method": "POST",
+      "template": "/workspaces/{workspaceId}/artifacts/{artifactId}/content-grant"
     }
   ]
 }
