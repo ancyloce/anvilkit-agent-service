@@ -67,20 +67,12 @@ func (r *runStore) Transition(_ context.Context, _ Scope, _ runs.ID, expected ui
 
 type fakePagix struct {
 	lock       sync.Mutex
-	commands   int
 	reconciles int
 	events     map[string]pagixclient.DomainEvent
 	effect     pagixclient.DomainOutcome
 	hasEffect  bool
-	persistErr error
 }
 
-func (p *fakePagix) Persist(_ context.Context, command pagixclient.DomainCommand) (pagixclient.DomainOutcome, error) {
-	p.lock.Lock()
-	defer p.lock.Unlock()
-	p.commands++
-	return p.effect, p.persistErr
-}
 func (p *fakePagix) Reconcile(context.Context, string, string) (pagixclient.DomainOutcome, bool, error) {
 	p.lock.Lock()
 	defer p.lock.Unlock()
@@ -140,24 +132,26 @@ func coordinator(t *testing.T, pagix *fakePagix, issuer *fakeIssuer) (*Coordinat
 	return value, store, runsStore
 }
 
-func TestStartRecordsIdentityBeforeOneCommandAndOnlyEventCompletes(t *testing.T) {
-	pagix := &fakePagix{persistErr: problem.New(problem.CodeDomainOutcomeUncertain, "")}
+func TestStartRecordsIdentityBeforeIssuanceAndOnlyEventCompletes(t *testing.T) {
+	pagix := &fakePagix{}
 	issuer := &fakeIssuer{}
 	service, store, runsStore := coordinator(t, pagix, issuer)
 	start := input(runsStore.value.Version)
 	operation, err := service.Start(context.Background(), start)
-	var details problem.Details
-	if !errors.As(err, &details) || details.Code != string(problem.CodeDomainOutcomeUncertain) {
-		t.Fatalf("wanted uncertainty: %v", err)
+	// Nothing is uncertain on the first pass: a capability was issued, not an
+	// effect attempted. Studio carries it to the domain owner, so the run waits
+	// at the submit boundary for the authoritative outcome.
+	if err != nil {
+		t.Fatalf("issuance reported an effect it never attempted: %v", err)
 	}
-	if operation.Status != Awaiting || runsStore.value.State != runs.AwaitingDomainConfirmation || pagix.commands != 1 {
-		t.Fatalf("operation=%#v state=%s commands=%d", operation, runsStore.value.State, pagix.commands)
+	if operation.Status != Awaiting || runsStore.value.State != runs.AwaitingDomainConfirmation {
+		t.Fatalf("operation=%#v state=%s", operation, runsStore.value.State)
 	}
 	// A missing/restored workflow checkpoint calls Start again. The durable active
-	// operation wins; no authorization or domain command is reissued.
+	// operation wins; no second authorization is issued.
 	replayed, err := service.Start(context.Background(), start)
-	if err != nil || replayed.ID != operation.ID || pagix.commands != 1 || issuer.calls != 1 {
-		t.Fatalf("restore replay=%#v commands=%d issues=%d err=%v", replayed, pagix.commands, issuer.calls, err)
+	if err != nil || replayed.ID != operation.ID || issuer.calls != 1 {
+		t.Fatalf("restore replay=%#v issues=%d err=%v", replayed, issuer.calls, err)
 	}
 	if _, err := service.Reconcile(context.Background(), start.Scope, start.RunID); err != nil {
 		t.Fatal(err)
@@ -204,7 +198,7 @@ func TestConflictConsumesAuthorizationAndRequiresRenewedReview(t *testing.T) {
 	}
 }
 
-func TestEveryGatewayPreconditionFailsBeforeDomainCommand(t *testing.T) {
+func TestEveryGatewayPreconditionFailsBeforeAnyCapabilityIsIssued(t *testing.T) {
 	cases := map[string]func(*Start){"workspace": func(v *Start) { v.Scope.WorkspaceID = "" }, "project": func(v *Start) { v.Scope.ProjectID = "" }, "run": func(v *Start) { v.RunID = "" }, "version": func(v *Start) { v.ExpectedRunVersion = 0 }, "scope-binding": func(v *Start) { v.Authorization.WorkspaceID = "other" }, "revision": func(v *Start) { v.ExpectedRevision = "" }}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -216,16 +210,19 @@ func TestEveryGatewayPreconditionFailsBeforeDomainCommand(t *testing.T) {
 			if _, err := service.Start(context.Background(), start); err == nil {
 				t.Fatal("missing gateway proof accepted")
 			}
-			if pagix.commands != 0 {
-				t.Fatalf("domain commands=%d", pagix.commands)
+			// The capability is what leaves this service, so "nothing happened"
+			// means nothing was issued. Asserting against a command count would
+			// assert nothing at all: no command is sent on any path.
+			if issuer.calls != 0 {
+				t.Fatalf("a capability was issued past a failed precondition: issues=%d", issuer.calls)
 			}
 		})
 	}
 	pagix := &fakePagix{}
 	issuer := &fakeIssuer{err: problem.New(problem.CodeApplyAuthorizationDenied, "")}
 	service, _, runsStore := coordinator(t, pagix, issuer)
-	if _, err := service.Start(context.Background(), input(runsStore.value.Version)); err == nil || pagix.commands != 0 {
-		t.Fatalf("failed issuance reached domain: commands=%d err=%v", pagix.commands, err)
+	if _, err := service.Start(context.Background(), input(runsStore.value.Version)); err == nil {
+		t.Fatalf("a denied issuance was reported as success: err=%v", err)
 	}
 }
 
@@ -282,7 +279,7 @@ func TestDuplicateAuthoritativeEventRepairsPartialLocalFinalization(t *testing.T
 	}
 }
 
-func TestRecordedOperationResumesAndIssuedOperationReconcilesBeforeSend(t *testing.T) {
+func TestRecordedOperationResumesAndIssuedOperationReconcilesFirst(t *testing.T) {
 	for _, status := range []Status{Recorded, Issued} {
 		t.Run(string(status), func(t *testing.T) {
 			pagix := &fakePagix{}
@@ -309,13 +306,19 @@ func TestRecordedOperationResumesAndIssuedOperationReconcilesBeforeSend(t *testi
 			if resumed.Status != Awaiting || runsStore.value.State != runs.AwaitingDomainConfirmation || issuer.calls != 0 {
 				t.Fatalf("resumed=%#v state=%s issues=%d err=%v", resumed, runsStore.value.State, issuer.calls, err)
 			}
-			if status == Recorded && (err != nil || pagix.commands != 1 || pagix.reconciles != 0) {
-				t.Fatalf("recorded commands=%d reconciles=%d err=%v", pagix.commands, pagix.reconciles, err)
+			// A recorded operation has not yet had its capability handed out, so
+			// resuming issues nothing new, asks nothing of the owner, and simply
+			// takes the run to the boundary.
+			if status == Recorded && (err != nil || pagix.reconciles != 0) {
+				t.Fatalf("recorded reconciles=%d err=%v", pagix.reconciles, err)
 			}
 			if status == Issued {
 				var details problem.Details
-				if !errors.As(err, &details) || details.Code != string(problem.CodeDomainOutcomeUncertain) || pagix.commands != 0 || pagix.reconciles != 1 {
-					t.Fatalf("issued commands=%d reconciles=%d err=%v", pagix.commands, pagix.reconciles, err)
+				// An issued operation's capability may already have been redeemed,
+				// so the resume asks the authoritative owner what happened and
+				// reports the outcome as unknown until it answers.
+				if !errors.As(err, &details) || details.Code != string(problem.CodeDomainOutcomeUncertain) || pagix.reconciles != 1 {
+					t.Fatalf("issued reconciles=%d err=%v", pagix.reconciles, err)
 				}
 			}
 			changed := start

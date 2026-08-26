@@ -82,7 +82,6 @@ type Issuer interface {
 	Issue(context.Context, applyauth.Command) (applyauth.Authorization, error)
 }
 type Pagix interface {
-	Persist(context.Context, pagixclient.DomainCommand) (pagixclient.DomainOutcome, error)
 	Reconcile(context.Context, string, string) (pagixclient.DomainOutcome, bool, error)
 	Consume(context.Context, pagixclient.DomainEvent) (pagixclient.DomainOutcome, bool, error)
 }
@@ -178,20 +177,27 @@ func (c *Coordinator) resume(ctx context.Context, input Start, operation Operati
 		if current.State != runs.Committing {
 			return operation, problem.New(problem.CodeInvalidTransition, "")
 		}
-		// This write-ahead marker prevents a restored workflow checkpoint from
-		// treating absence as permission to send a second command.
+		// The authorization is what leaves this service; Studio's apply adapter
+		// carries it to Pagix, which commits the page (design 0001 §2.2: Agent
+		// Service never writes a page). This write-ahead marker is recorded
+		// before the capability is redeemable, so a restored checkpoint cannot
+		// treat absence as permission to hand out a second one.
 		if err := c.store.MarkIssued(ctx, input.Scope, operation.ID, c.clock.Now().UTC()); err != nil {
 			return operation, fmt.Errorf("record command issuance intent: %w", err)
 		}
 		operation.Status = Issued
 		operation.UpdatedAt = c.clock.Now().UTC()
-		command := pagixclient.DomainCommand{Metadata: input.Metadata, OperationID: operation.ID, AuthorizationJWS: operation.AuthorizationJWS, AuthorizationID: string(operation.AuthorizationID), ActionDigest: operation.ActionDigest, ArtifactDigest: operation.ArtifactDigest, ExpectedRevision: operation.ExpectedRevision}
-		_, persistErr := c.pagix.Persist(ctx, command)
-		return c.awaitConfirmation(ctx, input, operation, persistErr)
+		// Nothing is uncertain yet: no effect has been attempted, only a
+		// capability issued. The run waits at the submit boundary for the
+		// authoritative outcome, and the uncertainty that does exist — an
+		// outcome that never arrives — is what reconciliation and escalation
+		// below are for.
+		return c.awaitConfirmation(ctx, input, operation, nil)
 	}
 	if operation.Status == Issued {
-		// Issued is deliberately reconcile-first: the command may have crossed
-		// the boundary before a process failure, so this path never sends again.
+		// Issued is deliberately reconcile-first: the capability may already
+		// have been redeemed before a process failure, so this path asks the
+		// authoritative owner what happened rather than assuming nothing did.
 		outcome, found, reconcileErr := c.pagix.Reconcile(ctx, input.Scope.WorkspaceID, operation.ID)
 		if reconcileErr != nil {
 			return operation, reconcileErr
