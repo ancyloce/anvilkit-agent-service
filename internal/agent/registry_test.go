@@ -110,21 +110,25 @@ func (s alteredSource) Document(ctx context.Context, name string) ([]byte, error
 
 func TestRegistryResolvesManagerAndSpecialistByExactIdentity(t *testing.T) {
 	registry := newTestRegistry(t)
-	definitions := registry.Definitions()
-	if len(definitions) != 2 {
-		t.Fatalf("definitions = %d, want 2", len(definitions))
+	// The catalog carries one manager/specialist pair per domain, so a
+	// definition is found by its identity rather than by being the only one
+	// holding its role. Scanning by role stopped being meaningful the moment a
+	// second pair was registered.
+	byID := make(map[string]Definition)
+	for _, definition := range registry.Definitions() {
+		byID[definition.DefinitionID] = definition
 	}
-	var manager, specialist Definition
-	for _, definition := range definitions {
-		switch definition.Role {
-		case RoleManager:
-			manager = definition
-		case RoleSpecialist:
-			specialist = definition
+	for _, want := range []string{
+		ManagerDefinitionID, SpecialistDefinitionID,
+		"definition.platform.page-change-manager", "definition.platform.page-candidate-specialist",
+	} {
+		if _, registered := byID[want]; !registered {
+			t.Fatalf("catalog does not carry %s", want)
 		}
 	}
-	if manager.DefinitionID != ManagerDefinitionID || specialist.DefinitionID != SpecialistDefinitionID {
-		t.Fatalf("unexpected topology: %s / %s", manager.DefinitionID, specialist.DefinitionID)
+	manager, specialist := byID[ManagerDefinitionID], byID[SpecialistDefinitionID]
+	if manager.Role != RoleManager || specialist.Role != RoleSpecialist {
+		t.Fatalf("unexpected roles: %s / %s", manager.Role, specialist.Role)
 	}
 	resolved, err := registry.Resolve(DefinitionReference{DefinitionID: manager.DefinitionID, DefinitionDigest: manager.DefinitionDigest})
 	if err != nil || resolved.Role != RoleManager {
@@ -147,9 +151,11 @@ func TestRegistryFailsClosedOnUnknownIdentityAndDigestMismatch(t *testing.T) {
 	if _, err := registry.Resolve(DefinitionReference{DefinitionID: "definition.platform.unknown", DefinitionDigest: strings.Repeat("a", 64)}); err == nil {
 		t.Fatal("unknown definition must fail closed")
 	}
-	manager := registry.Definitions()[1]
-	if manager.Role != RoleManager {
-		manager = registry.Definitions()[0]
+	var manager Definition
+	for _, definition := range registry.Definitions() {
+		if definition.DefinitionID == ManagerDefinitionID {
+			manager = definition
+		}
 	}
 	var details problem.Details
 	_, err := registry.Resolve(DefinitionReference{DefinitionID: manager.DefinitionID, DefinitionDigest: "sha256:" + strings.Repeat("0", 64)})
