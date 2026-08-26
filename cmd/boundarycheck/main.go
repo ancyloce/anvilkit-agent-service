@@ -4,6 +4,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -197,6 +199,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	pinned, err := stalePinnedSchemas(*root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	failures = append(failures, pinned...)
 	if len(failures) > 0 {
 		for _, failure := range failures {
 			fmt.Fprintln(os.Stderr, failure)
@@ -472,4 +480,50 @@ func isProviderSDK(path string) bool {
 		}
 	}
 	return false
+}
+
+// pinnedSchemaURI matches a logical schema reference written into Go source.
+var pinnedSchemaURI = regexp.MustCompile(`anvilkit://schema/([a-z0-9-]+)\?digest=sha256:([0-9a-f]{64})`)
+
+// stalePinnedSchemas proves every schema URI hard-coded in Go still names the
+// pinned bytes it claims.
+//
+// The contract gates check contract material against other contract material;
+// nothing checked the digests copied into Go against the schemas they point at.
+// When a schema changed, those constants silently stopped resolving, and the
+// runtime validator answered "no such schema" — which every boundary reports as
+// a refusal. A governed write then fails closed in production for a reason no
+// gate could see, and no test that stubs the validator would notice either.
+//
+// Whether the digest is in production code or a test is irrelevant: both assert
+// the same fact about the pinned tree, and a stale one in a test hides the
+// production break behind a passing suite.
+func stalePinnedSchemas(root string) ([]string, error) {
+	var failures []string
+	err := filepath.Walk(filepath.Join(root, "internal"), func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, ".go") {
+			return err
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, match := range pinnedSchemaURI.FindAllStringSubmatch(string(source), -1) {
+			name, claimed := match[1], match[2]
+			schema, err := os.ReadFile(filepath.Join(root, "contracts", "agent", "schemas", name+".schema.json"))
+			if err != nil {
+				failures = append(failures, fmt.Sprintf("%s: pins %s, which is not in the pinned contract tree", path, name))
+				continue
+			}
+			actual := sha256.Sum256(schema)
+			if hex.EncodeToString(actual[:]) != claimed {
+				failures = append(failures, fmt.Sprintf(
+					"%s: pinned %s digest is stale (claims %s…, pinned bytes are %s…) — regenerate the constant",
+					path, name, claimed[:16], hex.EncodeToString(actual[:])[:16]))
+			}
+		}
+		return nil
+	})
+	sort.Strings(failures)
+	return failures, err
 }
