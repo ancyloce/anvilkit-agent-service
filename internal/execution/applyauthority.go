@@ -108,6 +108,7 @@ func (r *ApplyAuthorityResolver) Resolve(ctx context.Context, command applyauth.
 	approved.ContractBOMDigest = pinnedBOM
 	approved.PolicyDigest = pinnedPolicy
 	approved.DefinitionDigest = pinnedDefinition
+	approved.CatalogDigest = eligibility.CatalogDigest
 	currentBinding := shared
 	currentBinding.ActionDigest = approval.ActionDigest
 	currentBinding.ArtifactDigest = command.ArtifactID
@@ -115,6 +116,7 @@ func (r *ApplyAuthorityResolver) Resolve(ctx context.Context, command applyauth.
 	currentBinding.ContractBOMDigest = currentBOM
 	currentBinding.PolicyDigest = currentPolicy
 	currentBinding.DefinitionDigest = currentDefinition
+	currentBinding.CatalogDigest = eligibility.CatalogDigest
 	return applyauth.Proof{Approved: approved, Current: currentBinding, ApprovalCurrent: approvalCurrent, ArtifactEligible: eligibility.Eligible}, nil
 }
 

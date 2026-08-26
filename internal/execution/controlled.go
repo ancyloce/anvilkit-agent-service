@@ -505,8 +505,12 @@ type ControlledArtifactPort struct {
 	// kinds is what each recorded digest is. The real owner reads it off the
 	// stored record; here it is kept from the candidate that declared it, so
 	// finalization can ask the same question.
-	kinds   map[string]artifacts.Kind
-	queries []ArtifactQuery
+	kinds map[string]artifacts.Kind
+	// catalogs is the component catalog each recorded candidate declared, so
+	// eligibility answers with the same fact the real owner reads off the
+	// stored record's lineage.
+	catalogs map[string]string
+	queries  []ArtifactQuery
 }
 
 // Queries returns every eligibility question the commit gate asked.
@@ -517,7 +521,7 @@ func (p *ControlledArtifactPort) Queries() []ArtifactQuery {
 }
 
 func NewControlledArtifactPort() *ControlledArtifactPort {
-	return &ControlledArtifactPort{ineligible: make(map[string]string), states: make(map[string]string), kinds: make(map[string]artifacts.Kind)}
+	return &ControlledArtifactPort{ineligible: make(map[string]string), states: make(map[string]string), kinds: make(map[string]artifacts.Kind), catalogs: make(map[string]string)}
 }
 
 // Withdraw makes one artifact digest ineligible from the next check onwards.
@@ -536,6 +540,7 @@ func (p *ControlledArtifactPort) RecordCandidate(_ context.Context, candidate Ar
 	if _, recorded := p.states[candidate.Digest]; !recorded {
 		p.states[candidate.Digest] = "valid"
 		p.kinds[candidate.Digest] = candidate.Kind
+		p.catalogs[candidate.Digest] = candidate.CatalogDigest
 	}
 	return nil
 }
@@ -584,7 +589,7 @@ func (p *ControlledArtifactPort) Eligible(_ context.Context, query ArtifactQuery
 	}
 	switch p.states[query.ArtifactDigest] {
 	case "finalized":
-		return ArtifactEligibility{Eligible: true}, nil
+		return ArtifactEligibility{Eligible: true, CatalogDigest: p.catalogs[query.ArtifactDigest]}, nil
 	case "":
 		return ArtifactEligibility{Eligible: false, Reason: "no immutable artifact record exists for the candidate"}, nil
 	default:

@@ -184,6 +184,11 @@ type ArtifactQuery struct {
 type ArtifactEligibility struct {
 	Eligible bool
 	Reason   string
+	// CatalogDigest is the component catalog the artifact was produced
+	// against, read from the artifact's own lineage. The Apply Authorization
+	// binds it (ADR-025 CD-5b) so a reviewer's approval cannot be redeemed
+	// against a page authored under a different catalog.
+	CatalogDigest string
 }
 
 // ToolMaterial exposes the Tool material the service is actually running for

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/ancyloce/anvilkit-agent-service/internal/artifacts"
 	"sync"
 	"testing"
 	"time"
@@ -92,11 +94,14 @@ func applyAuthorityFixture(t *testing.T, artifactDigest string) (applyAuthorityR
 func finalizedArtifacts(t *testing.T, artifactDigest string) *ControlledArtifactPort {
 	t.Helper()
 	port := NewControlledArtifactPort()
-	candidate := ArtifactCandidate{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", Digest: artifactDigest, Bytes: []byte(`{"kind":"candidate"}`), OperationKey: "workflow-1:finalize"}
+	// A realistic candidate: the kind a page-change run actually produces, and
+	// the catalog it was authored against. Recording neither left the fake
+	// looser than the artifact owner it stands in for.
+	candidate := ArtifactCandidate{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", Digest: artifactDigest, Bytes: []byte(`{"kind":"candidate"}`), OperationKey: "workflow-1:finalize", Kind: artifacts.PageCandidate, CatalogDigest: "sha256:" + strings.Repeat("f", 64)}
 	if err := port.RecordCandidate(context.Background(), candidate); err != nil {
 		t.Fatal(err)
 	}
-	if err := port.EnsureFinalized(context.Background(), ArtifactQuery{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ArtifactDigest: artifactDigest}); err != nil {
+	if err := port.EnsureFinalized(context.Background(), ArtifactQuery{WorkspaceID: "workspace-01", ProjectID: "project-01", RunID: "run-01", ArtifactDigest: artifactDigest, Operation: "page-change"}); err != nil {
 		t.Fatal(err)
 	}
 	return port

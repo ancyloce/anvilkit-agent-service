@@ -601,8 +601,12 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		t.Fatal(err)
 	}
 	h.service = service
+	// By identity, not by role: the catalog carries one manager per domain, so
+	// scanning for "the manager" picks whichever the map yields first and the
+	// harness silently runs against a definition with different tools and
+	// delegates.
 	for _, definition := range registry.Definitions() {
-		if definition.Role == agent.RoleManager {
+		if definition.DefinitionID == agent.ManagerDefinitionID {
 			h.manager = definition
 		}
 	}

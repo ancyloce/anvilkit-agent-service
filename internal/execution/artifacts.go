@@ -258,5 +258,5 @@ func (p *ServiceArtifactPort) Eligible(ctx context.Context, query ArtifactQuery)
 	if record.State != artifacts.Finalized {
 		return ArtifactEligibility{Eligible: false, Reason: "the artifact is not finalized: " + string(record.State)}, nil
 	}
-	return ArtifactEligibility{Eligible: true}, nil
+	return ArtifactEligibility{Eligible: true, CatalogDigest: record.Lineage.CatalogDigest}, nil
 }
