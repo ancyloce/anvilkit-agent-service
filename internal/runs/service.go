@@ -67,7 +67,12 @@ type ArtifactReferenceCommand struct {
 
 // operationDomain derives the owning domain from the declared operation. The
 // domain is a server-owned fact: callers never declare it.
-func operationDomain(operation string) string {
+func operationDomain(operation string) string { return OperationDomain(operation) }
+
+// OperationDomain derives the owning domain from the declared operation. It is
+// exported because admission decides definition eligibility against the same
+// mapping the run aggregate stamps.
+func OperationDomain(operation string) string {
 	switch operation {
 	case "page-change", "image-operation":
 		return "pagix-page"
@@ -330,38 +335,21 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CreateOutcome,
 	if len(input.Authority.Definition) == 0 || len(input.Authority.ContractBOM) == 0 || len(input.Authority.Policy) == 0 || len(input.Authority.Budget) == 0 {
 		return CreateOutcome{}, fmt.Errorf("create run: server authority is incomplete")
 	}
-	// The definition must belong to the domain that owns the declared
-	// operation. Both facts are server-owned — the domain is derived from the
-	// operation, and the definition is the one current authority pinned, never
-	// one the caller named — so this compares two things the request could not
-	// influence.
+	// The domain is server-owned: it is derived from the operation, never
+	// declared. An operation that maps to no domain is refused rather than
+	// admitted with an empty one, because a run whose domain is blank belongs
+	// to no owner and every later domain check would pass it by comparing
+	// nothing to nothing.
 	//
-	// Without it a generic Manager serves a page or component operation: it
-	// resolves, it is pinned, its digests all agree, and the run proceeds under
-	// a definition whose prompt, tools, delegates, and output contract were
-	// written for something else. Nothing downstream would notice, because
-	// every downstream check asks whether the run matches its definition, and
-	// it does. The mismatch is between the definition and the work.
-	//
-	// An operation that maps to no domain is refused for the same reason rather
-	// than admitted with an empty one: a run whose domain is blank belongs to
-	// no owner, and every later domain check would pass it by comparing nothing
-	// to nothing.
+	// Whether the *definition* is eligible for this operation is decided at
+	// admission, against the registry-resolved definition. It cannot be decided
+	// here: the definition current authority pins is a DefinitionReference by
+	// contract — identity and digest, nothing else — so the domain is not among
+	// the facts this layer holds.
 	domain := operationDomain(request.Operation)
 	if domain == "" {
 		ineligible := problem.New(problem.CodeContractInvalid, "")
 		ineligible.Detail = "the declared operation belongs to no governed domain"
-		return CreateOutcome{}, ineligible
-	}
-	var pinned struct {
-		Domain string `json:"domain"`
-	}
-	if err := json.Unmarshal(input.Authority.Definition, &pinned); err != nil {
-		return CreateOutcome{}, fmt.Errorf("create run: decode pinned definition domain: %w", err)
-	}
-	if pinned.Domain != domain {
-		ineligible := problem.New(problem.CodeContractInvalid, "")
-		ineligible.Detail = "the pinned definition does not belong to the domain that owns the declared operation"
 		return CreateOutcome{}, ineligible
 	}
 	runID, err := s.ids.NewID()
