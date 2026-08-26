@@ -57,6 +57,7 @@ type Binding struct {
 	ActorID, WorkspaceID                              string
 	ApprovalVersion                                   uint64
 	ContractBOMDigest, PolicyDigest, DefinitionDigest string
+	CatalogDigest                                     string
 }
 
 type Proof struct {
@@ -137,6 +138,7 @@ type Payload struct {
 	ContractBOMDigest string          `json:"contractBomDigest"`
 	PolicyDigest      string          `json:"policyDigest"`
 	DefinitionDigest  string          `json:"definitionDigest"`
+	CatalogDigest     string          `json:"catalogDigest"`
 }
 
 type protectedHeader struct {
@@ -246,14 +248,14 @@ func (s *IssuerService) Issue(ctx context.Context, command Command) (Authorizati
 	return authorization, nil
 }
 
-const applyAuthorizationSchema = "anvilkit://schema/apply-authorization?digest=sha256:ad07f9d74ca750dac5b682247ee8109501c4d165aea4d1024f1fa316b92e3e1b"
+const applyAuthorizationSchema = "anvilkit://schema/apply-authorization?digest=sha256:f9605d14fe8ea298ca523316c947202d5b3e43f87d6b31519cb36c1051ecd1f8"
 
 func payloadFor(id AuthorizationID, keyID string, binding Binding, issued, expires time.Time) Payload {
-	return Payload{Kind: "ApplyAuthorization", AuthorizationID: id, KeyID: keyID, Issuer: Issuer, Audience: Audience, IssuedAt: timestamp(issued), NotBefore: timestamp(issued), ExpiresAt: timestamp(expires), RunID: binding.RunID, ActionDigest: binding.ActionDigest, ArtifactDigest: binding.ArtifactDigest, Target: binding.Target, BaseRevision: binding.BaseRevision, ActorID: binding.ActorID, WorkspaceID: binding.WorkspaceID, ApprovalVersion: binding.ApprovalVersion, ContractBOMDigest: binding.ContractBOMDigest, PolicyDigest: binding.PolicyDigest, DefinitionDigest: binding.DefinitionDigest}
+	return Payload{Kind: "ApplyAuthorization", AuthorizationID: id, KeyID: keyID, Issuer: Issuer, Audience: Audience, IssuedAt: timestamp(issued), NotBefore: timestamp(issued), ExpiresAt: timestamp(expires), RunID: binding.RunID, ActionDigest: binding.ActionDigest, ArtifactDigest: binding.ArtifactDigest, Target: binding.Target, BaseRevision: binding.BaseRevision, ActorID: binding.ActorID, WorkspaceID: binding.WorkspaceID, ApprovalVersion: binding.ApprovalVersion, ContractBOMDigest: binding.ContractBOMDigest, PolicyDigest: binding.PolicyDigest, DefinitionDigest: binding.DefinitionDigest, CatalogDigest: binding.CatalogDigest}
 }
 
 func validBinding(value Binding) bool {
-	return opaque(value.RunID) && validDigest(value.ActionDigest) && validDigest(value.ArtifactDigest) && targetType(value.Target.Type) && opaque(value.Target.ID) && value.Target.WorkspaceID == value.WorkspaceID && opaque(value.Target.ProjectID) && opaque(value.BaseRevision) && opaque(value.ActorID) && opaque(value.WorkspaceID) && value.ApprovalVersion > 0 && validDigest(value.ContractBOMDigest) && validDigest(value.PolicyDigest) && validDigest(value.DefinitionDigest)
+	return opaque(value.RunID) && validDigest(value.ActionDigest) && validDigest(value.ArtifactDigest) && targetType(value.Target.Type) && opaque(value.Target.ID) && value.Target.WorkspaceID == value.WorkspaceID && opaque(value.Target.ProjectID) && opaque(value.BaseRevision) && opaque(value.ActorID) && opaque(value.WorkspaceID) && value.ApprovalVersion > 0 && validDigest(value.ContractBOMDigest) && validDigest(value.PolicyDigest) && validDigest(value.DefinitionDigest) && validDigest(value.CatalogDigest)
 }
 
 // boundedOperationKey accepts the durable commit-operation identity: it is
@@ -385,7 +387,7 @@ func Verify(ctx context.Context, compact string, keys SigningPort, now time.Time
 	nbf, nbfErr := time.Parse(time.RFC3339Nano, payload.NotBefore)
 	iat, iatErr := time.Parse(time.RFC3339Nano, payload.IssuedAt)
 	exp, expErr := time.Parse(time.RFC3339Nano, payload.ExpiresAt)
-	if nbfErr != nil || iatErr != nil || expErr != nil || payload.NotBefore != timestamp(nbf) || payload.IssuedAt != timestamp(iat) || payload.ExpiresAt != timestamp(exp) || !iat.Equal(nbf) || now.IsZero() || now.Before(nbf) || !now.Before(exp) || exp.Sub(nbf) > 5*time.Minute || !validBinding(Binding{RunID: payload.RunID, ActionDigest: payload.ActionDigest, ArtifactDigest: payload.ArtifactDigest, Target: payload.Target, BaseRevision: payload.BaseRevision, ActorID: payload.ActorID, WorkspaceID: payload.WorkspaceID, ApprovalVersion: payload.ApprovalVersion, ContractBOMDigest: payload.ContractBOMDigest, PolicyDigest: payload.PolicyDigest, DefinitionDigest: payload.DefinitionDigest}) {
+	if nbfErr != nil || iatErr != nil || expErr != nil || payload.NotBefore != timestamp(nbf) || payload.IssuedAt != timestamp(iat) || payload.ExpiresAt != timestamp(exp) || !iat.Equal(nbf) || now.IsZero() || now.Before(nbf) || !now.Before(exp) || exp.Sub(nbf) > 5*time.Minute || !validBinding(Binding{RunID: payload.RunID, ActionDigest: payload.ActionDigest, ArtifactDigest: payload.ArtifactDigest, Target: payload.Target, BaseRevision: payload.BaseRevision, ActorID: payload.ActorID, WorkspaceID: payload.WorkspaceID, ApprovalVersion: payload.ApprovalVersion, ContractBOMDigest: payload.ContractBOMDigest, PolicyDigest: payload.PolicyDigest, DefinitionDigest: payload.DefinitionDigest, CatalogDigest: payload.CatalogDigest}) {
 		return Payload{}, denied("authorization is expired, premature, or incompletely bound")
 	}
 	return payload, nil

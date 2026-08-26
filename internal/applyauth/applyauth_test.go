@@ -38,7 +38,7 @@ func (failingAudit) Record(context.Context, AuditRecord) error { return errors.N
 
 func binding() Binding {
 	digest := "sha256:" + strings.Repeat("a", 64)
-	return Binding{RunID: "run-01", ActionDigest: digest, ArtifactDigest: "sha256:" + strings.Repeat("b", 64), Target: Target{Type: "page", ID: "page-01", WorkspaceID: "workspace-01", ProjectID: "project-01"}, BaseRevision: "revision-01", ActorID: "actor-01", WorkspaceID: "workspace-01", ApprovalVersion: 7, ContractBOMDigest: "sha256:" + strings.Repeat("c", 64), PolicyDigest: "sha256:" + strings.Repeat("d", 64), DefinitionDigest: "sha256:" + strings.Repeat("e", 64)}
+	return Binding{RunID: "run-01", ActionDigest: digest, ArtifactDigest: "sha256:" + strings.Repeat("b", 64), Target: Target{Type: "page", ID: "page-01", WorkspaceID: "workspace-01", ProjectID: "project-01"}, BaseRevision: "revision-01", ActorID: "actor-01", WorkspaceID: "workspace-01", ApprovalVersion: 7, ContractBOMDigest: "sha256:" + strings.Repeat("c", 64), PolicyDigest: "sha256:" + strings.Repeat("d", 64), DefinitionDigest: "sha256:" + strings.Repeat("e", 64), CatalogDigest: "sha256:" + strings.Repeat("f", 64)}
 }
 
 func issuer(t *testing.T, authority *fixedAuthority, audit Audit, ring *MemoryKeyRing) *IssuerService {
@@ -81,7 +81,7 @@ func TestIssueDerivesCanonicalFullBindingAndAuditsBeforeReturn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if findings := guard.Validate(context.Background(), contractguard.PagixOut, "anvilkit://schema/apply-authorization?digest=sha256:ad07f9d74ca750dac5b682247ee8109501c4d165aea4d1024f1fa316b92e3e1b", payloadBytes); len(findings) != 0 {
+	if findings := guard.Validate(context.Background(), contractguard.PagixOut, "anvilkit://schema/apply-authorization?digest=sha256:f9605d14fe8ea298ca523316c947202d5b3e43f87d6b31519cb36c1051ecd1f8", payloadBytes); len(findings) != 0 {
 		t.Fatalf("authorization payload violates pinned contract: %#v", findings)
 	}
 	parts := strings.Split(issued.Compact, ".")
