@@ -12,10 +12,8 @@ import (
 )
 
 type fakePort struct {
-	writes         []Metadata
-	effect         DomainOutcome
-	effectOverride *DomainOutcome
-	commands       int
+	writes []Metadata
+	effect DomainOutcome
 }
 
 func (p *fakePort) AuthorizedSnapshot(_ context.Context, request SnapshotRequest) (Snapshot, error) {
@@ -33,16 +31,6 @@ func (p *fakePort) Observe(_ context.Context, m Metadata, _ budget.Observation) 
 func (p *fakePort) Settle(_ context.Context, m Metadata, s budget.Settlement) (budget.Reservation, error) {
 	p.writes = append(p.writes, m)
 	return budget.Reservation{ID: s.ReservationID, Released: s.Release}, nil
-}
-func (p *fakePort) Persist(_ context.Context, command DomainCommand) (DomainOutcome, error) {
-	p.commands++
-	p.writes = append(p.writes, command.Metadata)
-	if p.effectOverride != nil {
-		p.effect = *p.effectOverride
-	} else {
-		p.effect = DomainOutcome{OperationID: command.OperationID, AuthorizationID: command.AuthorizationID, Kind: OutcomeApplied, Revision: "revision-2", EventID: "event-1", Recorded: true}
-	}
-	return DomainOutcome{}, errors.New("ambiguous timeout")
 }
 func (p *fakePort) Effect(_ context.Context, workspace, operation string) (DomainOutcome, bool, error) {
 	return p.effect, p.effect.OperationID == operation, nil
@@ -72,23 +60,6 @@ func TestEveryWriteCarriesIdentityTraceScopeAndIdempotency(t *testing.T) {
 	bad.WorkloadIdentity = ""
 	if _, err := client.Reserve(ctx, bad, budget.Estimate{}, 1); err == nil {
 		t.Fatal("write without workload identity escaped")
-	}
-}
-
-func TestAmbiguousPersistReconcilesEffectWithoutDuplicateCommand(t *testing.T) {
-	for _, scenario := range []string{"timeout", "http-500", "ambiguous-disconnect"} {
-		t.Run(scenario, func(t *testing.T) {
-			port := &fakePort{}
-			client, _ := New(port, NewMemoryInbox())
-			command := DomainCommand{Metadata: metadata(), OperationID: "operation-01", AuthorizationJWS: "signed.jws.value", AuthorizationID: "authorization-01", ActionDigest: "sha256:" + strings.Repeat("b", 64), ArtifactDigest: "sha256:" + strings.Repeat("c", 64), ExpectedRevision: "revision-1"}
-			result, err := client.Persist(context.Background(), command)
-			if err != nil || result.Kind != OutcomeApplied {
-				t.Fatalf("uncertainty not reconciled: %#v %v", result, err)
-			}
-			if port.commands != 1 {
-				t.Fatalf("duplicate command count=%d", port.commands)
-			}
-		})
 	}
 }
 
@@ -129,12 +100,10 @@ func TestMalformedTraceCrossScopeAndForgedResponsesFailClosed(t *testing.T) {
 	if _, err := client.Reserve(context.Background(), metadata(), budget.Estimate{WorkspaceID: "other"}, 1); err == nil {
 		t.Fatal("cross-scope reservation accepted")
 	}
-	forged := DomainOutcome{OperationID: "substituted", AuthorizationID: "authorization-01", Kind: OutcomeApplied, Revision: "revision-2", EventID: "event-1", Recorded: true}
-	port.effectOverride = &forged
-	command := DomainCommand{Metadata: metadata(), OperationID: "operation-01", AuthorizationJWS: "signed.jws.value", AuthorizationID: "authorization-01", ActionDigest: "sha256:" + strings.Repeat("b", 64), ArtifactDigest: "sha256:" + strings.Repeat("c", 64), ExpectedRevision: "revision-1"}
-	if _, err := client.Persist(context.Background(), command); err == nil {
-		t.Fatal("substituted provider outcome accepted")
-	}
+	// Outcome substitution is asserted below against the event path. It was
+	// also asserted against the command path, which no longer exists: Agent
+	// Service issues the capability and Studio carries it to the domain owner
+	// (design 0001 section 2.2).
 	badEvent := DomainEvent{MessageID: "message-01", OperationID: "operation-01", AuthorizationID: "authorization-other", Traceparent: metadata().Traceparent, Outcome: DomainOutcome{OperationID: "operation-01", AuthorizationID: "authorization-01", Kind: OutcomeApplied, Revision: "revision-2", EventID: "message-01", Recorded: true}}
 	if _, _, err := client.Consume(context.Background(), badEvent); err == nil {
 		t.Fatal("authorization-substituted event accepted")

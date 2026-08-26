@@ -53,10 +53,6 @@ type SnapshotRequest struct {
 	Metadata Metadata
 	Target   Target
 }
-type DomainCommand struct {
-	Metadata                                                                                       Metadata
-	OperationID, AuthorizationJWS, AuthorizationID, ActionDigest, ArtifactDigest, ExpectedRevision string
-}
 type OutcomeKind string
 
 const (
@@ -85,7 +81,6 @@ type Port interface {
 	Reserve(context.Context, Metadata, budget.Estimate, budget.Generation) (budget.Reservation, error)
 	Observe(context.Context, Metadata, budget.Observation) error
 	Settle(context.Context, Metadata, budget.Settlement) (budget.Reservation, error)
-	Persist(context.Context, DomainCommand) (DomainOutcome, error)
 	Effect(context.Context, string, string) (DomainOutcome, bool, error)
 }
 type Inbox interface {
@@ -138,20 +133,6 @@ func (c *Client) Settle(ctx context.Context, metadata Metadata, settlement budge
 		return budget.Reservation{}, problem.New(problem.CodeRequestInvalid, "")
 	}
 	return c.port.Settle(ctx, metadata, settlement)
-}
-func (c *Client) Persist(ctx context.Context, command DomainCommand) (DomainOutcome, error) {
-	if command.Metadata.Validate() != nil || command.Metadata.Operation != "page-persistence" || !bounded(command.OperationID, 128) || !bounded(command.AuthorizationJWS, 16*1024) || !bounded(command.AuthorizationID, 128) || !digest(command.ActionDigest) || !digest(command.ArtifactDigest) || !bounded(command.ExpectedRevision, 128) {
-		return DomainOutcome{}, problem.New(problem.CodeRequestInvalid, "")
-	}
-	outcome, err := c.port.Persist(ctx, command)
-	if err == nil && validOutcome(outcome, command.OperationID, command.AuthorizationID, true) {
-		return outcome, nil
-	}
-	recorded, ok, lookupErr := c.port.Effect(ctx, command.Metadata.WorkspaceID, command.OperationID)
-	if lookupErr == nil && ok && validOutcome(recorded, command.OperationID, command.AuthorizationID, true) {
-		return recorded, nil
-	}
-	return DomainOutcome{OperationID: command.OperationID, AuthorizationID: command.AuthorizationID, Kind: OutcomeUncertain}, problem.New(problem.CodeDomainOutcomeUncertain, "")
 }
 func (c *Client) Reconcile(ctx context.Context, workspaceID, operationID string) (DomainOutcome, bool, error) {
 	if workspaceID == "" || operationID == "" {
