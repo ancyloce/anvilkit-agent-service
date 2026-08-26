@@ -22,7 +22,7 @@ import (
 // is validated too, because a representation that drifts from its contract is
 // a broken integration that only the consumer discovers.
 const issueApplyAuthorizationRequestSchema = "anvilkit://schema/issue-apply-authorization-request?digest=sha256:653d8dba345b8e1fae093dd491321a6cb4b5b7b56b896efe88c38739be0e8bca"
-const issuedApplyAuthorizationSchema = "anvilkit://schema/issued-apply-authorization?digest=sha256:6b6daee532a781483e8d3ccdc1a152e65837ad3529ba47d2b0c01e39a354dacf"
+const issuedApplyAuthorizationSchema = "anvilkit://schema/issued-apply-authorization?digest=sha256:c9a436fa08c5e1c43c1bbfda5ad87e0b7aa4c1d2ada620929284028fbb7b3b5e"
 
 // IssueApplyAuthorizationRoute is the normalized route an issuance receipt is
 // scoped to.

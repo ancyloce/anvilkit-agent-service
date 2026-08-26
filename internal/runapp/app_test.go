@@ -37,7 +37,10 @@ func (testDefinitions) Resolve(reference agent.DefinitionReference) (agent.Defin
 	if reference.DefinitionID != "definition.test" || reference.DefinitionDigest != "sha256:"+strings.Repeat("a", 64) {
 		return agent.Definition{}, fmt.Errorf("unknown definition")
 	}
-	return agent.Definition{DefinitionID: reference.DefinitionID, DefinitionDigest: reference.DefinitionDigest}, nil
+	// page-change is a pagix-page operation, so approved material for it
+	// carries that domain. A resolver that answered without one would be
+	// looser than the registry it stands in for.
+	return agent.Definition{DefinitionID: reference.DefinitionID, DefinitionDigest: reference.DefinitionDigest, Domain: "pagix-page"}, nil
 }
 
 type clock struct{ now time.Time }

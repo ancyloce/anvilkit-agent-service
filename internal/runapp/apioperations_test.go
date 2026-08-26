@@ -70,6 +70,7 @@ func signedCapability(t *testing.T) execution.IssuedAuthorization {
 		"contractBomDigest": authorizationDigest("b"),
 		"policyDigest":      authorizationDigest("c"),
 		"definitionDigest":  authorizationDigest("d"),
+		"catalogDigest":     authorizationDigest("e"),
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

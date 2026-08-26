@@ -161,6 +161,22 @@ func (a *App) Create(ctx context.Context, claims auth.Claims, workspaceID, key, 
 		unknown.Detail = "the declared definition is not an approved definition"
 		return Representation{}, unknown
 	}
+	// The resolved definition must belong to the domain that owns the declared
+	// operation. Both sides are server-owned — the domain is derived from the
+	// operation, and the definition is the approved material the registry
+	// resolved, not anything the request asserted about it.
+	//
+	// Without this a generic Manager serves a page or component operation: it
+	// resolves, its digests all agree, and the run proceeds under a definition
+	// whose prompt, tools, delegates, and output contract were written for
+	// something else. Nothing downstream notices, because every downstream check
+	// asks whether the run matches its definition, and it does. The mismatch is
+	// between the definition and the work.
+	if domain := runs.OperationDomain(request.Operation); domain == "" || string(resolved.Domain) != domain {
+		ineligible := problem.New(problem.CodeContractInvalid, "")
+		ineligible.Detail = "the declared definition does not belong to the domain that owns the declared operation"
+		return Representation{}, ineligible
+	}
 	current, err := a.authority.Current(ctx, scope.AuthorityScope())
 	if err != nil {
 		return Representation{}, fmt.Errorf("resolve create authority: %w", err)
