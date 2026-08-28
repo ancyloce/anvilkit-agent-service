@@ -1,0 +1,67 @@
+{
+  "kind": "AgentRuntimeManifest",
+  "runtimeUnitId": "runtime.platform.page-candidate-specialist",
+  "role": "specialist",
+  "definition": {
+    "definitionId": "definition.platform.page-candidate-specialist",
+    "definitionDigest": "sha256:ba7897644044b353674673f3e42fdbf559fd23f43f4444c85190fa475cbd620a"
+  },
+  "capabilities": [
+    "provider.invoke",
+    "contract.validate"
+  ],
+  "image": {
+    "imageDigest": "sha256:8ee722dcc48b9b463021a2cfb3a946635fad2d0dfff1dd69684528954e784d65",
+    "sourceCommit": "0000000000000000000000000000000000000000",
+    "provenanceDigest": "sha256:6ac00fac237b88168c8e2e9cf45bd6f72c8493cce61f61b998ca2a5ac0cfc714",
+    "signatureDigest": "sha256:ec959a82371dba5092a9b97236636018400c1f59314d6e2ad093a307ef0b6436"
+  },
+  "protocol": {
+    "invocationProtocolDigest": "sha256:a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450",
+    "contractBomReference": {
+      "repository": "anvilkit/contracts",
+      "bomDigest": "sha256:5c2f0068884c18d084be4b86b0379d24b161f1b8c056896d3e1e104a4c0826aa",
+      "ociManifestDigest": "sha256:800e82b63fe152b1a7d875ae07415e82019d0f7b89493aeb56ac0e7bc95f9001",
+      "evidenceManifestDigest": "sha256:d5940411e3d3cd7e268821fed7a4273e53eaacbc919b922770d17ef1e66aa638"
+    }
+  },
+  "workload": {
+    "workloadIdentity": "urn:anvilkit:workload:page-candidate-specialist",
+    "audience": "urn:anvilkit:audience:runtime-page-candidate-specialist",
+    "allowedControlPlaneEndpoints": [
+      "/v1/internal/runtime/model-invocations",
+      "/v1/internal/runtime/artifact-content-grants",
+      "/v1/internal/runtime/artifacts",
+      "/v1/internal/runtime/contract-runtime-invocations"
+    ],
+    "networkPolicy": "deny-all-except-allowed-endpoints"
+  },
+  "execution": {
+    "taskChannel": "anvilkit.agent.task.page-candidate-specialist",
+    "maxConcurrency": 4,
+    "timeoutMilliseconds": 120000,
+    "resourceClass": "interactive-cpu",
+    "cpuMillis": 1000,
+    "memoryBytes": 536870912
+  },
+  "scaling": {
+    "minReplicas": 1,
+    "maxReplicas": 8,
+    "targetConcurrency": 2
+  },
+  "telemetry": {
+    "namespace": "anvilkit_agent_runtime_page_candidate_specialist",
+    "healthPath": "/healthz",
+    "readinessPath": "/readyz"
+  },
+  "release": {
+    "owner": "Agent Runtime Release owner",
+    "rolloutPolicy": "new-runs-only",
+    "drainSeconds": 30,
+    "rollbackTarget": "sha256:bb5639955b5ffd7cef8527e5dd42329a63bb9df337b5e54e3e2f2a9dadb5caa5"
+  },
+  "lifecycle": {
+    "state": "active",
+    "effectiveAt": "2026-08-27T00:00:00.000Z"
+  }
+}

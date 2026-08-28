@@ -1,0 +1,33 @@
+{
+  "approval": {
+    "lockDigest": "sha256:3f40fd6f09c733f8397cd4b65733b8153acf4317ec6312b1383540663d5021d7",
+    "profileDigest": "sha256:b19e0d190b55ad58f1359c334d2673df5d983afcd08a504d450ce8bc6573f7a0"
+  },
+  "catalogVersion": 1,
+  "releases": [
+    {
+      "runtimeUnitId": "runtime.platform.page-candidate-specialist",
+      "definitionId": "definition.platform.component-spec-specialist",
+      "document": "release.platform.component-spec-specialist.json",
+      "documentDigest": "sha256:128e8150c8b53c9f390b05331dab88291ba9b2993ed2356cde08f4d4d4f80d7f"
+    },
+    {
+      "runtimeUnitId": "runtime.platform.page-change-manager",
+      "definitionId": "definition.platform.manager",
+      "document": "release.platform.manager.json",
+      "documentDigest": "sha256:ff79992d8ae877beabad4f03ddd88a3643dcbafc25ef9c36a980af318d545539"
+    },
+    {
+      "runtimeUnitId": "runtime.platform.page-candidate-specialist",
+      "definitionId": "definition.platform.page-candidate-specialist",
+      "document": "release.platform.page-candidate-specialist.json",
+      "documentDigest": "sha256:1ae3fb0af63a221b0c29c56480563a3678be24fefb46dc65deacb5ea5a946051"
+    },
+    {
+      "runtimeUnitId": "runtime.platform.page-change-manager",
+      "definitionId": "definition.platform.page-change-manager",
+      "document": "release.platform.page-change-manager.json",
+      "documentDigest": "sha256:9483f80bc2beb1184b3774c302e7c6a9f692f8e9db7b53edc98ba07410d42b53"
+    }
+  ]
+}
