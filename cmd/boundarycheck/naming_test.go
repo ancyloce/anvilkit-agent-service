@@ -237,6 +237,45 @@ func TestProhibitedTestIdentifierFailsTheBoundaryCommand(t *testing.T) {
 	}
 }
 
+// TestRuntimeUnitImplementationImportFailsTheBoundaryCommand holds the control
+// plane to the execution boundary: a Manager or Specialist is a separate
+// process reached by dispatch, and no production file may import the runtime
+// module's implementation instead. The legitimate neighbour — this service's
+// own generated contract bindings — is admitted in the same run, so what is
+// enforced is which module is imported, not that nothing sharing the vendor
+// prefix ever is.
+func TestRuntimeUnitImplementationImportFailsTheBoundaryCommand(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "boundarycheck")
+	build := exec.Command("go", "build", "-o", binary, ".")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build the boundary command: %v\n%s", err, output)
+	}
+	run := func(t *testing.T, body string) (string, error) {
+		t.Helper()
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "internal", "execution"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "internal", "execution", "dispatch.go"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command(binary, "-root", root).CombinedOutput()
+		return string(output), err
+	}
+	prohibited := "package execution\n\nimport _ \"github.com/ancyloce/anvilkit-agent-runtimes/runtime\"\n"
+	output, err := run(t, prohibited)
+	if err == nil {
+		t.Fatalf("a runtime unit implementation import passed the boundary command:\n%s", output)
+	}
+	if !strings.Contains(output, "internal/execution/dispatch.go") || !strings.Contains(output, "runtime unit implementation import is forbidden") {
+		t.Fatalf("the failure did not name the boundary that was crossed:\n%s", output)
+	}
+	permitted := "package execution\n\nimport _ \"github.com/ancyloce/anvilkit-agent-service/contracts/generated/schema\"\n"
+	if output, err := run(t, permitted); err != nil {
+		t.Fatalf("the service's own generated bindings were refused: %v\n%s", err, output)
+	}
+}
+
 // A network-capable tool adapter cannot be compiled. Every way of reaching an
 // address is refused outside the exact files that mediate egress: an HTTP
 // client, a TLS client, a package-level dial, and a dialer value.

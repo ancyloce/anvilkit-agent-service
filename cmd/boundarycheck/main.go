@@ -7,11 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -128,6 +130,35 @@ func main() {
 			if strings.Contains(name, "anvilkit-platform/") {
 				failures = append(failures, relative+": cross-repository source import is forbidden")
 			}
+			// The runtime units are a process boundary, not a library. The
+			// control plane reaches a Manager or Specialist only by
+			// dispatching a canonical task over authenticated transport and
+			// verifying the signed result that comes back; importing the
+			// runtime implementation would let the same work happen
+			// in-process, beside every check that boundary exists to
+			// enforce.
+			if strings.Contains(name, "anvilkit-agent-runtimes") {
+				failures = append(failures, relative+": runtime unit implementation import is forbidden; runtimes are reached only by dispatch")
+			}
+			// The in-process runtime stand-in is test-profile material. It is
+			// kept in its own package so that the production binary never links
+			// it: a test composition imports it and hands it through the
+			// composition root's seam, and nothing else may import it at all.
+			// This rule is what turns "the binary does not carry it" from an
+			// observation about today's imports into a boundary.
+			if strings.Contains(name, "/internal/runtimes/inprocess") {
+				failures = append(failures, relative+": in-process runtime stand-in import outside test code; production reaches a runtime only by dispatch")
+			}
+			// Model reasoning lives behind the governed Model Gateway, which a
+			// dispatched runtime unit calls back across the boundary. Nothing in
+			// the run pipeline — the runner, the workflow, the executor, the
+			// API — reaches a model itself: a turn is executed by dispatching a
+			// canonical task, and an import of the gateway or the planning
+			// engine anywhere else would be the in-process execution path
+			// coming back under another name.
+			if (strings.Contains(name, "/internal/modelgateway") || strings.Contains(name, "/internal/planning")) && !reasonsWithModels(relative) {
+				failures = append(failures, relative+": model gateway or planning import outside the governed gateway; a turn reaches a model only by dispatching a task to a runtime")
+			}
 			// Outbound HTTP is mediated. An agent's tools reach outside
 			// through the egress guard, which resolves the name once, pins
 			// the connection to what it resolved, re-decides every redirect,
@@ -205,6 +236,12 @@ func main() {
 		os.Exit(1)
 	}
 	failures = append(failures, pinned...)
+	providers, err := providerSDKRequirements(*root)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	failures = append(failures, providers...)
 	if len(failures) > 0 {
 		for _, failure := range failures {
 			fmt.Fprintln(os.Stderr, failure)
@@ -267,16 +304,30 @@ const deliveryCamelPattern = `([a-z0-9])` + deliveryLabelCapitalAlternation + `(
 // so the mediated exchange is the only exchange there is.
 func outboundHTTPBoundary() map[string]bool {
 	return map[string]bool{
-		"cmd/agent-service/main.go":            true,
-		"internal/api/api.go":                  true,
-		"internal/events/sse.go":               true,
-		"internal/lifecycle/checks.go":         true,
-		"internal/lifecycle/lifecycle.go":      true,
-		"internal/runapp/app.go":               true,
-		"internal/runapp/receipts.go":          true,
-		"internal/security/egresstransport.go": true,
-		"internal/securityaudit/time_http.go":  true,
-		"internal/telemetry/telemetry.go":      true,
+		"cmd/agent-service/main.go":       true,
+		"internal/api/api.go":             true,
+		"internal/events/sse.go":          true,
+		"internal/lifecycle/checks.go":    true,
+		"internal/lifecycle/lifecycle.go": true,
+		"internal/runapp/app.go":          true,
+		"internal/runapp/receipts.go":     true,
+		// The runtime dispatcher reaches an operator-configured deployment
+		// address — the runtime unit a verified release names — in the same way
+		// the time authority and telemetry clients reach theirs. The egress
+		// guard governs destinations an agent named, which is a different
+		// problem: no part of a task decides where a runtime lives.
+		"internal/runtimes/httpdispatcher.go": true,
+		// The runtime boundary is an inbound surface: the handlers that answer
+		// a dispatched unit's callbacks. They import net/http to serve, never
+		// to reach out — the boundary composes no client at all.
+		"internal/runtimeboundary/boundary.go":        true,
+		"internal/runtimeboundary/modelinvocation.go": true,
+		"internal/runtimeboundary/submission.go":      true,
+		"internal/runtimeboundary/grants.go":          true,
+		"internal/runtimeboundary/contract.go":        true,
+		"internal/security/egresstransport.go":        true,
+		"internal/securityaudit/time_http.go":         true,
+		"internal/telemetry/telemetry.go":             true,
 	}
 }
 
@@ -470,6 +521,57 @@ func isCompileAssertion(declaration *ast.GenDecl) bool {
 		}
 	}
 	return true
+}
+
+// reasonsWithModels names the exact files permitted to import the governed
+// Model Gateway or the planning engine: the gateway itself, the engine itself,
+// the boundary handlers that serve the gateway to a dispatched unit, the
+// allowance the boundary enforces from a task, the controlled model stack the
+// gateway is implemented over, and the composition root that builds it. It is
+// exact files rather than package prefixes for the same reason the outbound
+// HTTP boundary is: a decision a new file inherits by where it was saved is
+// not one.
+func reasonsWithModels(relative string) bool {
+	if strings.HasPrefix(relative, "internal/modelgateway/") || strings.HasPrefix(relative, "internal/planning/") {
+		return true
+	}
+	// The in-process stand-in is the one component that reasons with models
+	// inside this process, which is exactly why the rule above confines it
+	// to test code: it may reason, and nothing production may import it.
+	if strings.HasPrefix(relative, "internal/runtimes/inprocess/") {
+		return true
+	}
+	return map[string]bool{
+		"internal/runtimeboundary/boundary.go":        true,
+		"internal/runtimeboundary/modelinvocation.go": true,
+		"internal/runtimes/allowance.go":              true,
+		"internal/execution/controlled.go":            true,
+		"cmd/agent-service/main.go":                   true,
+	}[relative]
+}
+
+// providerSDKRequirements proves the module requires no model provider SDK at
+// all. The per-file rule above confines an SDK import to the gateway adapter;
+// this one says there is nothing to confine: a provider is reached over the
+// mediated egress transport, and a dependency on a provider's own client is a
+// decision somebody makes here, not one that appears in go.mod.
+func providerSDKRequirements(root string) ([]string, error) {
+	body, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if errors.Is(err, fs.ErrNotExist) {
+		// A tree with no module file requires nothing; the import rule above
+		// still holds every file in it.
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var failures []string
+	for _, line := range strings.Split(string(body), "\n") {
+		if isProviderSDK(line) {
+			failures = append(failures, "go.mod: requires a model provider SDK ("+strings.TrimSpace(line)+"); providers are reached over the mediated egress transport")
+		}
+	}
+	return failures, nil
 }
 
 func isProviderSDK(path string) bool {
