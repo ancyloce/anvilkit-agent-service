@@ -123,6 +123,7 @@ const canonicalRunDocument = `{
   "status": "created",
   "executionGeneration": 0,
   "resourceRevision": 0,
+  "runtimeBinding": {"runtimeUnitId": "runtime.platform.page-change-manager", "runtimeManifestDigest": "sha256:1111111111111111111111111111111111111111111111111111111111111111", "runtimeImageDigest": "sha256:2222222222222222222222222222222222222222222222222222222222222222", "invocationProtocolDigest": "sha256:3333333333333333333333333333333333333333333333333333333333333333", "runtimeAudience": "urn:anvilkit:audience:runtime-page-change-manager"},
   "createdAt": "2026-08-09T12:00:00.000Z",
   "updatedAt": "2026-08-09T12:00:00.000Z"
 }`

@@ -75,6 +75,26 @@
       "operationId": "issueAgentArtifactContentGrant",
       "method": "POST",
       "template": "/workspaces/{workspaceId}/artifacts/{artifactId}/content-grant"
+    },
+    {
+      "operationId": "invokeGovernedModel",
+      "method": "POST",
+      "template": "/internal/runtime/model-invocations"
+    },
+    {
+      "operationId": "invokeGovernedContractRuntime",
+      "method": "POST",
+      "template": "/internal/runtime/contract-runtime-invocations"
+    },
+    {
+      "operationId": "issueRuntimeArtifactContentGrant",
+      "method": "POST",
+      "template": "/internal/runtime/artifact-content-grants"
+    },
+    {
+      "operationId": "submitRuntimeArtifact",
+      "method": "POST",
+      "template": "/internal/runtime/artifacts"
     }
   ]
 }

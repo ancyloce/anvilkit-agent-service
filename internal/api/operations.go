@@ -52,6 +52,14 @@ func operations() []Operation {
 		{ID: "getAgentArtifact", Method: "GET", Template: "/workspaces/{workspaceId}/artifacts/{artifactId}"},
 		{ID: "decideAgentArtifactCustody", Method: "POST", Template: "/workspaces/{workspaceId}/artifacts/{artifactId}/custody"},
 		{ID: "issueAgentArtifactContentGrant", Method: "POST", Template: "/workspaces/{workspaceId}/artifacts/{artifactId}/content-grant"},
+		// The runtime boundary: the internal operations a dispatched runtime
+		// unit calls back on. Declared in the canonical runtime boundary
+		// description (agent-runtime.openapi.json) rather than the public
+		// service description, and served under task-credential admission.
+		{ID: "invokeGovernedModel", Method: "POST", Template: "/internal/runtime/model-invocations"},
+		{ID: "invokeGovernedContractRuntime", Method: "POST", Template: "/internal/runtime/contract-runtime-invocations"},
+		{ID: "issueRuntimeArtifactContentGrant", Method: "POST", Template: "/internal/runtime/artifact-content-grants"},
+		{ID: "submitRuntimeArtifact", Method: "POST", Template: "/internal/runtime/artifacts"},
 	}
 }
 

@@ -33,6 +33,9 @@ type Handler struct {
 	draining  atomic.Bool
 	core      *runapp.App
 	verifier  TokenVerifier
+	// runtimeBoundary serves the internal runtime callback operations under
+	// its own task-credential admission.
+	runtimeBoundary http.Handler
 }
 
 type Option func(*Handler)
@@ -40,6 +43,16 @@ type Option func(*Handler)
 func WithAgentCore(core *runapp.App, verifier TokenVerifier) Option {
 	return func(handler *Handler) { handler.core, handler.verifier = core, verifier }
 }
+
+// WithRuntimeBoundary wires the service side of the canonical runtime
+// boundary: the internal operations a dispatched Manager or Specialist calls
+// back on, admitted by their task-scoped credentials.
+func WithRuntimeBoundary(boundary http.Handler) Option {
+	return func(handler *Handler) {
+		handler.runtimeBoundary = boundary
+	}
+}
+
 func New(readiness Readiness, options ...Option) *Handler {
 	handler := &Handler{readiness: readiness}
 	for _, option := range options {
@@ -66,6 +79,20 @@ func (h *Handler) ServeHTTP(response http.ResponseWriter, request *http.Request)
 	if strings.HasPrefix(request.URL.Path, "/v1/") {
 		if h.core != nil && h.verifier != nil && strings.HasPrefix(request.URL.Path, "/v1/workspaces/") {
 			h.serveAgent(response, request)
+			return
+		}
+		// The runtime boundary is its own authenticated surface: the bearer is
+		// a task-scoped credential this service issued for one dispatched
+		// attempt, not a platform token, so it is admitted by the boundary and
+		// never by the workspace verifier. The routing table still gates it —
+		// a boundary path the table does not name reaches nothing.
+		if h.runtimeBoundary != nil && strings.HasPrefix(request.URL.Path, "/v1/internal/runtime/") {
+			parts := strings.Split(strings.Trim(request.URL.Path, "/"), "/")
+			if _, routed := routedOperation(request.Method, parts); !routed {
+				writeProblem(response, problem.New(problem.CodeResourceNotFound, request.Header.Get("traceparent")), request.Header.Get("traceparent"))
+				return
+			}
+			h.runtimeBoundary.ServeHTTP(response, request)
 			return
 		}
 		writeProblem(response, problem.New(problem.CodeInfrastructureUnavailable, request.Header.Get("traceparent")), request.Header.Get("traceparent"))
@@ -493,10 +520,22 @@ func (r *trackedResponse) FlushError() error {
 
 func (h *Handler) BeginDrain() { h.draining.Store(true) }
 
+// maximumHeaderBytes bounds the headers of one request. It is above what any
+// governed operation needs — a bearer credential and the request digest — and
+// far below the default the server would otherwise parse before a handler
+// could refuse.
+const maximumHeaderBytes = 64 << 10
+
 type Server struct{ server *http.Server }
 
 func NewServer(address string, handler http.Handler) *Server {
-	return &Server{server: &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second}}
+	// The header bound and the idle deadline are the server's own: a request
+	// whose headers exceed the bound is refused before any handler sees it,
+	// and a keep-alive connection nobody is using is closed rather than held.
+	// There is deliberately no read or write deadline on the whole request:
+	// the event stream is a request that legitimately lasts, and the bodied
+	// operations bound their own reads.
+	return &Server{server: &http.Server{Addr: address, Handler: handler, ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: maximumHeaderBytes}}
 }
 func (s *Server) Run() error                         { return s.server.ListenAndServe() }
 func (s *Server) Serve(listener net.Listener) error  { return s.server.Serve(listener) }
