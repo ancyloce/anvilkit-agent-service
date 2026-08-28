@@ -72,6 +72,9 @@ import (
 func TestPostgresFoundations(t *testing.T) {
 	baseURL := os.Getenv("POSTGRES_TEST_URL")
 	if baseURL == "" {
+		if os.Getenv("ANVILKIT_REQUIRE_POSTGRES_PROOFS") != "" {
+			t.Fatal("POSTGRES_TEST_URL is not set but ANVILKIT_REQUIRE_POSTGRES_PROOFS requires these proofs; point POSTGRES_TEST_URL at a disposable PostgreSQL database")
+		}
 		t.Skip("POSTGRES_TEST_URL is not set")
 	}
 	ctx := context.Background()
@@ -1744,7 +1747,7 @@ func assertControlInterrupts(t *testing.T, ctx context.Context, pool *pgxpool.Po
 	digest, _ := canonical.Digest(raw)
 	scope := runs.Scope{WorkspaceID: "workspace-control", ProjectID: "project-control", ActorID: "actor"}
 	trace := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
-	created, err := runService.Create(ctx, runs.CreateInput{Scope: scope, Key: "create", ClaimedDigest: digest, Traceparent: trace, Raw: raw, Authority: durableAuthority()})
+	created, err := runService.Create(ctx, runs.CreateInput{Scope: scope, Key: "create", ClaimedDigest: digest, Traceparent: trace, Raw: raw, Authority: durableAuthority(), RuntimeBinding: testRuntimeBinding()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2004,7 +2007,7 @@ func assertDurableCreateLatency(t *testing.T, ctx context.Context, pool *pgxpool
 				return
 			}
 			acceptedAt := time.Now()
-			_, createErr := service.Create(ctx, runs.CreateInput{Scope: scope, Key: fmt.Sprintf("durable-load-%06d", index), ClaimedDigest: digest, Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", Raw: raw, Authority: authority})
+			_, createErr := service.Create(ctx, runs.CreateInput{Scope: scope, Key: fmt.Sprintf("durable-load-%06d", index), ClaimedDigest: digest, Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", Raw: raw, Authority: authority, RuntimeBinding: testRuntimeBinding()})
 			latencies[index] = time.Since(acceptedAt)
 			if createErr != nil {
 				errorsByRequest <- createErr
@@ -2071,7 +2074,7 @@ func assertDurableRunCore(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-durable","workspaceId":"workspace-durable","projectId":"project-durable"}}`)
 	digest, _ := canonical.Digest(raw)
 	scope := runs.Scope{WorkspaceID: "workspace-durable", ProjectID: "project-durable", ActorID: "actor"}
-	input := runs.CreateInput{Scope: scope, Key: "durable-key", ClaimedDigest: digest, Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", Raw: raw, Authority: durableAuthority()}
+	input := runs.CreateInput{Scope: scope, Key: "durable-key", ClaimedDigest: digest, Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01", Raw: raw, Authority: durableAuthority(), RuntimeBinding: testRuntimeBinding()}
 	var wait sync.WaitGroup
 	outcomes := make(chan runs.CreateOutcome, 8)
 	failures := make(chan error, 8)
@@ -2186,7 +2189,7 @@ func assertDurableRunCore(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	if err != nil || projection.Cursor != "durable-run:2" || len(projection.Run) == 0 {
 		t.Fatalf("snapshot=%#v err=%v", projection, err)
 	}
-	if findings := guard.Validate(ctx, contractguard.APIIn, "anvilkit://schema/agent-run?digest=sha256:e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564", projection.Run); len(findings) != 0 {
+	if findings := guard.Validate(ctx, contractguard.APIIn, "anvilkit://schema/agent-run?digest=sha256:6265dda23cd50d6b716d5ee15a5cd8d9f427b10cfff63a29e3ce2cd727d7d09d", projection.Run); len(findings) != 0 {
 		t.Fatalf("snapshot run is not contract-valid: %#v raw=%s", findings, projection.Run)
 	}
 	// The snapshot is the documented recovery path for an expired cursor, so
@@ -2268,13 +2271,13 @@ func assertDurableRunStoreAtomicity(t *testing.T, ctx context.Context, pool *pgx
 			return nil
 		})
 		service := runs.NewService(store, noOpStarter{}, runIDGenerator(runID), testClock{time.Unix(250, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
-		if _, err := service.Create(ctx, runs.CreateInput{Scope: scope, Key: fmt.Sprintf("atomic-create-%d", index), ClaimedDigest: digest, Traceparent: traceparent, Raw: raw, Authority: durableAuthority()}); err == nil {
+		if _, err := service.Create(ctx, runs.CreateInput{Scope: scope, Key: fmt.Sprintf("atomic-create-%d", index), ClaimedDigest: digest, Traceparent: traceparent, Raw: raw, Authority: durableAuthority(), RuntimeBinding: testRuntimeBinding()}); err == nil {
 			t.Fatalf("create failure %s did not abort", point)
 		}
 		assertDurableAtomicCounts(t, ctx, pool, scope, runID, 0, 0)
 
 		base := runs.NewService(runpg.New(pool, idempotencyStore, pinnedGuard(t)), noOpStarter{}, runIDGenerator(runID), testClock{time.Unix(250, 0)}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil }))
-		created, err := base.Create(ctx, runs.CreateInput{Scope: scope, Key: fmt.Sprintf("atomic-base-%d", index), ClaimedDigest: digest, Traceparent: traceparent, Raw: raw, Authority: durableAuthority()})
+		created, err := base.Create(ctx, runs.CreateInput{Scope: scope, Key: fmt.Sprintf("atomic-base-%d", index), ClaimedDigest: digest, Traceparent: traceparent, Raw: raw, Authority: durableAuthority(), RuntimeBinding: testRuntimeBinding()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2680,7 +2683,7 @@ func assertDurableInterruptExpiry(t *testing.T, ctx context.Context, pool *pgxpo
 		raw := []byte(fmt.Sprintf(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:%s"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-expiry","workspaceId":"workspace-expiry-%s","projectId":"project-expiry"}}`, strings.Repeat("a", 64), suffix))
 		digest, _ := canonical.Digest(raw)
 		scope := runs.Scope{WorkspaceID: "workspace-expiry-" + suffix, ProjectID: "project-expiry", ActorID: "actor"}
-		created, err := runService.Create(ctx, runs.CreateInput{Scope: scope, Key: "create", ClaimedDigest: digest, Traceparent: trace, Raw: raw, Authority: durableAuthority()})
+		created, err := runService.Create(ctx, runs.CreateInput{Scope: scope, Key: "create", ClaimedDigest: digest, Traceparent: trace, Raw: raw, Authority: durableAuthority(), RuntimeBinding: testRuntimeBinding()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -3348,7 +3351,7 @@ func assertDomainRedemptionAcrossProcesses(t *testing.T, ctx context.Context, po
 	if err != nil {
 		t.Fatal(err)
 	}
-	binding := applyauth.Binding{RunID: "run-redeem", ActionDigest: digest("1"), ArtifactDigest: digest("1"), Target: applyauth.Target{Type: "page", ID: "page-redeem", WorkspaceID: "workspace-redeem", ProjectID: "project-redeem"}, BaseRevision: "rev:request.redeem", ActorID: "actor-redeem", WorkspaceID: "workspace-redeem", ApprovalVersion: 1, ContractBOMDigest: digest("2"), PolicyDigest: digest("3"), DefinitionDigest: digest("4")}
+	binding := applyauth.Binding{RunID: "run-redeem", ActionDigest: digest("1"), ArtifactDigest: digest("1"), Target: applyauth.Target{Type: "page", ID: "page-redeem", WorkspaceID: "workspace-redeem", ProjectID: "project-redeem"}, BaseRevision: "rev:request.redeem", ActorID: "actor-redeem", WorkspaceID: "workspace-redeem", ApprovalVersion: 1, ContractBOMDigest: digest("2"), PolicyDigest: digest("3"), DefinitionDigest: digest("4"), CatalogDigest: digest("5")}
 	fixedAuthority := fixedApplyAuthority{proof: applyauth.Proof{Approved: binding, Current: binding, ApprovalCurrent: true, ArtifactEligible: true}}
 	audit, err := applyauthpg.New(pool)
 	if err != nil {
@@ -4238,4 +4241,11 @@ func assertActorBoundAuthority(t *testing.T, ctx context.Context, store *authori
 	if withdrawn.ActorActive || withdrawn.ActorRole != "" || len(withdrawn.ActorGrants.Capabilities) != 0 || len(withdrawn.ActorGrants.DataClasses) != 0 {
 		t.Fatalf("a withdrawn custodian still reads as %+v", withdrawn)
 	}
+}
+
+// testRuntimeBinding is the server-owned runtime pin a create path copies from
+// the definition the registry resolved. Every run carries one: a run with no
+// pinned runtime release could be served by whatever runtime answered.
+func testRuntimeBinding() json.RawMessage {
+	return json.RawMessage(`{"runtimeUnitId":"runtime.platform.page-change-manager","runtimeManifestDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","runtimeImageDigest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","invocationProtocolDigest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","runtimeAudience":"urn:anvilkit:audience:runtime-page-change-manager"}`)
 }
