@@ -15,12 +15,17 @@ import (
 )
 
 // Integration proofs against a disposable Postgres DBOS system database.
-// They skip unless DBOS_TEST_URL points at a disposable instance.
+// They skip unless DBOS_TEST_URL points at a disposable instance, and fail
+// rather than skip when ANVILKIT_REQUIRE_POSTGRES_PROOFS demands them, so a
+// verification run cannot report success having quietly proven nothing.
 
 func integrationConfig(t *testing.T, schemaSuffix, executorID string) Config {
 	t.Helper()
 	databaseURL := os.Getenv("DBOS_TEST_URL")
 	if databaseURL == "" {
+		if os.Getenv("ANVILKIT_REQUIRE_POSTGRES_PROOFS") != "" {
+			t.Fatal("DBOS_TEST_URL is not set but ANVILKIT_REQUIRE_POSTGRES_PROOFS requires these proofs; point DBOS_TEST_URL at a disposable PostgreSQL database")
+		}
 		t.Skip("DBOS_TEST_URL is not set")
 	}
 	return Config{

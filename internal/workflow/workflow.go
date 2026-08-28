@@ -139,6 +139,24 @@ type Carry struct {
 	Usage        agent.Usage     `json:"usage"`
 	Delegations  int             `json:"delegations"`
 	Version      uint64          `json:"version"`
+	// Delegation is the outcome of the delegation the run just concluded,
+	// threaded to exactly one following turn — the one that validates it —
+	// and cleared when that turn consumes it.
+	Delegation *DelegationCarry `json:"delegation,omitempty"`
+}
+
+// DelegationCarry is the recorded outcome of one delegation, in the governed
+// vocabulary the concluding turn reads.
+type DelegationCarry struct {
+	State      string `json:"state"`
+	DelegateID string `json:"delegateId"`
+	ReasonCode string `json:"reasonCode,omitempty"`
+	// Candidate fields spell the immutable reference of a completed
+	// delegation's candidate.
+	CandidateArtifactID string `json:"candidateArtifactId,omitempty"`
+	CandidateDigest     string `json:"candidateDigest,omitempty"`
+	CandidateMediaType  string `json:"candidateMediaType,omitempty"`
+	CandidateSizeBytes  int    `json:"candidateSizeBytes,omitempty"`
 }
 
 // Halt is a typed non-error stop resolved by an operation: budget or limit
