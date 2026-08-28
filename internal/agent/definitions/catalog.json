@@ -1,39 +1,39 @@
 {
   "approval": {
-    "lockDigest": "sha256:9929f0b22d508a88dfacc121ff215a377a68154ba33c1d32d5254be8c552ed61",
-    "profileDigest": "sha256:3a27b4d7bbbe7d6a1107da6c23ee59cae0d50ab9bb3c8fd8b96e54defa9ba384"
+    "lockDigest": "sha256:3f40fd6f09c733f8397cd4b65733b8153acf4317ec6312b1383540663d5021d7",
+    "profileDigest": "sha256:b19e0d190b55ad58f1359c334d2673df5d983afcd08a504d450ce8bc6573f7a0"
   },
   "catalogVersion": 1,
   "definitions": [
     {
-      "definitionDigest": "sha256:7da738ced420827192031ae3f4e10c8cdace9227c9df294111842e45d4eabe4a",
+      "definitionDigest": "sha256:4496b7f6e9f39757d54d3550f97c3ea7fb94524ab85b0a7db81bba75fdb5959c",
       "definitionId": "definition.platform.component-spec-specialist",
       "document": "definition.platform.component-spec-specialist.json",
-      "documentDigest": "sha256:81f49d27a34c0b2abfa9ff6a149aa085bfc2840f9d07f33b410d813c7aae492b",
+      "documentDigest": "sha256:10e49fae97fb23abf7b24c2e48ce8bca6c764ad56246856328a0420d13f05767",
       "instruction": "definition.platform.component-spec-specialist.instruction.txt",
       "instructionDigest": "sha256:e68bdfe93b8fe858950f7e0aebf41d4d90c56e8ac53f242f2b8d1d1a29359f34"
     },
     {
-      "definitionDigest": "sha256:c3fcaa8c924797377d74a9f5cb535158284ac79d702ad0711057c37b0296ad61",
+      "definitionDigest": "sha256:20c0b44e422bfcf42f4becbf9f6ee115f9ad67df402766c0a56e1767c492314f",
       "definitionId": "definition.platform.manager",
       "document": "definition.platform.manager.json",
-      "documentDigest": "sha256:510043ec98be79a4e1735ad3d2f30869d5c5fc028d56affa4325238032d82e0c",
+      "documentDigest": "sha256:6d2e78f4a89fc36f58d458ae12cfe5afd97c3020bb83fc8924549275a09d6dd9",
       "instruction": "definition.platform.manager.instruction.txt",
       "instructionDigest": "sha256:33e04839cbe737047a70176afc6f81016feac5defb535d47772d3f46161c9902"
     },
     {
-      "definitionDigest": "sha256:e44b23633802a25bdb52198acfa938223460f9adc806fd9c0482be3b591314d6",
+      "definitionDigest": "sha256:48513f1c6472c8f4b908ba58696aeae17701056ba09c5a51b811dcff7c6a696e",
       "definitionId": "definition.platform.page-candidate-specialist",
       "document": "definition.platform.page-candidate-specialist.json",
-      "documentDigest": "sha256:0f21e045e1714efa82ffe364d9eebcd61a06219b60a32584e06376e1da5e257a",
+      "documentDigest": "sha256:9392fc9e0321c97a6e55112326d8ebfbaa9f0cb9c7529408f86a8e09559fd92d",
       "instruction": "definition.platform.page-candidate-specialist.instruction.txt",
       "instructionDigest": "sha256:5cfc42f4c2a354c7b0acaf3ef733c88b3ada2cb95f34466a1f7491f743ef1065"
     },
     {
-      "definitionDigest": "sha256:7929fba75592852e916af6e66baf225bb9077b5c90898e735ebdbea07b7d4d36",
+      "definitionDigest": "sha256:c88c0a0126624434ebd770b3c3f0072db0c3217895a266561946ff4ffd7cccd4",
       "definitionId": "definition.platform.page-change-manager",
       "document": "definition.platform.page-change-manager.json",
-      "documentDigest": "sha256:04a88e85e85b50a2805b6b75d4b93fd3f9ecaba7882ff8d02eafa31f9fda8c54",
+      "documentDigest": "sha256:4f8899824ba34a0db22ada445027a07e09285d32aa4d31ccc3b13bf70abe3533",
       "instruction": "definition.platform.page-change-manager.instruction.txt",
       "instructionDigest": "sha256:61f6f13acf519da60fb3de8f0fa1f9779df241f2432c1eb0f5a970c0d0553030"
     }

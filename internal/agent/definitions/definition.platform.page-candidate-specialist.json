@@ -1,6 +1,6 @@
 {
   "allowedDelegates": [],
-  "definitionDigest": "sha256:e44b23633802a25bdb52198acfa938223460f9adc806fd9c0482be3b591314d6",
+  "definitionDigest": "sha256:48513f1c6472c8f4b908ba58696aeae17701056ba09c5a51b811dcff7c6a696e",
   "definitionId": "definition.platform.page-candidate-specialist",
   "domain": "pagix-page",
   "evaluators": [],
@@ -37,6 +37,13 @@
     "mode": "bounded-repair"
   },
   "role": "specialist",
+  "runtimeBinding": {
+    "runtimeUnitId": "runtime.platform.page-candidate-specialist",
+    "runtimeManifestDigest": "sha256:1ae3fb0af63a221b0c29c56480563a3678be24fefb46dc65deacb5ea5a946051",
+    "runtimeImageDigest": "sha256:8ee722dcc48b9b463021a2cfb3a946635fad2d0dfff1dd69684528954e784d65",
+    "invocationProtocolDigest": "sha256:a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450",
+    "runtimeAudience": "urn:anvilkit:audience:runtime-page-candidate-specialist"
+  },
   "stopConditions": [
     "completed",
     "refused",

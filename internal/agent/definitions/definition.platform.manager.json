@@ -2,7 +2,7 @@
   "allowedDelegates": [
     "definition.platform.component-spec-specialist"
   ],
-  "definitionDigest": "sha256:c3fcaa8c924797377d74a9f5cb535158284ac79d702ad0711057c37b0296ad61",
+  "definitionDigest": "sha256:20c0b44e422bfcf42f4becbf9f6ee115f9ad67df402766c0a56e1767c492314f",
   "definitionId": "definition.platform.manager",
   "domain": "platform-agent",
   "evaluators": [],
@@ -39,6 +39,13 @@
     "mode": "bounded-repair"
   },
   "role": "manager",
+  "runtimeBinding": {
+    "runtimeUnitId": "runtime.platform.page-change-manager",
+    "runtimeManifestDigest": "sha256:ff79992d8ae877beabad4f03ddd88a3643dcbafc25ef9c36a980af318d545539",
+    "runtimeImageDigest": "sha256:a7a3dd30f9042ce87cb0f7e971ed7ee7dc083b1b41d10ddba443019d8357d23b",
+    "invocationProtocolDigest": "sha256:a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450",
+    "runtimeAudience": "urn:anvilkit:audience:runtime-page-change-manager"
+  },
   "stopConditions": [
     "completed",
     "refused",
