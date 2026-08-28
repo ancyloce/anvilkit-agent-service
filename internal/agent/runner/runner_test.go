@@ -7,19 +7,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ancyloce/anvilkit-agent-service/contracts/generated/schema"
 	contractvalidator "github.com/ancyloce/anvilkit-agent-service/contracts/validator"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent/runner"
 	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contracts"
+	"github.com/ancyloce/anvilkit-agent-service/internal/dispatch"
 	"github.com/ancyloce/anvilkit-agent-service/internal/modelgateway"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
+	"github.com/ancyloce/anvilkit-agent-service/internal/runtimes"
+	"github.com/ancyloce/anvilkit-agent-service/internal/runtimes/inprocess"
 	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
 )
 
@@ -72,7 +76,11 @@ func specialistDefinition(t *testing.T, registry *agent.Registry) agent.Definiti
 }
 
 // scriptedInvoker is a strict scripted model port: it fails when the script
-// is exhausted and never invents outputs.
+// is exhausted and never invents outputs. It stands where the governed Model
+// Gateway stands for the runtime, not for the runner: after the dispatch cut
+// the runner reaches no model at all, and every assertion about model calls
+// below is an assertion about what the runtime did on the other side of the
+// port.
 type scriptedInvoker struct {
 	lock    sync.Mutex
 	outputs [][]byte
@@ -111,6 +119,14 @@ type staticSelector struct{}
 
 func (staticSelector) Select(context.Context, string, agent.PolicyReference) (modelgateway.Selection, error) {
 	return modelgateway.Selection{MaximumCostMicros: 1_000_000}, nil
+}
+
+// definitionResolver is what a runtime asks of the approved catalog: the
+// definition a task pins, by identity and digest.
+type definitionResolver struct{ registry *agent.Registry }
+
+func (d definitionResolver) Resolve(definitionID, definitionDigest string) (agent.Definition, error) {
+	return d.registry.Resolve(agent.DefinitionReference{DefinitionID: definitionID, DefinitionDigest: definitionDigest})
 }
 
 // activeAuthority is the current-authority observation a caller re-read
@@ -203,11 +219,47 @@ func testToolProfile(t *testing.T) tools.Profile {
 	return profile
 }
 
+// interceptingDispatcher sits between the runner and the in-process runtime so
+// a test can make a dispatch go unanswered, or tamper with a result after it
+// was signed. Both are things a transport can do and a runtime cannot.
+type interceptingDispatcher struct {
+	inner *inprocess.Runtime
+	lock  sync.Mutex
+	// unanswered makes the next N dispatches produce no result at all, as a
+	// lost response or an unreachable release would.
+	unanswered int
+	tamper     func(*schema.AgentRuntimeResult)
+	tasks      []schema.AgentTask
+}
+
+func (d *interceptingDispatcher) Dispatch(ctx context.Context, binding agent.RuntimeBinding, task schema.AgentTask, credential runtimes.Credential) (runtimes.DispatchReceipt, error) {
+	d.lock.Lock()
+	d.tasks = append(d.tasks, task)
+	skip := d.unanswered > 0
+	if skip {
+		d.unanswered--
+	}
+	tamper := d.tamper
+	d.lock.Unlock()
+	if skip {
+		return runtimes.DispatchReceipt{}, fmt.Errorf("the release did not answer")
+	}
+	receipt, err := d.inner.Dispatch(ctx, binding, task, credential)
+	if err != nil || tamper == nil {
+		return receipt, err
+	}
+	tamper(&receipt.Result)
+	return receipt, nil
+}
+
 type runnerHarness struct {
-	runner   *runner.Runner
-	registry *agent.Registry
-	invoker  *scriptedInvoker
-	recorder *recordingToolRecorder
+	runner     *runner.Runner
+	registry   *agent.Registry
+	invoker    *scriptedInvoker
+	recorder   *recordingToolRecorder
+	repository *dispatch.MemoryRepository
+	dispatcher *interceptingDispatcher
+	signer     *inprocess.SeededSigner
 }
 
 func newRunnerHarness(t *testing.T, outputs [][]byte, options ...func(*runner.Config)) *runnerHarness {
@@ -215,19 +267,47 @@ func newRunnerHarness(t *testing.T, outputs [][]byte, options ...func(*runner.Co
 	registry := testRegistry(t)
 	invoker := &scriptedInvoker{outputs: outputs}
 	recorder := &recordingToolRecorder{}
-	guard, err := tools.NewGuard(testToolProfile(t), recorder, fixedClock{time.Unix(1000, 0)}, admittingArgumentValidator{})
+	clock := fixedClock{time.Unix(1000, 0).UTC()}
+	guard, err := tools.NewGuard(testToolProfile(t), recorder, clock, admittingArgumentValidator{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := inprocess.NewSeededSigner(testSigningMaterial, testResultKeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, credentialTrust := testCredentialMaterial(t, registry, clock)
+	inProcess, err := inprocess.New(inprocess.Config{
+		Definitions: definitionResolver{registry: registry},
+		Credentials: credentialTrust,
+		Selector:    staticSelector{},
+		Invoker:     invoker,
+		Signer:      signer,
+		Now:         clock.Now,
+		Repairs:     3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &interceptingDispatcher{inner: inProcess}
+	repository := dispatch.NewMemoryRepository()
+	tasks, err := dispatch.New(dispatch.Config{Repository: repository, Tokens: dispatch.RandomTokens{}, Clock: clock, Lease: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := runner.Config{
-		Registry:  registry,
-		Compiler:  contextcompiler.New(nil),
-		Selector:  staticSelector{},
-		Invoker:   invoker,
-		Guard:     guard,
-		Validator: acceptAllValidator{},
-		Clock:     fixedClock{time.Unix(1000, 0)},
-		Limits:    runner.Limits{MaximumOutputBytes: 65536, MaximumInputTokens: 100000, MaximumOutputTokens: 100000, Timeout: 5 * time.Second, MaximumAttempts: 1, RetryBudget: 0, ContextTokens: 4000},
+		Registry:    registry,
+		Compiler:    contextcompiler.New(nil),
+		Tasks:       tasks,
+		Dispatcher:  dispatcher,
+		Credentials: credentials,
+		Signatures:  testResultVerifier(t, registry, signer, clock),
+		Disclosure:  inProcess,
+		Candidates:  inProcess,
+		Guard:       guard,
+		Validator:   acceptAllValidator{},
+		Clock:       clock,
+		Limits:      testLimits(),
 	}
 	for _, option := range options {
 		option(&cfg)
@@ -236,7 +316,76 @@ func newRunnerHarness(t *testing.T, outputs [][]byte, options ...func(*runner.Co
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &runnerHarness{runner: built, registry: registry, invoker: invoker, recorder: recorder}
+	return &runnerHarness{runner: built, registry: registry, invoker: invoker, recorder: recorder, repository: repository, dispatcher: dispatcher, signer: signer}
+}
+
+const testSigningMaterial = "runner-test-signing-material-0123456789"
+
+const (
+	testResultKeyID     = "urn:anvilkit:key:test-runtime-result"
+	testCredentialKeyID = "urn:anvilkit:key:test-task-credential"
+)
+
+// testCredentialMaterial builds both halves of the task-credential boundary
+// from one key: the issuer the runner mints with, and the trust the in-process
+// runtime admits against. They are built together because a harness that let
+// them drift would be testing a boundary neither side of production has.
+func testCredentialMaterial(t *testing.T, registry *agent.Registry, clock fixedClock) (*runtimes.TaskCredentials, *runtimes.CredentialTrust) {
+	t.Helper()
+	issuer, err := runtimes.NewSeededTaskCredentials(testSigningMaterial, testCredentialKeyID, time.Minute, clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audiences := make([]string, 0)
+	for _, definition := range registry.Definitions() {
+		audiences = append(audiences, definition.RuntimeBinding.RuntimeAudience)
+	}
+	source, err := runtimes.NewControlledCredentialTrust(issuer.PublicKey(), issuer.KeyID(), audiences, clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust, err := runtimes.NewCredentialTrust(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issuer, trust
+}
+
+// testResultVerifier trusts the harness signer for every release the catalog
+// binds, which is what the operator's trust store does for a real deployment.
+func testResultVerifier(t *testing.T, registry *agent.Registry, signer *inprocess.SeededSigner, clock fixedClock) *runtimes.ResultVerifier {
+	t.Helper()
+	source, err := runtimes.NewControlledSigningTrust(signer.PublicKey(), testResultKeyID, testReleases(registry), clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := runtimes.NewResultVerifier(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return verifier
+}
+
+// testReleases describes the releases the catalog's definitions pin, in the
+// shape the trust material is built from.
+func testReleases(registry *agent.Registry) []runtimes.Release {
+	releases := make([]runtimes.Release, 0)
+	for _, definition := range registry.Definitions() {
+		releases = append(releases, runtimes.Release{
+			RuntimeUnitID:  definition.RuntimeBinding.RuntimeUnitID,
+			ManifestDigest: definition.RuntimeBinding.RuntimeManifestDigest,
+			Binding:        definition.RuntimeBinding,
+		})
+	}
+	return releases
+}
+
+func testLimits() runner.Limits {
+	return runner.Limits{
+		MaximumOutputBytes: 65536, MaximumInputTokens: 100000, MaximumOutputTokens: 100000,
+		Timeout: 5 * time.Second, MaximumAttempts: 1, RetryBudget: 0, ContextTokens: 4000,
+		MemoryBytes: 512 << 20, CPUMillis: 2000,
+	}
 }
 
 func plan(tool string, arguments string) []byte {
@@ -248,7 +397,29 @@ func ampleBudget() runner.BudgetView {
 }
 
 func testRunView() runner.RunView {
-	return runner.RunView{RunID: "run.test", WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor", Domain: "platform-agent", Operation: "page-change", TargetType: "page", TargetID: "page.home"}
+	return runner.RunView{
+		RunID: "run.test", RootRunID: "run.test", WorkspaceID: "workspace", ProjectID: "project",
+		ActorID: "actor", Domain: "platform-agent", Operation: "page-change", TargetType: "page", TargetID: "page.home",
+		ExecutionGeneration: 1,
+		Traceparent:         "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+	}
+}
+
+func testContractBOM() schema.SharedPrimitivesContractBomReference {
+	digest := schema.SharedPrimitivesDigest("sha256:" + strings.Repeat("a", 64))
+	return schema.SharedPrimitivesContractBomReference{Repository: "anvilkit/contracts", BomDigest: digest, OciManifestDigest: digest, EvidenceManifestDigest: digest}
+}
+
+// turn dispatches one turn for the given definition on the release that
+// definition pins.
+func (h *runnerHarness) turn(definition agent.Definition, request runner.TurnRequest) (runner.TurnOutcome, error) {
+	request.Definition = definition
+	request.Runtime = definition.RuntimeBinding
+	request.ContractBOM = testContractBOM()
+	if request.Run.RunID == "" {
+		request.Run = testRunView()
+	}
+	return h.runner.Turn(context.Background(), request)
 }
 
 func TestTurnResolvesEveryDecisionKindDeterministically(t *testing.T) {
@@ -271,9 +442,7 @@ func TestTurnResolvesEveryDecisionKindDeterministically(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			harness := newRunnerHarness(t, [][]byte{testCase.output})
-			outcome, err := harness.runner.Turn(context.Background(), runner.TurnRequest{
-				Definition:   managerDefinition(t, harness.registry),
-				Run:          testRunView(),
+			outcome, err := harness.turn(managerDefinition(t, harness.registry), runner.TurnRequest{
 				Phase:        runner.PhasePlan,
 				OperationKey: "run.test:g1:turn-0000",
 				Authority:    activeAuthority(),
@@ -301,11 +470,255 @@ func TestTurnResolvesEveryDecisionKindDeterministically(t *testing.T) {
 	}
 }
 
+// Every turn leaves a durable account of what was executed: one logical task,
+// one physical attempt under it, and a registered result.
+func TestTurnRecordsOneLogicalTaskAndOneSettledAttempt(t *testing.T) {
+	harness := newRunnerHarness(t, [][]byte{plan("agent.continue", `{"note":"thinking"}`)})
+	if _, err := harness.turn(managerDefinition(t, harness.registry), runner.TurnRequest{
+		Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0000", Authority: activeAuthority(), Budget: ampleBudget(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	task, attempts, found, err := harness.repository.Load(context.Background(), dispatch.Scope{WorkspaceID: "workspace", ProjectID: "project"}, dispatch.TaskID("run.test:g1:turn-0000"))
+	if err != nil || !found {
+		t.Fatalf("the turn recorded no logical task: %v", err)
+	}
+	if task.Status != dispatch.Succeeded || task.Attempts != 1 || task.LeaseEpoch != 1 {
+		t.Fatalf("task = %+v", task)
+	}
+	if len(attempts) != 1 || attempts[0].Status != dispatch.Succeeded || attempts[0].ResultStatementDigest == "" {
+		t.Fatalf("attempts = %+v", attempts)
+	}
+	if attempts[0].FenceTokenDigest == "" || strings.Contains(attempts[0].FenceTokenDigest, "=") {
+		t.Fatalf("the durable record must hold the fence digest, not the token: %q", attempts[0].FenceTokenDigest)
+	}
+	if len(harness.dispatcher.tasks) != 1 {
+		t.Fatalf("dispatched tasks = %d, want 1", len(harness.dispatcher.tasks))
+	}
+	dispatched := harness.dispatcher.tasks[0]
+	if dispatched.FenceToken == "" || dispatched.AttemptNumber != 1 || dispatched.LeaseEpoch != 1 {
+		t.Fatalf("the dispatched task must carry the attempt's own fence: %+v", dispatched)
+	}
+	if dispatch.Digest(dispatched.FenceToken) != attempts[0].FenceTokenDigest {
+		t.Fatal("the dispatched fence token must be the one the record digested")
+	}
+}
+
+// A dispatch that never answered is replaced by a new physical attempt with a
+// new number, lease epoch, and fence. The replaced attempt is superseded, so
+// nothing it might still return can commit.
+func TestUnansweredDispatchIsReplacedAndTheOldAttemptIsSuperseded(t *testing.T) {
+	harness := newRunnerHarness(t, [][]byte{plan("agent.continue", `{"note":"thinking"}`)}, func(cfg *runner.Config) {
+		limits := testLimits()
+		limits.MaximumAttempts, limits.RetryBudget = 3, time.Minute
+		cfg.Limits = limits
+	})
+	harness.dispatcher.unanswered = 1
+	outcome, err := harness.turn(managerDefinition(t, harness.registry), runner.TurnRequest{
+		Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0000", Authority: activeAuthority(), Budget: ampleBudget(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Decision.Kind != agent.DecisionContinue {
+		t.Fatalf("the replacement must resolve the turn: %+v", outcome)
+	}
+	task, attempts, _, err := harness.repository.Load(context.Background(), dispatch.Scope{WorkspaceID: "workspace", ProjectID: "project"}, dispatch.TaskID("run.test:g1:turn-0000"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Attempts != 2 || len(attempts) != 2 {
+		t.Fatalf("a replacement must be a second attempt of the same task: %+v", attempts)
+	}
+	if attempts[0].Status != dispatch.Superseded || attempts[0].FailureReason != dispatch.ReasonDispatchFailed {
+		t.Fatalf("the unanswered attempt must be superseded: %+v", attempts[0])
+	}
+	if attempts[1].LeaseEpoch <= attempts[0].LeaseEpoch || attempts[1].FenceTokenDigest == attempts[0].FenceTokenDigest {
+		t.Fatal("a replacement must carry a new lease epoch and a new fence")
+	}
+	if attempts[1].Status != dispatch.Succeeded {
+		t.Fatalf("the replacement must be the attempt that settled: %+v", attempts[1])
+	}
+	// The provider identity belongs to the logical task, so the replacement
+	// replays the same provider operation instead of buying a second one.
+	if harness.invoker.calls != 1 {
+		t.Fatalf("model calls = %d, want the one the logical task funds", harness.invoker.calls)
+	}
+}
+
+// A result that does not describe the bytes it arrived in cannot be correlated
+// with anything, and must not be committed on the strength of its own claim.
+func TestTamperedResultIsRefusedBeforeAnyCommit(t *testing.T) {
+	harness := newRunnerHarness(t, [][]byte{plan("agent.continue", `{"note":"thinking"}`)})
+	harness.dispatcher.tamper = func(result *schema.AgentRuntimeResult) {
+		result.TurnDecision.Payload["note"] = "something else entirely"
+	}
+	_, err := harness.turn(managerDefinition(t, harness.registry), runner.TurnRequest{
+		Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0000", Authority: activeAuthority(), Budget: ampleBudget(),
+	})
+	var details problem.Details
+	if err == nil || !asProblem(err, &details) || details.Code != string(problem.CodeContractInvalid) {
+		t.Fatalf("a tampered result must be refused: %v", err)
+	}
+	_, attempts, _, loadErr := harness.repository.Load(context.Background(), dispatch.Scope{WorkspaceID: "workspace", ProjectID: "project"}, dispatch.TaskID("run.test:g1:turn-0000"))
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if attempts[0].Status == dispatch.Succeeded {
+		t.Fatal("a refused result must not settle the attempt")
+	}
+}
+
+// A result the fence never sees still leaves a trace. An unverifiable
+// signature and a result addressed to other work are the two failures most
+// worth investigating, and before this they were the only ones that recorded
+// nothing while an ordinary stale fence recorded evidence.
+func TestAnUnattributableResultIsRecordedAsEvidence(t *testing.T) {
+	for name, expectation := range map[string]struct {
+		tamper func(*testing.T, *runnerHarness, *schema.AgentRuntimeResult)
+		reason string
+	}{
+		"an unverifiable signature": {
+			tamper: func(_ *testing.T, _ *runnerHarness, result *schema.AgentRuntimeResult) {
+				// Signed, and not by anything the trust store approves.
+				result.Signature.Signature = "AAAA" + result.Signature.Signature[4:]
+			},
+			reason: "RESULT_SIGNATURE_UNVERIFIED",
+		},
+		"a result for another attempt": {
+			tamper: func(t *testing.T, harness *runnerHarness, result *schema.AgentRuntimeResult) {
+				result.PhysicalAttemptId = "attempt.somewhere-else"
+				harness.resign(t, result)
+			},
+			reason: "RESULT_NOT_FOR_ATTEMPT",
+		},
+		"a misstated statement digest": {
+			tamper: func(_ *testing.T, _ *runnerHarness, result *schema.AgentRuntimeResult) {
+				result.Signature.StatementDigest = schema.SharedPrimitivesDigest("sha256:" + strings.Repeat("c", 64))
+			},
+			reason: "RESULT_STATEMENT_DIGEST_MISMATCH",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			harness := newRunnerHarness(t, [][]byte{plan("agent.continue", `{"note":"thinking"}`)})
+			harness.dispatcher.tamper = func(result *schema.AgentRuntimeResult) {
+				expectation.tamper(t, harness, result)
+			}
+			if _, err := harness.turn(managerDefinition(t, harness.registry), runner.TurnRequest{
+				Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0000", Authority: activeAuthority(), Budget: ampleBudget(),
+			}); err == nil {
+				t.Fatal("an unattributable result was not refused")
+			}
+			evidence := harness.repository.Evidence()
+			if len(evidence) != 1 {
+				t.Fatalf("recorded %d evidence facts, want exactly one", len(evidence))
+			}
+			if evidence[0].Disposition != dispatch.DispositionUnbound || evidence[0].Reason != expectation.reason {
+				t.Fatalf("evidence = %+v, want an unbound %s", evidence[0], expectation.reason)
+			}
+			// The evidence names the attempt this service was holding, not the
+			// one the result claimed: a record keyed by whatever a hostile
+			// result said would be a record an attacker chose the shape of.
+			if evidence[0].PhysicalAttemptID == "attempt.somewhere-else" {
+				t.Fatal("the evidence was keyed by the identity the result asserted")
+			}
+			// And nothing committed.
+			_, attempts, _, err := harness.repository.Load(context.Background(),
+				dispatch.Scope{WorkspaceID: "workspace", ProjectID: "project"}, dispatch.TaskID("run.test:g1:turn-0000"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, attempt := range attempts {
+				if attempt.Status == dispatch.Succeeded {
+					t.Fatal("an unattributable result settled an attempt")
+				}
+			}
+			// The attempt the turn gave up on is closed rather than left as the
+			// task's current execution: a runtime still working on it must be
+			// refused at the boundary, and only a closed attempt can be.
+			if len(attempts) != 1 || attempts[0].Status != dispatch.Failed || attempts[0].FailureReason != dispatch.ReasonResultUnattributable {
+				t.Fatalf("the abandoned attempt must be closed as failed for an unattributable result: %+v", attempts)
+			}
+		})
+	}
+}
+
+// A result addressed to another attempt is refused before the durable record
+// is asked about it.
+func TestResultForAnotherAttemptIsRefused(t *testing.T) {
+	harness := newRunnerHarness(t, [][]byte{plan("agent.continue", `{"note":"thinking"}`)})
+	harness.dispatcher.tamper = func(result *schema.AgentRuntimeResult) {
+		result.PhysicalAttemptId = "attempt.somewhere-else"
+		harness.resign(t, result)
+	}
+	_, err := harness.turn(managerDefinition(t, harness.registry), runner.TurnRequest{
+		Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0000", Authority: activeAuthority(), Budget: ampleBudget(),
+	})
+	var details problem.Details
+	if err == nil || !asProblem(err, &details) || details.Code != string(problem.CodeContractInvalid) {
+		t.Fatalf("a result for another attempt must be refused: %v", err)
+	}
+}
+
+// A candidate that does not match the digest the result pinned is not a
+// candidate: the reference is the only thing tying the document to the result.
+func TestCandidateDigestMismatchRefusesTheDecision(t *testing.T) {
+	harness := newRunnerHarness(t, [][]byte{plan("agent.final", `{"candidate":{"kind":"ComponentPackageSpec"},"summary":"done"}`)})
+	harness.dispatcher.tamper = func(result *schema.AgentRuntimeResult) {
+		result.TurnDecision.ArtifactOutputs[0].Digest = schema.SharedPrimitivesDigest("sha256:" + strings.Repeat("b", 64))
+		harness.resign(t, result)
+	}
+	outcome, err := harness.turn(managerDefinition(t, harness.registry), runner.TurnRequest{
+		Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0000", Authority: activeAuthority(), Budget: ampleBudget(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Decision.Kind != agent.DecisionRefuse {
+		t.Fatalf("an unreadable candidate must refuse: %+v", outcome.Decision)
+	}
+}
+
+// restatedDigest recomputes the statement digest after a test rewrote the
+// statement, so the test exercises the check it means to and not the one
+// before it.
+func restatedDigest(t *testing.T, result schema.AgentRuntimeResult) schema.SharedPrimitivesDigest {
+	t.Helper()
+	digest, err := runtimes.StatementDigest(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return schema.SharedPrimitivesDigest(digest)
+}
+
+// resign re-signs a result a test rewrote, in the runtime's own voice.
+//
+// Restating the digest is no longer enough to reach the checks downstream of
+// the signature: a rewritten statement no longer verifies, which is the point
+// of verifying it. A test that means to exercise the binding, fence, or
+// candidate checks therefore has to produce a result a runtime could actually
+// have produced — signed, and signed over what it says.
+func (h *runnerHarness) resign(t *testing.T, result *schema.AgentRuntimeResult) {
+	t.Helper()
+	statement, err := runtimes.StatementBytes(*result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	algorithm, keyID, signature, err := h.signer.Sign(statement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result.Signature.Algorithm = schema.AgentRuntimeResultSignatureAlgorithm(algorithm)
+	result.Signature.KeyId = keyID
+	result.Signature.Signature = signature
+	result.Signature.StatementDigest = restatedDigest(t, *result)
+}
+
 func TestTurnBudgetPrecheckHaltsDeterministically(t *testing.T) {
 	harness := newRunnerHarness(t, nil)
 	budget := ampleBudget()
 	budget.RemainingModelCalls = 0
-	outcome, err := harness.runner.Turn(context.Background(), runner.TurnRequest{Definition: managerDefinition(t, harness.registry), Run: testRunView(), Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0000", Authority: activeAuthority(), Budget: budget})
+	outcome, err := harness.turn(managerDefinition(t, harness.registry), runner.TurnRequest{Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0000", Authority: activeAuthority(), Budget: budget})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,8 +728,13 @@ func TestTurnBudgetPrecheckHaltsDeterministically(t *testing.T) {
 	if harness.invoker.calls != 0 {
 		t.Fatal("exhausted budget must not reach the model")
 	}
+	// An exhausted budget must not even admit the work: a task that exists is
+	// a task some later result could try to commit.
+	if _, _, found, err := harness.repository.Load(context.Background(), dispatch.Scope{WorkspaceID: "workspace", ProjectID: "project"}, dispatch.TaskID("run.test:g1:turn-0000")); err != nil || found {
+		t.Fatal("an exhausted budget must not create a dispatchable task")
+	}
 	budget.ExceedBehavior = "cancel"
-	outcome, err = harness.runner.Turn(context.Background(), runner.TurnRequest{Definition: managerDefinition(t, harness.registry), Run: testRunView(), Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0000", Authority: activeAuthority(), Budget: budget})
+	outcome, err = harness.turn(managerDefinition(t, harness.registry), runner.TurnRequest{Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0000", Authority: activeAuthority(), Budget: budget})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,14 +746,15 @@ func TestTurnBudgetPrecheckHaltsDeterministically(t *testing.T) {
 func TestTurnBoundedRepairThenRefusal(t *testing.T) {
 	broken := []byte(`{"kind":"TypedPlan","steps":[`)
 	harness := newRunnerHarness(t, [][]byte{broken, broken, broken})
-	outcome, err := harness.runner.Turn(context.Background(), runner.TurnRequest{Definition: managerDefinition(t, harness.registry), Run: testRunView(), Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0000", Authority: activeAuthority(), Budget: ampleBudget()})
+	outcome, err := harness.turn(managerDefinition(t, harness.registry), runner.TurnRequest{Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0000", Authority: activeAuthority(), Budget: ampleBudget()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if outcome.Decision.Kind != agent.DecisionRefuse {
 		t.Fatalf("decision = %s, want refuse", outcome.Decision.Kind)
 	}
-	// bounded-repair with two pinned attempts: one raw try plus two repairs.
+	// The definition's pinned repair policy still decides how many attempts a
+	// turn makes; what changed is which process makes them.
 	if harness.invoker.calls != 3 {
 		t.Fatalf("model calls = %d, want 3", harness.invoker.calls)
 	}
@@ -346,7 +765,7 @@ func TestTurnBoundedRepairThenRefusal(t *testing.T) {
 
 func TestSpecialistCannotRequestInput(t *testing.T) {
 	harness := newRunnerHarness(t, [][]byte{plan("agent.need-input", `{"question":"?"}`)})
-	outcome, err := harness.runner.Turn(context.Background(), runner.TurnRequest{Definition: specialistDefinition(t, harness.registry), Run: testRunView(), Phase: runner.PhaseDelegate, OperationKey: "run.test:g1:delegate-turn-0000-0000", Authority: activeAuthority(), Budget: ampleBudget()})
+	outcome, err := harness.turn(specialistDefinition(t, harness.registry), runner.TurnRequest{Phase: runner.PhaseDelegate, OperationKey: "run.test:g1:delegate-turn-0000-0000", Authority: activeAuthority(), Budget: ampleBudget()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,10 +843,13 @@ func TestDelegationAuthorizationEnforcesEveryConstraint(t *testing.T) {
 
 func TestDelegateTurnResolvesOneSpecialistTurnAtATime(t *testing.T) {
 	candidate := `{"kind":"ComponentPackageSpec","packageIntent":{"name":"x","version":"1.0.0","componentType":"section"}}`
-	specialistTurn := func(harness *runnerHarness, last bool) runner.DelegateTurnRequest {
+	specialistTurn := func(t *testing.T, harness *runnerHarness, last bool) runner.DelegateTurnRequest {
+		specialist := specialistDefinition(t, harness.registry)
 		return runner.DelegateTurnRequest{
-			Specialist:   specialistDefinition(t, harness.registry),
+			Specialist:   specialist,
 			Run:          testRunView(),
+			Runtime:      specialist.RuntimeBinding,
+			ContractBOM:  testContractBOM(),
 			Depth:        1,
 			Last:         last,
 			Input:        json.RawMessage(`{"task":"draft"}`),
@@ -439,7 +861,7 @@ func TestDelegateTurnResolvesOneSpecialistTurnAtATime(t *testing.T) {
 
 	t.Run("candidate-accepted", func(t *testing.T) {
 		harness := newRunnerHarness(t, [][]byte{plan("agent.final", `{"candidate":`+candidate+`}`)})
-		outcome, err := harness.runner.DelegateTurn(context.Background(), specialistTurn(harness, false))
+		outcome, err := harness.runner.DelegateTurn(context.Background(), specialistTurn(t, harness, false))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -449,7 +871,7 @@ func TestDelegateTurnResolvesOneSpecialistTurnAtATime(t *testing.T) {
 	})
 	t.Run("continue-is-not-done", func(t *testing.T) {
 		harness := newRunnerHarness(t, [][]byte{plan("agent.continue", `{"note":"still drafting"}`)})
-		outcome, err := harness.runner.DelegateTurn(context.Background(), specialistTurn(harness, false))
+		outcome, err := harness.runner.DelegateTurn(context.Background(), specialistTurn(t, harness, false))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -459,7 +881,7 @@ func TestDelegateTurnResolvesOneSpecialistTurnAtATime(t *testing.T) {
 	})
 	t.Run("turn-limit-refuses-on-the-last-turn", func(t *testing.T) {
 		harness := newRunnerHarness(t, [][]byte{plan("agent.continue", `{"note":"still drafting"}`)})
-		outcome, err := harness.runner.DelegateTurn(context.Background(), specialistTurn(harness, true))
+		outcome, err := harness.runner.DelegateTurn(context.Background(), specialistTurn(t, harness, true))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -469,14 +891,14 @@ func TestDelegateTurnResolvesOneSpecialistTurnAtATime(t *testing.T) {
 	})
 	t.Run("specialist-refusal", func(t *testing.T) {
 		harness := newRunnerHarness(t, [][]byte{plan("agent.refuse", `{"reason":"cannot draft"}`)})
-		outcome, err := harness.runner.DelegateTurn(context.Background(), specialistTurn(harness, false))
+		outcome, err := harness.runner.DelegateTurn(context.Background(), specialistTurn(t, harness, false))
 		if err != nil || !outcome.Done || outcome.Refused == nil {
 			t.Fatalf("specialist refusal must conclude the delegation: %+v %v", outcome, err)
 		}
 	})
 	t.Run("decision-outside-the-delegation-contract", func(t *testing.T) {
 		harness := newRunnerHarness(t, [][]byte{plan("anvilkit.tool.context-echo", `{"query":"context"}`)})
-		outcome, err := harness.runner.DelegateTurn(context.Background(), specialistTurn(harness, false))
+		outcome, err := harness.runner.DelegateTurn(context.Background(), specialistTurn(t, harness, false))
 		if err != nil || !outcome.Done || outcome.Refused == nil {
 			t.Fatalf("specialist tool call must refuse: %+v %v", outcome, err)
 		}
@@ -485,16 +907,16 @@ func TestDelegateTurnResolvesOneSpecialistTurnAtATime(t *testing.T) {
 		harness := newRunnerHarness(t, [][]byte{plan("agent.final", `{"candidate":`+candidate+`}`)}, func(cfg *runner.Config) {
 			cfg.Validator = acceptAllValidator{denyComponent: "anvilkit.contract.schema.component-package-spec"}
 		})
-		outcome, err := harness.runner.DelegateTurn(context.Background(), specialistTurn(harness, false))
+		outcome, err := harness.runner.DelegateTurn(context.Background(), specialistTurn(t, harness, false))
 		if err != nil || !outcome.Done || outcome.Refused == nil || outcome.Refused.Code != string(problem.CodeContractInvalid) {
 			t.Fatalf("invalid candidate must refuse: %+v %v", outcome, err)
 		}
 	})
 	// Authority revoked mid-delegation stops the next Specialist turn before
-	// it reaches the model.
+	// it reaches the runtime.
 	t.Run("revoked-authority-mid-delegation", func(t *testing.T) {
 		harness := newRunnerHarness(t, [][]byte{plan("agent.final", `{"candidate":`+candidate+`}`)})
-		request := specialistTurn(harness, false)
+		request := specialistTurn(t, harness, false)
 		request.Authority = revokedAuthority()
 		outcome, err := harness.runner.DelegateTurn(context.Background(), request)
 		if err != nil || !outcome.Done || outcome.Refused == nil || outcome.Refused.Code != string(problem.CodeAuthorityStale) {
@@ -542,95 +964,36 @@ func asProblem(err error, target *problem.Details) bool {
 	return false
 }
 
-// Bounded repair must obey the same pinned budget as the first attempt.
-// Enforcing the budget only before the first model call let a repairing turn
-// spend past it.
-func TestBoundedRepairStopsAtTheBudget(t *testing.T) {
+// Every provider attempt of one turn carries an identity derived from the
+// logical task, not from the execution that happened to make it. A replacement
+// attempt of the same turn must reproduce the same provider operation rather
+// than buy a second one.
+func TestProviderAttemptsAreIdentifiedByTheLogicalTask(t *testing.T) {
 	broken := []byte(`{"kind":"TypedPlan","steps":[`)
 	harness := newRunnerHarness(t, [][]byte{broken, broken, broken})
-	budget := ampleBudget()
-	budget.RemainingModelCalls = 2
-	outcome, err := harness.runner.Turn(context.Background(), runner.TurnRequest{
-		Definition:   managerDefinition(t, harness.registry),
-		Run:          testRunView(),
-		Phase:        runner.PhasePlan,
-		OperationKey: "run.test:g1:turn-0000",
-		Budget:       budget, Authority: activeAuthority()})
-	if err != nil {
+	if _, err := harness.turn(managerDefinition(t, harness.registry), runner.TurnRequest{
+		Phase: runner.PhasePlan, OperationKey: "run.test:g1:turn-0007", Budget: ampleBudget(), Authority: activeAuthority(),
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if outcome.Halted == nil || outcome.Halted.Problem.Code != string(problem.CodeBudgetDenied) {
-		t.Fatalf("exhausted repair must halt on the budget: %+v", outcome)
-	}
-	if !outcome.Halted.Refuse {
-		t.Fatal("a refuse exceed-behavior budget must halt as a refusal")
-	}
-	if harness.invoker.calls != 2 {
-		t.Fatalf("model calls = %d, want exactly the two the budget funds", harness.invoker.calls)
-	}
-	if outcome.Usage.ModelCalls != 2 {
-		t.Fatalf("usage must account every attempt made, got %d", outcome.Usage.ModelCalls)
-	}
-}
-
-// Each attempt of a turn shrinks the per-attempt provider limits by what the
-// previous attempts already consumed.
-func TestRepairAttemptLimitsShrinkWithConsumedBudget(t *testing.T) {
-	broken := []byte(`{"kind":"TypedPlan","steps":[`)
-	harness := newRunnerHarness(t, [][]byte{broken, broken, broken})
-	budget := ampleBudget()
-	budget.RemainingCostMicros = 5000
-	if _, err := harness.runner.Turn(context.Background(), runner.TurnRequest{
-		Definition:   managerDefinition(t, harness.registry),
-		Run:          testRunView(),
-		Phase:        runner.PhasePlan,
-		OperationKey: "run.test:g1:turn-0000",
-		Budget:       budget, Authority: activeAuthority()}); err != nil {
-		t.Fatal(err)
-	}
-	if harness.invoker.calls != 3 {
-		t.Fatalf("model calls = %d, want the three pinned attempts", harness.invoker.calls)
-	}
-	// The scripted invoker meters 1000 cost micros per attempt.
-	for index, want := range []int64{5000, 4000, 3000} {
-		if got := harness.invoker.limits[index].MaximumCostMicros; got != want {
-			t.Fatalf("attempt %d cost cap = %d, want %d", index, got, want)
+	for index, key := range harness.invoker.keys {
+		want := fmt.Sprintf("run.test:g1:turn-0007:plan-attempt-%02d", index)
+		if key != want {
+			t.Fatalf("attempt key %d = %q, want %q", index, key, want)
 		}
 	}
-}
-
-// Every provider attempt of one turn carries a deterministic identity derived
-// from the turn's durable operation key.
-func TestTurnAttemptsCarryDeterministicOperationDerivedKeys(t *testing.T) {
-	broken := []byte(`{"kind":"TypedPlan","steps":[`)
-	harness := newRunnerHarness(t, [][]byte{broken, broken, broken})
-	if _, err := harness.runner.Turn(context.Background(), runner.TurnRequest{
-		Definition:   managerDefinition(t, harness.registry),
-		Run:          testRunView(),
-		Phase:        runner.PhasePlan,
-		OperationKey: "run.test:g1:turn-0007",
-		Budget:       ampleBudget(), Authority: activeAuthority()}); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{
-		"run.test:g1:turn-0007:plan-attempt-00",
-		"run.test:g1:turn-0007:plan-attempt-01",
-		"run.test:g1:turn-0007:plan-attempt-02",
-	}
-	if !slices.Equal(harness.invoker.keys, want) {
-		t.Fatalf("attempt keys = %v, want %v", harness.invoker.keys, want)
+	if len(harness.invoker.keys) != 3 {
+		t.Fatalf("attempt keys = %v", harness.invoker.keys)
 	}
 }
 
-// A turn without a durable operation key cannot produce stable provider
-// identities and must fail closed rather than invent one.
+// A turn without a durable operation key has no logical task identity and must
+// fail closed rather than invent one.
 func TestTurnWithoutADurableOperationKeyFailsClosed(t *testing.T) {
 	harness := newRunnerHarness(t, [][]byte{plan("agent.continue", `{"note":"x"}`)})
-	if _, err := harness.runner.Turn(context.Background(), runner.TurnRequest{
-		Definition: managerDefinition(t, harness.registry),
-		Run:        testRunView(),
-		Phase:      runner.PhasePlan,
-		Budget:     ampleBudget(), Authority: activeAuthority()}); err == nil {
+	if _, err := harness.turn(managerDefinition(t, harness.registry), runner.TurnRequest{
+		Phase: runner.PhasePlan, Budget: ampleBudget(), Authority: activeAuthority(),
+	}); err == nil {
 		t.Fatal("a turn without an operation key was accepted")
 	}
 	if harness.invoker.calls != 0 {

@@ -1,24 +1,33 @@
-// Package runner implements the thin AgentRunner: one provider-neutral turn
-// at a time against a digest-pinned definition and authorized compiled
-// context. The runner resolves exactly one TurnDecision per turn and owns no
-// retries, durable waits, cancellation, checkpoints, artifacts, approval,
-// budget authority, or commits.
+// Package runner implements the AgentRunner: the four stages one bounded turn
+// passes through, in order — context compilation, task creation, result wait,
+// and the next-step commit.
+//
+// The runner used to call a model. It no longer does, and cannot: a turn is
+// executed by a runtime release in another process, and what reaches this
+// package is a signed result proposing a decision. The stages are named after
+// that shape because each is a different kind of failure — a context that
+// cannot be compiled, work that cannot be admitted, an execution that never
+// answered, and a result that may no longer change state — and collapsing them
+// again would make a stale result indistinguishable from a failed one.
+//
+// The runner still owns no retries, durable waits, cancellation, checkpoints,
+// approval, budget authority, or domain commits. It resolves exactly one
+// TurnDecision per turn, under the fence the durable record issued it.
 package runner
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/ancyloce/anvilkit-agent-service/contracts/generated/schema"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/authority"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler"
-	"github.com/ancyloce/anvilkit-agent-service/internal/modelgateway"
-	"github.com/ancyloce/anvilkit-agent-service/internal/planning"
+	"github.com/ancyloce/anvilkit-agent-service/internal/dispatch"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
+	"github.com/ancyloce/anvilkit-agent-service/internal/runtimes"
 	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
 )
 
@@ -27,16 +36,79 @@ type ContextCompiler interface {
 	Compile(context.Context, contextcompiler.Request) (contextcompiler.Result, error)
 }
 
-// Selector resolves the policy-eligible provider selection for one turn.
-type Selector interface {
-	Select(ctx context.Context, workspaceID string, policy agent.PolicyReference) (modelgateway.Selection, error)
+// Tasks is the durable record of logical tasks and physical attempts. The
+// runner depends on the coordinator's operations and nothing about how they
+// are stored.
+type Tasks interface {
+	// Settled reads the answer a logical task already committed, if it has
+	// one. It is consulted before anything is dispatched.
+	Settled(ctx context.Context, scope dispatch.Scope, taskID string) (dispatch.Registration, bool, error)
+	Open(ctx context.Context, request dispatch.Request) (dispatch.Execution, error)
+	Dispatched(ctx context.Context, execution dispatch.Execution) error
+	// Close ends an attempt this turn will not wait on any longer and will
+	// not replace: a dispatch that answered with something that is not an
+	// attributable result, or a turn that ended before its answer arrived.
+	// An attempt left running after the turn gave up on it would stay the
+	// task's current execution, with the runtime boundary still serving its
+	// callbacks, until its lease ran out.
+	Close(ctx context.Context, execution dispatch.Execution, reason string) error
+	Settle(ctx context.Context, request dispatch.Settle) (dispatch.Result, error)
+	// Unbound records a result this service will not attribute to the attempt
+	// it is holding. A result refused before the fence never reaches Settle, so
+	// without this the one class of failure most worth investigating — an
+	// unverifiable signature, a result for other work — would be the only one
+	// that left no trace.
+	Unbound(ctx context.Context, scope dispatch.Scope, runID, taskID, attemptID, statementDigest, keyID, reason string) error
 }
 
-// Invoker performs one policy-eligible provider invocation. The gateway
-// satisfies this interface; the runner layers strict typed-plan validation
-// and bounded repair on top of it.
-type Invoker interface {
-	Invoke(context.Context, modelgateway.InvokeRequest) (modelgateway.AdapterResponse, modelgateway.InvocationRecord, error)
+// Dispatcher executes one physical attempt on the release the run pinned. It
+// is the transport-free port: the runner decides what to dispatch and what a
+// result means, and how the bytes travel is the adapter's concern.
+type Dispatcher interface {
+	Dispatch(ctx context.Context, binding agent.RuntimeBinding, task schema.AgentTask, credential runtimes.Credential) (runtimes.DispatchReceipt, error)
+}
+
+// Credentials issues the short-lived, task-scoped authority one attempt is
+// dispatched with. The tenant boundary is passed in because the canonical task
+// carries none: what a runtime may act on comes from its credential.
+type Credentials interface {
+	Issue(ctx context.Context, task schema.AgentTask, subject runtimes.Subject) (runtimes.Credential, error)
+}
+
+// ResultVerification proves a result was produced by the release the run
+// pinned, signed by a key the operator approved for it.
+//
+// It is separate from the fence and runs before it. The fence answers whether a
+// result is still for the execution this process is holding; this answers
+// whether the thing that produced it was the release that was dispatched to.
+// Neither implies the other, and a commit needs both: a perfectly fenced result
+// nobody can attribute is an anonymous proposal, and a perfectly signed result
+// for a superseded attempt is a replay.
+type ResultVerification interface {
+	Verify(result schema.AgentRuntimeResult, binding agent.RuntimeBinding, now time.Time) error
+}
+
+// Disclosure hands one attempt's compiled context to a runtime that runs
+// inside this process.
+//
+// It exists only for controlled compositions. A real runtime reads its
+// task-scoped context across the process boundary, so production composes no
+// disclosure at all and the compiled context leaves this process only as the
+// digest the task pins. The port is optional for exactly that reason: a nil
+// disclosure is the production case, not a missing dependency.
+type Disclosure interface {
+	Offer(ctx context.Context, task schema.AgentTask, compiled []byte) error
+}
+
+// Candidates resolves the content of an artifact a runtime produced.
+//
+// A final decision names its candidate as an immutable artifact reference,
+// because the bounded decision payload cannot carry a document. Reading that
+// artifact back is the runtime's artifact write path in reverse, and the
+// service refuses a final decision whose artifact it cannot read rather than
+// treating an unreadable reference as a candidate.
+type Candidates interface {
+	Content(ctx context.Context, reference schema.SharedPrimitivesArtifactReference) ([]byte, error)
 }
 
 // ActionGuard is the mandatory Tool Guard evaluation boundary.
@@ -52,9 +124,10 @@ type CandidateValidator interface {
 
 type Clock interface{ Now() time.Time }
 
-// RunView is the bounded run identity the runner may disclose to planning.
+// RunView is the bounded run identity the runner may disclose to a runtime.
 type RunView struct {
 	RunID       string `json:"runId"`
+	RootRunID   string `json:"rootRunId"`
 	WorkspaceID string `json:"workspaceId"`
 	ProjectID   string `json:"projectId"`
 	ActorID     string `json:"actorId"`
@@ -62,26 +135,31 @@ type RunView struct {
 	Operation   string `json:"operation"`
 	TargetType  string `json:"targetType"`
 	TargetID    string `json:"targetId"`
+	// ExecutionGeneration is the run's generation fence. Every task, attempt,
+	// and commit predicate carries it: a result produced under a superseded
+	// generation is not a result for this run.
+	ExecutionGeneration uint64 `json:"executionGeneration"`
+	// Traceparent correlates the workflow, the task, the attempt, and the
+	// runtime's own execution.
+	Traceparent string `json:"traceparent"`
 }
 
 // BudgetView is the remaining budget the executor derived from the pinned
-// AgentBudget and recorded usage. The runner enforces it before every model
-// call, including every bounded repair attempt; it never mutates budget
-// authority.
+// AgentBudget and recorded usage. The runner enforces it before dispatching a
+// turn; it never mutates budget authority.
 type BudgetView struct {
 	RemainingModelCalls   int64 `json:"remainingModelCalls"`
 	RemainingInputTokens  int64 `json:"remainingInputTokens"`
 	RemainingOutputTokens int64 `json:"remainingOutputTokens"`
 	// RemainingTotalTokens is the aggregate input+output allowance the pinned
 	// AgentBudget still has. It is enforced in its own right: a run that has
-	// input and output allowance left may still be out of aggregate tokens,
-	// and repairs and transport retries spend it like any other attempt.
+	// input and output allowance left may still be out of aggregate tokens.
 	RemainingTotalTokens int64  `json:"remainingTotalTokens"`
 	RemainingCostMicros  int64  `json:"remainingCostMicros"`
 	ExceedBehavior       string `json:"exceedBehavior"`
 }
 
-// Limits bound one provider invocation.
+// Limits bound one dispatched attempt.
 type Limits struct {
 	MaximumOutputBytes  int
 	MaximumInputTokens  int64
@@ -90,14 +168,26 @@ type Limits struct {
 	MaximumAttempts     int
 	RetryBudget         time.Duration
 	ContextTokens       int
+	// MemoryBytes and CPUMillis are the resource envelope the task declares to
+	// the runtime. They are contract fields, not process limits: the runtime's
+	// deployment enforces them, and the task says what it was admitted for.
+	MemoryBytes int64
+	CPUMillis   int64
 }
 
 func (l Limits) validate() error {
 	if l.MaximumOutputBytes < 1 || l.MaximumInputTokens < 1 || l.MaximumOutputTokens < 1 || l.Timeout <= 0 || l.MaximumAttempts < 1 || l.RetryBudget < 0 || l.ContextTokens < 1 {
 		return fmt.Errorf("agent runner limits must be positive")
 	}
+	if l.MemoryBytes < minimumTaskMemoryBytes || l.CPUMillis < 1 {
+		return fmt.Errorf("agent runner limits must declare the resource envelope a dispatched task runs under")
+	}
 	return nil
 }
+
+// minimumTaskMemoryBytes is the canonical ResourceLimits floor. Declaring less
+// would produce a task no runtime may admit.
+const minimumTaskMemoryBytes = 1 << 20
 
 const (
 	PhasePlan     = "plan"
@@ -108,23 +198,48 @@ const (
 type TurnRequest struct {
 	Definition agent.Definition
 	Run        RunView
-	Phase      string
-	Turn       int
-	Depth      int
-	Notes      []string
-	InputValue json.RawMessage
+	// Runtime is the release the run pinned at creation. It is passed in
+	// rather than resolved here: a turn must reach the release its run was
+	// admitted against, whatever the registry would select now.
+	Runtime agent.RuntimeBinding
+	// ContractBOM is the run's pinned contract bill of materials. It travels
+	// with the task so a runtime executes against the same contract material
+	// this service verified.
+	ContractBOM schema.SharedPrimitivesContractBomReference
+	Phase       string
+	Turn        int
+	Depth       int
+	Notes       []string
+	InputValue  json.RawMessage
 	// OperationKey is the durable operation identity of the turn. It is
-	// required: every provider attempt derives its idempotency identity from
-	// it, so replaying the durable step reproduces the same provider calls
-	// instead of issuing new ones.
+	// required: the logical task identity is derived from it, so replaying the
+	// durable step finds the task it already created instead of creating a
+	// second one for the same work.
 	OperationKey string
 	// Authority is the current-authority observation the caller re-read
 	// immediately before this turn, inside the same durable operation. The
-	// runner discloses context to a provider only while it is active.
+	// runner discloses context to a runtime only while it is active.
 	Authority       authority.Current
 	ReviewReason    string
 	DelegationsUsed int
 	Budget          BudgetView
+	// Delegation is the outcome of the run's most recent delegation, when this
+	// turn is the one that concludes on it. It travels into the task's supplied
+	// context so the runtime validates the outcome the control plane holds,
+	// never one it remembers.
+	Delegation *DelegationOutcome
+}
+
+// DelegationOutcome is the durable account of one concluded delegation.
+type DelegationOutcome struct {
+	// State is the governed vocabulary the concluding turn reads:
+	// completed, failed, or refused.
+	State      string
+	DelegateID string
+	ReasonCode string
+	// Candidate is the immutable reference of the delegated candidate; zero
+	// unless the delegation completed.
+	Candidate schema.SharedPrimitivesArtifactReference
 }
 
 // Halted is a typed budget or limit stop with the deterministic behavior the
@@ -139,67 +254,109 @@ type TurnOutcome struct {
 	Usage    agent.Usage
 	Notes    []string
 	Halted   *Halted
+	// CandidateReference is the immutable reference a final decision named,
+	// carried beside the resolved candidate document so a delegation's
+	// conclusion can pin the reference into the next turn's task.
+	CandidateReference schema.SharedPrimitivesArtifactReference
 }
 
 // Runner executes turns. It is stateless between calls.
 type Runner struct {
-	registry  *agent.Registry
-	compiler  ContextCompiler
-	selector  Selector
-	invoker   Invoker
-	guard     ActionGuard
-	validator CandidateValidator
-	clock     Clock
-	limits    Limits
+	registry    *agent.Registry
+	compiler    ContextCompiler
+	tasks       Tasks
+	dispatcher  Dispatcher
+	credentials Credentials
+	signatures  ResultVerification
+	disclosure  Disclosure
+	candidates  Candidates
+	guard       ActionGuard
+	validator   CandidateValidator
+	clock       Clock
+	limits      Limits
+	observer    DispatchObserver
 }
 
 type Config struct {
-	Registry  *agent.Registry
-	Compiler  ContextCompiler
-	Selector  Selector
-	Invoker   Invoker
-	Guard     ActionGuard
-	Validator CandidateValidator
-	Clock     Clock
-	Limits    Limits
+	Registry    *agent.Registry
+	Compiler    ContextCompiler
+	Tasks       Tasks
+	Dispatcher  Dispatcher
+	Credentials Credentials
+	// Signatures verifies the signature envelope of every result before the
+	// fenced commit. It is required: a deployment that could not attribute a
+	// result to a release would be committing state on the word of whatever
+	// answered the dispatch.
+	Signatures ResultVerification
+	// Disclosure is optional and is composed only where the runtime runs
+	// inside this process. See the port's own documentation.
+	Disclosure Disclosure
+	// Candidates is optional in the same sense: a composition that cannot read
+	// runtime-produced artifacts refuses a final decision rather than
+	// inventing one.
+	Candidates Candidates
+	Guard      ActionGuard
+	Validator  CandidateValidator
+	Clock      Clock
+	Limits     Limits
+	// Observer receives the bounded facts of the dispatch path. It is
+	// optional: a composition without telemetry runs under a no-op.
+	Observer DispatchObserver
 }
 
 func New(cfg Config) (*Runner, error) {
-	if cfg.Registry == nil || cfg.Compiler == nil || cfg.Selector == nil || cfg.Invoker == nil || cfg.Guard == nil || cfg.Validator == nil || cfg.Clock == nil {
+	if cfg.Registry == nil || cfg.Compiler == nil || cfg.Tasks == nil || cfg.Dispatcher == nil || cfg.Credentials == nil || cfg.Signatures == nil || cfg.Guard == nil || cfg.Validator == nil || cfg.Clock == nil {
 		return nil, fmt.Errorf("agent runner: every pipeline dependency is required")
 	}
 	if err := cfg.Limits.validate(); err != nil {
 		return nil, err
 	}
-	return &Runner{registry: cfg.Registry, compiler: cfg.Compiler, selector: cfg.Selector, invoker: cfg.Invoker, guard: cfg.Guard, validator: cfg.Validator, clock: cfg.Clock, limits: cfg.Limits}, nil
+	observer := cfg.Observer
+	if observer == nil {
+		observer = noopObserver{}
+	}
+	return &Runner{
+		observer:    observer,
+		registry:    cfg.Registry,
+		compiler:    cfg.Compiler,
+		tasks:       cfg.Tasks,
+		dispatcher:  cfg.Dispatcher,
+		credentials: cfg.Credentials,
+		signatures:  cfg.Signatures,
+		disclosure:  cfg.Disclosure,
+		candidates:  cfg.Candidates,
+		guard:       cfg.Guard,
+		validator:   cfg.Validator,
+		clock:       cfg.Clock,
+		limits:      cfg.Limits,
+	}, nil
 }
 
-// reserved tool names map typed plans onto the explicit TurnDecision
-// vocabulary. Any other agent.* name is invalid and resolves to a refusal;
-// any non-reserved name is a tool call proposal.
-const (
-	planContinue  = "agent.continue"
-	planNeedInput = "agent.need-input"
-	planDelegate  = "agent.delegate"
-	planFinal     = "agent.final"
-	planRefuse    = "agent.refuse"
-)
-
-// Turn executes one bounded reasoning turn: budget precheck, authorized
-// context compilation, and one policy-eligible provider invocation with
-// bounded repair under the same budget, then deterministic TurnDecision
-// resolution.
+// Turn executes one bounded turn: authority and budget prechecks, authorized
+// context compilation, task and attempt creation, one dispatched execution on
+// the pinned runtime release, and the fenced commit of whatever came back.
 func (r *Runner) Turn(ctx context.Context, request TurnRequest) (TurnOutcome, error) {
 	if request.OperationKey == "" {
 		return TurnOutcome{}, fmt.Errorf("agent runner: a durable operation key is required for every turn")
 	}
-	// Nothing is compiled, selected, or disclosed until the re-read authority
+	// Nothing is compiled, dispatched, or disclosed until the re-read authority
 	// the caller carried into this turn is proven active.
 	if details := requireActive(request.Authority); details != nil {
 		return TurnOutcome{Halted: &Halted{Problem: *details}}, nil
 	}
+	// The budget is checked before any task exists. An exhausted budget must
+	// not produce a dispatched attempt that a later result could commit: the
+	// cheapest place to stop is before the work is admitted at all.
 	if halted := precheck(request.Budget); halted != nil {
 		return TurnOutcome{Halted: halted}, nil
+	}
+	// A durable step that committed and then failed before recording its own
+	// output is re-executed by the engine. The work is not done again: the
+	// answer the logical task already committed is read back, which is what
+	// makes redelivery free of a second provider call, a second charge, and a
+	// second artifact.
+	if outcome, replayed, err := r.replay(ctx, request); err != nil || replayed {
+		return outcome, err
 	}
 	instruction, err := r.registry.Instruction(request.Definition.DefinitionID)
 	if err != nil {
@@ -209,77 +366,38 @@ func (r *Runner) Turn(ctx context.Context, request TurnRequest) (TurnOutcome, er
 	if err != nil {
 		return TurnOutcome{}, fmt.Errorf("compile turn context: %w", err)
 	}
-	selection, err := r.selector.Select(ctx, request.Run.WorkspaceID, request.Definition.ModelPolicy)
-	if err != nil {
-		return TurnOutcome{}, fmt.Errorf("select eligible provider: %w", err)
-	}
-	invoke := modelgateway.InvokeRequest{
-		RunID:          request.Run.RunID,
-		WorkspaceID:    request.Run.WorkspaceID,
-		ProjectID:      request.Run.ProjectID,
-		IdempotencyKey: request.OperationKey,
-		Selection:      selection,
-		Context:        compiled,
-		DataClasses:    []modelgateway.DataClass{"public", "internal"},
-		// The configured ceilings bound every attempt; the attempt budget
-		// narrows them further from the remaining pinned agent budget.
-		MaximumOutputBytes:  r.limits.MaximumOutputBytes,
-		MaximumInputTokens:  r.limits.MaximumInputTokens,
-		MaximumOutputTokens: r.limits.MaximumOutputTokens,
-		MaximumTotalTokens:  r.limits.MaximumInputTokens + r.limits.MaximumOutputTokens,
-		MaximumCostMicros:   selection.MaximumCostMicros,
-		Timeout:             r.limits.Timeout,
-		MaximumAttempts:     r.limits.MaximumAttempts,
-		RetryBudget:         r.limits.RetryBudget,
-		Scenario:            "agent-turn",
-	}
-	repairs := request.Definition.RepairPolicy.MaximumAttempts
-	if request.Definition.RepairPolicy.Mode == "reject" {
-		repairs = 0
-	}
-	guard := attemptBudget{view: request.Budget, limits: r.limits, providerCostMicros: selection.MaximumCostMicros}
-	planResult, planErr := r.plan(ctx, invoke, repairs, guard)
-	usage := usageOf(planResult)
-	if planErr != nil {
-		var details problem.Details
-		if !errors.As(planErr, &details) {
-			// The turn failed, but the physical provider attempts it already
-			// made were still billed. Their usage travels with the error so
-			// the caller can account a failed attempt: a turn that never
-			// reaches a decision is exactly the case where dropping the
-			// outcome would drop real spend with it.
-			return TurnOutcome{Usage: usage}, fmt.Errorf("plan turn: %w", planErr)
+	// One turn may cost several executions. A dispatch that never answered is
+	// replaced by a new physical attempt with its own number, lease epoch, and
+	// fence, which is what makes the unanswered one permanently uncommittable;
+	// the loop is bounded by the configured attempts and retry budget so a
+	// release that is simply down cannot spin a turn for ever.
+	deadline := r.clock.Now().Add(r.limits.RetryBudget)
+	replacing := ""
+	for attempt := 1; ; attempt++ {
+		task, execution, credential, err := r.createTask(ctx, request, compiled, replacing)
+		if err != nil {
+			return TurnOutcome{}, err
 		}
-		if details.Code == string(problem.CodeBudgetDenied) {
-			// The pinned budget ran out inside bounded repair. The stop is a
-			// typed halt, not a refusal decision, and the attempts already
-			// made are still accounted.
-			return TurnOutcome{Usage: usage, Halted: &Halted{Problem: details, Refuse: request.Budget.ExceedBehavior == "refuse"}}, nil
+		receipt, err := r.awaitResult(ctx, request, task, execution, credential)
+		if err == nil {
+			return r.commitNextStep(ctx, request, execution, receipt)
 		}
-		// Typed-plan rejection after bounded repair resolves to an explicit
-		// refusal decision; ambiguous fallthrough is impossible.
-		return TurnOutcome{
-			Decision: agent.TurnDecision{Kind: agent.DecisionRefuse, Refuse: &agent.RefuseDecision{Reason: "typed plan failed bounded validation and repair"}},
-			Usage:    usage,
-			Notes:    []string{"planning rejected: " + details.Code},
-		}, nil
+		if isUnanswered(err) && attempt < r.limits.MaximumAttempts && r.clock.Now().Before(deadline) {
+			replacing = dispatch.ReasonDispatchFailed
+			r.observer.ObserveReplacement(ctx, request.Runtime.RuntimeUnitID, replacing)
+			continue
+		}
+		// No replacement will be opened for this attempt, so it is closed rather
+		// than left running. An execution nobody waits on any longer must stop
+		// being the task's current attempt: the runtime boundary refuses
+		// callbacks from an attempt that is no longer current, and only a
+		// closed attempt is one it can refuse.
+		reason := dispatch.ReasonTurnAbandoned
+		if isUnanswered(err) {
+			reason = dispatch.ReasonDispatchFailed
+		}
+		return TurnOutcome{}, r.abandon(ctx, execution, reason, err)
 	}
-	decision, invalidReason := r.resolveDecision(planResult.Plan, request)
-	if invalidReason != "" {
-		return TurnOutcome{
-			Decision: agent.TurnDecision{Kind: agent.DecisionRefuse, Refuse: &agent.RefuseDecision{Reason: invalidReason}},
-			Usage:    usage,
-			Notes:    []string{"decision rejected: " + invalidReason},
-		}, nil
-	}
-	if err := decision.Validate(); err != nil {
-		return TurnOutcome{
-			Decision: agent.TurnDecision{Kind: agent.DecisionRefuse, Refuse: &agent.RefuseDecision{Reason: "turn decision violates the bounded contract"}},
-			Usage:    usage,
-			Notes:    []string{"decision rejected: bounded contract violation"},
-		}, nil
-	}
-	return TurnOutcome{Decision: decision, Usage: usage}, nil
 }
 
 // GuardAction evaluates the mandatory Tool Guard for one proposed tool call
@@ -361,8 +479,13 @@ func (r *Runner) AuthorizeDelegation(ctx context.Context, request DelegationRequ
 // delegation. Each turn is its own recoverable boundary: a crash resumes at
 // the last completed Specialist turn instead of repeating the whole loop.
 type DelegateTurnRequest struct {
-	Specialist   agent.Definition
-	Run          RunView
+	Specialist agent.Definition
+	Run        RunView
+	// Runtime is the release serving the Specialist. A delegation crosses a
+	// runtime boundary as well as a definition boundary: the Specialist runs
+	// on its own release, with its own image and audience.
+	Runtime      agent.RuntimeBinding
+	ContractBOM  schema.SharedPrimitivesContractBomReference
 	Turn         int
 	Depth        int
 	Last         bool
@@ -381,10 +504,12 @@ type DelegateTurnOutcome struct {
 	// candidate or a typed refusal.
 	Done      bool
 	Candidate json.RawMessage
-	Refused   *problem.Details
-	Usage     agent.Usage
-	Notes     []string
-	Halted    *Halted
+	// CandidateReference is the immutable reference of the accepted candidate.
+	CandidateReference schema.SharedPrimitivesArtifactReference
+	Refused            *problem.Details
+	Usage              agent.Usage
+	Notes              []string
+	Halted             *Halted
 }
 
 // DelegateTurn executes exactly one Specialist turn. Current authority is
@@ -399,10 +524,13 @@ func (r *Runner) DelegateTurn(ctx context.Context, request DelegateTurnRequest) 
 	turnOutcome, err := r.Turn(ctx, TurnRequest{
 		Definition:      request.Specialist,
 		Run:             request.Run,
+		Runtime:         request.Runtime,
+		ContractBOM:     request.ContractBOM,
 		Phase:           PhaseDelegate,
 		Turn:            request.Turn,
 		Depth:           request.Depth,
 		Notes:           notes,
+		InputValue:      request.Input,
 		OperationKey:    request.OperationKey,
 		Authority:       request.Authority,
 		DelegationsUsed: 0,
@@ -434,6 +562,7 @@ func (r *Runner) DelegateTurn(ctx context.Context, request DelegateTurnRequest) 
 		}
 		outcome.Done = true
 		outcome.Candidate = turnOutcome.Decision.Final.Candidate
+		outcome.CandidateReference = turnOutcome.CandidateReference
 		outcome.Notes = append(outcome.Notes, "specialist candidate accepted")
 		return outcome, nil
 	case agent.DecisionRefuse:
@@ -480,151 +609,6 @@ func toolAuthority(current authority.Current) tools.CurrentAuthority {
 	}
 }
 
-func (r *Runner) plan(ctx context.Context, invoke modelgateway.InvokeRequest, repairs int, budget planning.AttemptBudget) (planning.Result, error) {
-	engine, err := planning.New(r.invoker, 8, boundRepairs(repairs))
-	if err != nil {
-		return planning.Result{}, err
-	}
-	return engine.Plan(ctx, invoke, budget)
-}
-
-// attemptBudget enforces the pinned remaining budget before every provider
-// attempt of one turn, repair attempts included.
-type attemptBudget struct {
-	view               BudgetView
-	limits             Limits
-	providerCostMicros int64
-}
-
-func (b attemptBudget) Authorize(_ int, used planning.Usage) (planning.AttemptLimits, error) {
-	remainingCalls := b.view.RemainingModelCalls - used.ModelCalls
-	remainingInput := b.view.RemainingInputTokens - used.InputTokens
-	remainingOutput := b.view.RemainingOutputTokens - used.OutputTokens
-	// used covers every physical attempt already made inside this invocation
-	// and, through the planning wrapper, every earlier repair attempt of the
-	// turn, so the aggregate allowance shrinks across repairs and retries
-	// exactly as it does across turns.
-	remainingTotal := b.view.RemainingTotalTokens - (used.InputTokens + used.OutputTokens)
-	remainingCost := b.view.RemainingCostMicros - used.CostMicros
-	if remainingCalls < 1 || remainingInput < 1 || remainingOutput < 1 || remainingTotal < 1 || remainingCost < 1 {
-		details := problem.New(problem.CodeBudgetDenied, "")
-		details.Detail = "the pinned agent budget is exhausted"
-		return planning.AttemptLimits{}, details
-	}
-	cost := remainingCost
-	if b.providerCostMicros < cost {
-		cost = b.providerCostMicros
-	}
-	// No component ceiling may exceed what is left of the aggregate: an
-	// attempt authorized for more input than the aggregate allows would
-	// spend past the pinned total in a single call.
-	return planning.AttemptLimits{
-		MaximumInputTokens:  minimum64(minimum64(b.limits.MaximumInputTokens, remainingInput), remainingTotal),
-		MaximumOutputTokens: minimum64(minimum64(b.limits.MaximumOutputTokens, remainingOutput), remainingTotal),
-		MaximumTotalTokens:  minimum64(b.limits.MaximumInputTokens+b.limits.MaximumOutputTokens, remainingTotal),
-		MaximumCostMicros:   cost,
-	}, nil
-}
-
-func (r *Runner) compileContext(ctx context.Context, instruction string, request TurnRequest) ([]byte, error) {
-	sources := []contextcompiler.Source{
-		{ID: "instruction", Trust: contextcompiler.System, Classification: contextcompiler.Internal, Content: instruction, WorkspaceID: request.Run.WorkspaceID, TokenBudget: r.limits.ContextTokens / 4},
-		{ID: "task", Trust: contextcompiler.Agent, Classification: contextcompiler.Internal, Content: taskDescription(request), WorkspaceID: request.Run.WorkspaceID, TokenBudget: r.limits.ContextTokens / 4},
-	}
-	if len(request.InputValue) > 0 {
-		sources = append(sources, contextcompiler.Source{ID: "input-response", Trust: contextcompiler.User, Classification: contextcompiler.Internal, Content: string(request.InputValue), WorkspaceID: request.Run.WorkspaceID, TokenBudget: r.limits.ContextTokens / 8})
-	}
-	if request.ReviewReason != "" {
-		sources = append(sources, contextcompiler.Source{ID: "review-guidance", Trust: contextcompiler.User, Classification: contextcompiler.Internal, Content: request.ReviewReason, WorkspaceID: request.Run.WorkspaceID, TokenBudget: r.limits.ContextTokens / 8})
-	}
-	for index, note := range boundedNotes(request.Notes) {
-		sources = append(sources, contextcompiler.Source{ID: fmt.Sprintf("note-%02d", index), Trust: contextcompiler.ToolOutput, Classification: contextcompiler.Internal, Content: note, WorkspaceID: request.Run.WorkspaceID, TokenBudget: r.limits.ContextTokens / 16})
-	}
-	compiled, err := r.compiler.Compile(ctx, contextcompiler.Request{
-		WorkspaceID:     request.Run.WorkspaceID,
-		ProjectID:       request.Run.ProjectID,
-		RunID:           request.Run.RunID,
-		Sources:         sources,
-		Policy:          contextcompiler.PolicyReference{PolicyID: request.Definition.GuardrailPolicy.PolicyID, Version: request.Definition.GuardrailPolicy.Version, Digest: request.Definition.GuardrailPolicy.Digest},
-		RedactionPolicy: contextcompiler.PolicyReference{PolicyID: request.Definition.GuardrailPolicy.PolicyID, Version: request.Definition.GuardrailPolicy.Version, Digest: request.Definition.GuardrailPolicy.Digest},
-		TotalTokens:     r.limits.ContextTokens,
-		CompiledAt:      r.clock.Now(),
-	})
-	if err != nil {
-		return nil, err
-	}
-	var builder strings.Builder
-	for _, layer := range compiled.Disclosure {
-		builder.WriteString("[" + string(layer.Trust) + ":" + layer.LayerID + "]\n")
-		builder.WriteString(layer.Content)
-		builder.WriteString("\n")
-	}
-	return []byte(builder.String()), nil
-}
-
-// resolveDecision maps the first validated typed-plan step onto the explicit
-// decision vocabulary and enforces every definition constraint the decision
-// depends on. It returns a non-empty reason when the proposal is invalid.
-func (r *Runner) resolveDecision(plan planning.Plan, request TurnRequest) (agent.TurnDecision, string) {
-	first := plan.Steps[0]
-	arguments := func() json.RawMessage {
-		raw, err := json.Marshal(first.Arguments)
-		if err != nil {
-			return nil
-		}
-		return raw
-	}
-	switch first.Tool {
-	case planContinue:
-		note := stringArgument(first.Arguments, "note")
-		return agent.TurnDecision{Kind: agent.DecisionContinue, Continue: &agent.ContinueDecision{Note: note}}, ""
-	case planNeedInput:
-		question := stringArgument(first.Arguments, "question")
-		if question == "" {
-			return agent.TurnDecision{}, "input request requires a bounded question"
-		}
-		if !hasStopCondition(request.Definition, "input-required") {
-			return agent.TurnDecision{}, "definition does not allow input requests"
-		}
-		return agent.TurnDecision{Kind: agent.DecisionNeedInput, NeedInput: &agent.NeedInputDecision{Question: question}}, ""
-	case planDelegate:
-		delegate := stringArgument(first.Arguments, "delegate")
-		input, hasInput := first.Arguments["input"]
-		if delegate == "" || !hasInput {
-			return agent.TurnDecision{}, "delegation requires a delegate identity and input"
-		}
-		if !request.Definition.AllowsDelegate(delegate) {
-			return agent.TurnDecision{}, "delegate is not in the pinned allowed-delegate set"
-		}
-		return agent.TurnDecision{Kind: agent.DecisionDelegate, Delegate: &agent.DelegateDecision{DelegateID: delegate, Input: append(json.RawMessage(nil), input...)}}, ""
-	case planFinal:
-		candidate, hasCandidate := first.Arguments["candidate"]
-		if !hasCandidate {
-			return agent.TurnDecision{}, "final decision requires a candidate document"
-		}
-		summary := stringArgument(first.Arguments, "summary")
-		return agent.TurnDecision{Kind: agent.DecisionFinal, Final: &agent.FinalDecision{Candidate: append(json.RawMessage(nil), candidate...), Summary: summary}}, ""
-	case planRefuse:
-		reason := stringArgument(first.Arguments, "reason")
-		if reason == "" {
-			return agent.TurnDecision{}, "refusal requires a bounded reason"
-		}
-		return agent.TurnDecision{Kind: agent.DecisionRefuse, Refuse: &agent.RefuseDecision{Reason: reason}}, ""
-	default:
-		if strings.HasPrefix(first.Tool, "agent.") {
-			return agent.TurnDecision{}, "plan proposed an unknown reserved decision"
-		}
-		if !request.Definition.AllowsTool(first.Tool) {
-			return agent.TurnDecision{}, "plan proposed a tool outside the pinned profile"
-		}
-		raw := arguments()
-		if raw == nil {
-			return agent.TurnDecision{}, "tool arguments are not serializable"
-		}
-		return agent.TurnDecision{Kind: agent.DecisionToolCall, ToolCall: &agent.ToolCallDecision{ToolID: first.Tool, Arguments: raw}}, ""
-	}
-}
-
 func precheck(budget BudgetView) *Halted {
 	if budget.RemainingModelCalls >= 1 && budget.RemainingInputTokens >= 1 && budget.RemainingOutputTokens >= 1 && budget.RemainingTotalTokens >= 1 && budget.RemainingCostMicros >= 1 {
 		return nil
@@ -651,24 +635,6 @@ func refusal(code problem.Code, detail string) *problem.Details {
 	return &details
 }
 
-// usageOf accounts every physical provider attempt the turn caused, not one
-// call per planning attempt: a planning attempt that took three transport
-// retries billed three provider calls and is charged as three.
-func usageOf(result planning.Result) agent.Usage {
-	usage := agent.Usage{}
-	for _, attempt := range result.Attempts {
-		usage.ModelCalls += int64(len(attempt.Invocation.PhysicalAttempts))
-		usage.InputTokens += attempt.Invocation.InputTokens
-		usage.OutputTokens += attempt.Invocation.OutputTokens
-		usage.CostMicros += attempt.Invocation.CostMicros
-	}
-	return usage
-}
-
-func taskDescription(request TurnRequest) string {
-	return fmt.Sprintf("phase=%s turn=%d domain=%s operation=%s target=%s:%s", request.Phase, request.Turn, request.Run.Domain, request.Run.Operation, request.Run.TargetType, request.Run.TargetID)
-}
-
 func hasStopCondition(definition agent.Definition, condition string) bool {
 	for _, stop := range definition.StopConditions {
 		if stop == condition {
@@ -676,43 +642,6 @@ func hasStopCondition(definition agent.Definition, condition string) bool {
 		}
 	}
 	return false
-}
-
-func stringArgument(arguments map[string]json.RawMessage, key string) string {
-	raw, present := arguments[key]
-	if !present {
-		return ""
-	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return ""
-	}
-	return value
-}
-
-func boundedNotes(notes []string) []string {
-	const maximumNotes = 16
-	if len(notes) <= maximumNotes {
-		return notes
-	}
-	return notes[len(notes)-maximumNotes:]
-}
-
-func boundRepairs(value int) int {
-	if value < 0 {
-		return 0
-	}
-	if value > 3 {
-		return 3
-	}
-	return value
-}
-
-func minimum64(left, right int64) int64 {
-	if left < right {
-		return left
-	}
-	return right
 }
 
 func truncate(value string, maximum int) string {
