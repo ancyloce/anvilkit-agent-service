@@ -22,6 +22,7 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
+	"github.com/ancyloce/anvilkit-agent-service/internal/runtimes"
 )
 
 // createAgentRunRequestSchema pins the canonical wire contract every create
@@ -50,6 +51,15 @@ type CommandGuard interface {
 // the approved catalog. The agent registry satisfies it.
 type DefinitionResolver interface {
 	Resolve(agent.DefinitionReference) (agent.Definition, error)
+}
+
+// RuntimeSelector resolves the one approved runtime release a definition may
+// execute on. The Runtime Registry satisfies it. Selection happens at run
+// creation because the release a run executes on is part of what the run is:
+// resolving it later would let a registry change move work that is already
+// under way onto a different release.
+type RuntimeSelector interface {
+	Select(runtimes.Request) (runtimes.Release, error)
 }
 
 // AuthorityProvider is the single current-authority port, shared with the
@@ -86,6 +96,7 @@ type App struct {
 	receipts     CommandReceipts
 	guard        CommandGuard
 	definitions  DefinitionResolver
+	releases     RuntimeSelector
 	// The artifact custody path and the receipt store and clock it is bound
 	// to. All three are installed together or not at all; an unbound custody
 	// path answers as unavailable.
@@ -107,6 +118,12 @@ type App struct {
 	contentGrantReceipts CommandReceipts
 	contentGrantNow      TimeAuthority
 }
+
+// WithRuntimeReleases installs the Runtime Registry a run's release is
+// selected from. A service composed without one creates no runs: a run with no
+// verified runtime release would have nothing to dispatch to but whatever
+// answered.
+func (a *App) WithRuntimeReleases(selector RuntimeSelector) *App { a.releases = selector; return a }
 
 func (a *App) WithInterrupts(service *interrupts.Service) *App { a.interrupts = service; return a }
 
@@ -136,8 +153,8 @@ type Representation struct {
 }
 
 func (a *App) Create(ctx context.Context, claims auth.Claims, workspaceID, key, digest, traceparent string, raw []byte) (Representation, error) {
-	if a.guard == nil || a.definitions == nil {
-		return Representation{}, fmt.Errorf("create run: the command guard and definition resolver are required")
+	if a.guard == nil || a.definitions == nil || a.releases == nil {
+		return Representation{}, fmt.Errorf("create run: the command guard, definition resolver, and runtime registry are required")
 	}
 	scope, err := a.scope(ctx, claims, auth.OpCreateRun, workspaceID)
 	if err != nil {
@@ -206,7 +223,22 @@ func (a *App) Create(ctx context.Context, claims auth.Claims, workspaceID, key, 
 		mismatched.Detail = "the declared definition is not the definition current authority pins"
 		return Representation{}, mismatched
 	}
-	outcome, err := a.runs.Create(ctx, runs.CreateInput{Scope: scope, Key: key, ClaimedDigest: digest, Traceparent: traceparent, Raw: raw, Authority: current})
+	// The run pins the runtime release the Runtime Registry selected and
+	// verified for this definition — not the binding the definition asserts,
+	// and nothing the caller sent. Selection happens once, here: a later
+	// registry change, revocation, or rollback changes what new runs select and
+	// leaves this run's pin exactly as it is.
+	release, err := a.releases.Select(runtimes.Request{Definition: resolved, Capability: runtimes.TurnCapability})
+	if err != nil {
+		unavailable := problem.New(problem.CodeContractInvalid, "")
+		unavailable.Detail = "no approved runtime release can execute the declared definition"
+		return Representation{}, unavailable
+	}
+	binding, err := json.Marshal(release.Binding)
+	if err != nil {
+		return Representation{}, fmt.Errorf("encode selected runtime binding: %w", err)
+	}
+	outcome, err := a.runs.Create(ctx, runs.CreateInput{Scope: scope, Key: key, ClaimedDigest: digest, Traceparent: traceparent, Raw: raw, Authority: current, RuntimeBinding: binding})
 	if err != nil {
 		return Representation{}, err
 	}

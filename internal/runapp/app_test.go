@@ -19,6 +19,7 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
+	"github.com/ancyloce/anvilkit-agent-service/internal/runtimes"
 )
 
 func testGuard(t *testing.T) *contractguard.Guard {
@@ -41,6 +42,30 @@ func (testDefinitions) Resolve(reference agent.DefinitionReference) (agent.Defin
 	// carries that domain. A resolver that answered without one would be
 	// looser than the registry it stands in for.
 	return agent.Definition{DefinitionID: reference.DefinitionID, DefinitionDigest: reference.DefinitionDigest, Domain: "pagix-page"}, nil
+}
+
+// testReleases stands in for the Runtime Registry: it selects one verified
+// release for the definition the test resolver approves, and refuses anything
+// else, so a run created here pins a release exactly as a real one does.
+type testReleases struct{}
+
+func (testReleases) Select(request runtimes.Request) (runtimes.Release, error) {
+	if request.Definition.DefinitionID != "definition.test" {
+		return runtimes.Release{}, fmt.Errorf("no approved runtime release")
+	}
+	return runtimes.Release{
+		RuntimeUnitID: "runtime.platform.page-change-manager",
+		DefinitionID:  request.Definition.DefinitionID,
+		Lifecycle:     "active",
+		Capabilities:  []string{runtimes.TurnCapability},
+		Binding: agent.RuntimeBinding{
+			RuntimeUnitID:            "runtime.platform.page-change-manager",
+			RuntimeManifestDigest:    "sha256:" + strings.Repeat("1", 64),
+			RuntimeImageDigest:       "sha256:" + strings.Repeat("2", 64),
+			InvocationProtocolDigest: "sha256:" + strings.Repeat("3", 64),
+			RuntimeAudience:          "urn:anvilkit:audience:runtime-page-change-manager",
+		},
+	}, nil
 }
 
 type clock struct{ now time.Time }
@@ -127,7 +152,7 @@ func TestServerScopeComesOnlyFromVerifiedClaimsAndCrossWorkspaceIs404(t *testing
 	now := time.Now()
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent", MaximumClockSkew: time.Second}, trust{}, clock{now})
 	runStore := &store{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 3}}
-	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil })), eventReader{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.Bounds{MaximumBytes: 1000, MaximumFields: 10, MaximumFieldBytes: 100}}, appAuthoritySource{}, testGuard(t), testDefinitions{})
+	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil })), eventReader{}, events.StreamConfig{Heartbeat: time.Second, Revalidation: time.Second, ReplayLimit: 10, Bounds: events.Bounds{MaximumBytes: 1000, MaximumFields: 10, MaximumFieldBytes: 100}}, appAuthoritySource{}, testGuard(t), testDefinitions{}).WithRuntimeReleases(testReleases{})
 	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead, auth.ScopeWrite}, ExpiresAt: now.Add(time.Hour)}
 	result, err := app.Get(context.Background(), claims, "workspace", "run")
 	if err != nil || result.ETag != `"run:v3"` {
@@ -145,7 +170,7 @@ func TestStrongETagPreconditionAllowsOneMutation(t *testing.T) {
 	now := time.Now()
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent"}, trust{}, clock{now})
 	runStore := &store{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 3}}
-	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil })), eventReader{}, events.StreamConfig{}, appAuthoritySource{}, testGuard(t), testDefinitions{})
+	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil })), eventReader{}, events.StreamConfig{}, appAuthoritySource{}, testGuard(t), testDefinitions{}).WithRuntimeReleases(testReleases{})
 	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeWrite}, ExpiresAt: now.Add(time.Hour)}
 	first, err := app.Transition(context.Background(), claims, auth.OpCancel, "workspace", "run", `"run:v3"`, runs.Command{Kind: runs.RequestCancellation, Traceparent: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"})
 	if err != nil || first.ETag != `"run:v4"` {
@@ -174,7 +199,7 @@ func TestCreateCommandCanonicalGovernance(t *testing.T) {
 	now := time.Now()
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent", MaximumClockSkew: time.Second}, trust{}, clock{now})
 	runStore := &store{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 3}}
-	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil })), eventReader{}, events.StreamConfig{}, appAuthoritySource{}, testGuard(t), testDefinitions{})
+	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil })), eventReader{}, events.StreamConfig{}, appAuthoritySource{}, testGuard(t), testDefinitions{}).WithRuntimeReleases(testReleases{})
 	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead, auth.ScopeWrite}, ExpiresAt: now.Add(time.Hour)}
 	trace := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
 	body := func(projectID, definitionDigest string) []byte {
@@ -201,6 +226,14 @@ func TestCreateCommandCanonicalGovernance(t *testing.T) {
 	assertProblem(t, err, problem.CodeAuthorizationDenied)
 	unapproved := body("project", "sha256:"+strings.Repeat("b", 64))
 	_, err = app.Create(context.Background(), claims, "workspace", "key-4", digestOf(unapproved), trace, unapproved)
+	assertProblem(t, err, problem.CodeContractInvalid)
+	// The resolved definition's domain must own the declared operation: the
+	// resolver answers with pagix-page material, so a platform-agent operation
+	// declared under the same approved definition is refused before any state
+	// exists. This is the mismatch that once let a generic manager serve a
+	// page operation.
+	mismatched := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"` + pinnedDigest + `"},"operation":"component-package","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
+	_, err = app.Create(context.Background(), claims, "workspace", "key-5", digestOf(mismatched), trace, mismatched)
 	assertProblem(t, err, problem.CodeContractInvalid)
 	_, err = app.Transition(context.Background(), claims, auth.OpCancel, "workspace", "run", "", runs.Command{Kind: runs.RequestCancellation, Traceparent: trace})
 	assertProblem(t, err, problem.CodePreconditionRequired)
@@ -250,7 +283,7 @@ func TestResolveEscalationCommandCanonicalGovernance(t *testing.T) {
 	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent", MaximumClockSkew: time.Second}, trust{}, clock{now})
 	runStore := &store{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 3}}
 	resolver := &recordingResolver{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 4}}
-	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil })), eventReader{}, events.StreamConfig{}, appAuthoritySource{}, testGuard(t), testDefinitions{})
+	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil })), eventReader{}, events.StreamConfig{}, appAuthoritySource{}, testGuard(t), testDefinitions{}).WithRuntimeReleases(testReleases{})
 	app.WithEscalations(resolver, NewMemoryCommandReceipts(func() time.Time { return now }, time.Minute))
 	trace := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
 	operationID := "domain.0123456789abcdef0123456789abcdef"
@@ -336,4 +369,106 @@ func TestResolveEscalationCommandCanonicalGovernance(t *testing.T) {
 func isProblem(err error, code problem.Code) bool {
 	var details problem.Details
 	return errors.As(err, &details) && details.Code == string(code)
+}
+
+// movedReleases is a registry that has changed since a run was created: the
+// release it now selects is a different one, and for a definition it no longer
+// approves it selects nothing at all.
+type movedReleases struct{ approves bool }
+
+func (m movedReleases) Select(request runtimes.Request) (runtimes.Release, error) {
+	if !m.approves {
+		return runtimes.Release{}, fmt.Errorf("the approved release was revoked")
+	}
+	release, err := testReleases{}.Select(request)
+	if err != nil {
+		return runtimes.Release{}, err
+	}
+	release.Binding.RuntimeImageDigest = "sha256:" + strings.Repeat("9", 64)
+	release.Binding.RuntimeManifestDigest = "sha256:" + strings.Repeat("8", 64)
+	return release, nil
+}
+
+// A run pins the release it was created with. Registry changes — a new
+// release, a revocation, a rollback — decide what *new* runs select and leave
+// runs that already exist exactly as they are. Rollback that rewrote the pins
+// of running work would move that work onto code it was never approved for.
+func TestARegistryChangeDoesNotAlterAnExistingRun(t *testing.T) {
+	now := time.Now()
+	validator, _ := auth.NewValidator(auth.Config{Issuers: []string{"issuer"}, Audience: "agent", MaximumClockSkew: time.Second}, trust{}, clock{now})
+	runStore := &store{snapshot: runs.Snapshot{RunID: "run", WorkspaceID: "workspace", Version: 3}}
+	app := New(validator, runs.NewService(runStore, starter{}, ids{}, clock{now}, journal.NewMemoryStore(), runs.AdmitFunc(func(context.Context, runs.Scope) error { return nil })), eventReader{}, events.StreamConfig{}, appAuthoritySource{}, testGuard(t), testDefinitions{}).WithRuntimeReleases(testReleases{})
+	claims := auth.Claims{Verified: true, Source: auth.SourceWorkload, Issuer: "issuer", Audience: "agent", Subject: "actor", ActorID: "actor", WorkspaceID: "workspace", ProjectID: "project", Purpose: "agent", KeyID: "key", Scopes: []string{auth.ScopeRead, auth.ScopeWrite}, ExpiresAt: now.Add(time.Hour)}
+	trace := "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:` + strings.Repeat("a", 64) + `"},"operation":"page-change","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
+	digest, err := canonical.Digest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := app.Create(context.Background(), claims, "workspace", "key", digest, trace, raw)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	pinned := runtimeBindingOf(t, created.Body)
+	expected, err := testReleases{}.Select(runtimes.Request{Definition: agent.Definition{DefinitionID: "definition.test"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned != expected.Binding {
+		t.Fatalf("the created run did not pin the selected release:\n pinned   %+v\n selected %+v", pinned, expected.Binding)
+	}
+
+	// The registry now selects a different release. The run that already exists
+	// is read back unchanged.
+	runStore.snapshot = snapshotOf(t, created.Body)
+	app.WithRuntimeReleases(movedReleases{approves: true})
+	read, err := app.Get(context.Background(), claims, "workspace", "run")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if reread := runtimeBindingOf(t, read.Body); reread != pinned {
+		t.Fatalf("a registry change altered an existing run:\n was %+v\n now %+v", pinned, reread)
+	}
+
+	// A registry that approves nothing for the definition stops *new* runs and
+	// still leaves the existing one alone.
+	app.WithRuntimeReleases(movedReleases{approves: false})
+	if _, err := app.Create(context.Background(), claims, "workspace", "key-2", digest, trace, raw); err == nil {
+		t.Fatal("a run was created against a definition with no approved release")
+	}
+	if reread := runtimeBindingOf(t, mustGet(t, app, claims)); reread != pinned {
+		t.Fatalf("a revoked release altered an existing run:\n was %+v\n now %+v", pinned, reread)
+	}
+}
+
+func mustGet(t *testing.T, app *App, claims auth.Claims) []byte {
+	t.Helper()
+	read, err := app.Get(context.Background(), claims, "workspace", "run")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	return read.Body
+}
+
+func runtimeBindingOf(t *testing.T, body []byte) agent.RuntimeBinding {
+	t.Helper()
+	var document struct {
+		RuntimeBinding agent.RuntimeBinding `json:"runtimeBinding"`
+	}
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	return document.RuntimeBinding
+}
+
+func snapshotOf(t *testing.T, body []byte) runs.Snapshot {
+	t.Helper()
+	var document struct {
+		RuntimeBinding json.RawMessage `json:"runtimeBinding"`
+	}
+	if err := json.Unmarshal(body, &document); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	return runs.Snapshot{Kind: "AgentRun", RunID: "run", WorkspaceID: "workspace", Version: 3, RuntimeBinding: document.RuntimeBinding}
 }
