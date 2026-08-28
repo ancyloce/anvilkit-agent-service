@@ -7,6 +7,8 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -188,4 +190,32 @@ func validComponentID(value string) bool {
 
 func asciiAlphaNumeric(character byte) bool {
 	return character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z' || character >= '0' && character <= '9'
+}
+
+// CostMicros converts a governed decimal cost string into the micros this
+// service accounts in. It is here, beside Usage, because the wire carries a
+// decimal and every consumer of usage needs the same conversion: a second
+// parser would eventually disagree with this one about a fraction.
+func CostMicros(amount string) (int64, error) {
+	if amount == "" || len(amount) > 20 {
+		return 0, fmt.Errorf("cost amount is required and bounded")
+	}
+	whole, fraction, split := strings.Cut(amount, ".")
+	units, err := strconv.ParseInt(whole, 10, 64)
+	if err != nil || units < 0 {
+		return 0, fmt.Errorf("cost amount must be a non-negative decimal")
+	}
+	micros := units * 1_000_000
+	if split {
+		if fraction == "" || len(fraction) > 6 {
+			return 0, fmt.Errorf("cost amount fraction must contain 1-6 digits")
+		}
+		padded := fraction + strings.Repeat("0", 6-len(fraction))
+		part, err := strconv.ParseInt(padded, 10, 64)
+		if err != nil || part < 0 {
+			return 0, fmt.Errorf("cost amount fraction must be numeric")
+		}
+		micros += part
+	}
+	return micros, nil
 }

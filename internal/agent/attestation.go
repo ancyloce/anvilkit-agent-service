@@ -57,47 +57,12 @@ func VerifyCatalogAttestation(trustRootBytes, envelopeBytes []byte, catalogDiges
 	if !validDigest(catalogDigest) {
 		return fmt.Errorf("catalog attestation: the catalog digest is malformed")
 	}
-	root, skew, err := trust.ParseRoot(trustRootBytes, now, "catalog attestation")
-	if err != nil {
-		return err
-	}
-	payload, signature, envelopeKeyID, err := trust.OpenEnvelope(envelopeBytes, CatalogStatementType, "catalog attestation")
-	if err != nil {
-		return err
-	}
-	var statement CatalogStatement
-	if err := trust.DecodeJSON(payload, &statement); err != nil {
-		return fmt.Errorf("catalog attestation: decode statement: %w", err)
-	}
-	if statement.Kind != "AgentDefinitionCatalogStatement" || statement.Algorithm != catalogAlgorithm {
-		return fmt.Errorf("catalog attestation: the statement kind or algorithm is outside the accepted profile")
-	}
-	if statement.Audience != CatalogAudience {
-		return fmt.Errorf("catalog attestation: the statement is not addressed to this service")
-	}
-	if statement.Subject.MediaType != CatalogMediaType || !equalDigest(statement.Subject.Digest, catalogDigest) {
-		return fmt.Errorf("catalog attestation: the statement does not bind the loaded definition catalog")
-	}
-	if statement.KeyID == "" || statement.KeyID != envelopeKeyID {
-		return fmt.Errorf("catalog attestation: the envelope key identity does not match the statement")
-	}
-	notBefore, err := time.Parse(timestampLayout, statement.NotBefore)
-	if err != nil {
-		return fmt.Errorf("catalog attestation: the statement validity start is malformed")
-	}
-	expiresAt, err := time.Parse(timestampLayout, statement.ExpiresAt)
-	if err != nil {
-		return fmt.Errorf("catalog attestation: the statement validity end is malformed")
-	}
-	if now.Add(skew).Before(notBefore) || now.After(expiresAt.Add(skew)) {
-		return fmt.Errorf("catalog attestation: the statement is outside its validity interval")
-	}
-	key, err := trust.ResolveKey(root, trust.KeyRequest{KeyID: statement.KeyID, Issuer: statement.Issuer, Audience: statement.Audience, Algorithm: catalogAlgorithm}, now, skew, "catalog attestation")
-	if err != nil {
-		return err
-	}
-	if !trust.Verify(key, CatalogStatementType, payload, signature) {
-		return fmt.Errorf("catalog attestation: the statement signature does not verify")
-	}
-	return nil
+	return trust.VerifyStatement(trustRootBytes, envelopeBytes, trust.StatementProfile{
+		Context:     "catalog attestation",
+		Kind:        "AgentDefinitionCatalogStatement",
+		PayloadType: CatalogStatementType,
+		MediaType:   CatalogMediaType,
+		Audience:    CatalogAudience,
+		Algorithm:   catalogAlgorithm,
+	}, catalogDigest, now)
 }

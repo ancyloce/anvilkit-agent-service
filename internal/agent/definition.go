@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
 )
@@ -41,6 +42,20 @@ type RepairPolicy struct {
 	Mode            string `json:"mode"`
 }
 
+// RuntimeBinding is the one runtime release a definition may execute on: the
+// unit, the manifest and image digests it was released as, the invocation
+// protocol it speaks, and the audience a task-scoped credential for it is
+// issued to. It is an immutable pin rather than a discovery hint — a definition
+// that could be served by whatever runtime answered would have no releasable
+// identity at all.
+type RuntimeBinding struct {
+	RuntimeUnitID            string `json:"runtimeUnitId"`
+	RuntimeManifestDigest    string `json:"runtimeManifestDigest"`
+	RuntimeImageDigest       string `json:"runtimeImageDigest"`
+	InvocationProtocolDigest string `json:"invocationProtocolDigest"`
+	RuntimeAudience          string `json:"runtimeAudience"`
+}
+
 // Definition is the typed canonical AgentDefinition. It is immutable by
 // (definitionId, definitionDigest); Raw preserves the exact pinned document.
 type Definition struct {
@@ -62,6 +77,7 @@ type Definition struct {
 	TurnLimit              int               `json:"turnLimit"`
 	StopConditions         []string          `json:"stopConditions"`
 	Evaluators             []SchemaReference `json:"evaluators"`
+	RuntimeBinding         RuntimeBinding    `json:"runtimeBinding"`
 	DefinitionID           string            `json:"definitionId"`
 	DefinitionDigest       string            `json:"definitionDigest"`
 
@@ -190,7 +206,21 @@ func (d Definition) validate() error {
 	if !validDigest(d.DefinitionDigest) {
 		return fmt.Errorf("agent definition: definition digest is required")
 	}
+	if !validComponentID(d.RuntimeBinding.RuntimeUnitID) ||
+		!validDigest(d.RuntimeBinding.RuntimeManifestDigest) ||
+		!validDigest(d.RuntimeBinding.RuntimeImageDigest) ||
+		!validDigest(d.RuntimeBinding.InvocationProtocolDigest) ||
+		!validRuntimeAudience(d.RuntimeBinding.RuntimeAudience) {
+		return fmt.Errorf("agent definition: the runtime binding must pin a unit, manifest digest, image digest, protocol digest, and audience")
+	}
 	return nil
+}
+
+// validRuntimeAudience reports whether a binding names an audience in the
+// governed shape. An audience in any other shape is one no registry governs,
+// and a credential issued for it could not be checked against one.
+func validRuntimeAudience(value string) bool {
+	return len(value) <= 256 && regexp.MustCompile(`^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$`).MatchString(value)
 }
 
 // IdentityDigest recomputes the canonical digest over the frozen identity
