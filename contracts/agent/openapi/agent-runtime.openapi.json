@@ -1,0 +1,949 @@
+{
+  "openapi": "3.1.2",
+  "info": {
+    "title": "AnvilKit Agent Runtime Boundary API",
+    "version": "p0-kernel",
+    "description": "Canonical wire contract for the boundary between Agent Service and the separate Agent Runtime Units (ADR-022). Two parties serve this surface and each operation names which: a runtime unit serves task dispatch and reports its own release, and the Agent Service serves the governed Model Gateway and the controlled artifact and tool operations runtimes are permitted to call. A runtime unit reaches nothing else: it holds no provider credentials, no storage credentials, and no authority beyond the attempt it was dispatched. JSON Schema components remain authoritative; contract identity is canonical path, digest, lock, and commit."
+  },
+  "servers": [
+    {
+      "url": "https://runtime.internal.invalid",
+      "description": "One Agent Runtime Unit release. Every unit serves this surface and nothing else."
+    },
+    {
+      "url": "https://agent.internal.invalid/v1",
+      "description": "The Agent Service runtime boundary. Only authenticated runtime workloads reach it."
+    }
+  ],
+  "tags": [
+    {
+      "name": "Dispatch"
+    },
+    {
+      "name": "Gateway"
+    },
+    {
+      "name": "Controlled access"
+    }
+  ],
+  "security": [
+    {
+      "workloadIdentity": [],
+      "taskCredential": []
+    }
+  ],
+  "paths": {
+    "/task": {
+      "servers": [
+        {
+          "url": "https://runtime.internal.invalid",
+          "description": "One Agent Runtime Unit release. Every unit serves this surface and nothing else."
+        }
+      ],
+      "post": {
+        "operationId": "dispatchAgentTask",
+        "summary": "Execute exactly one physical attempt of one AgentTask and return a signed result.",
+        "security": [
+          {
+            "workloadIdentity": [],
+            "taskCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestDigest"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "x-anvilkit-idempotency": {
+          "scope": "attempt-and-operation",
+          "sameKeySameDigest": "return-recorded-outcome",
+          "sameKeyDifferentBytes": "IDEMPOTENCY_KEY_REUSED"
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "anvilkit://schema/agent-task?digest=sha256:0db34f07c19ac81a3adacd43fc25d10f4c0168b5ca57c6bddd0a7374a0d32176"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed result proposal for the dispatched attempt.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "description": "true when a recorded semantic outcome is replayed.",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "X-AnvilKit-Request-Digest": {
+                "description": "Canonical request digest accepted for the operation.",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/agent-runtime-result?digest=sha256:1a5d69d36daad9780502a62fb32ed6732f70bd8e5806ad80023a7ea978a8a7f8"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable contract problem.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not authorized.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown addressed resource.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key reused with different bytes, or the addressed state moved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The addressed attempt is expired, superseded, or fenced out; no state changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Canonical contract validation failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal problem.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/runtime-release": {
+      "servers": [
+        {
+          "url": "https://runtime.internal.invalid",
+          "description": "One Agent Runtime Unit release. Every unit serves this surface and nothing else."
+        }
+      ],
+      "get": {
+        "operationId": "describeAgentRuntimeRelease",
+        "summary": "Report the immutable runtime release this unit is running.",
+        "security": [
+          {
+            "workloadIdentity": [],
+            "taskCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The manifest of the release serving this process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/agent-runtime-manifest?digest=sha256:c25e809d4143ddf6623287af922510f10acccd4f73581bc802251c6eca9cfbfd"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not authorized.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown addressed resource.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal problem.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/runtime/model-invocations": {
+      "servers": [
+        {
+          "url": "https://agent.internal.invalid/v1",
+          "description": "The Agent Service runtime boundary. Only authenticated runtime workloads reach it."
+        }
+      ],
+      "post": {
+        "operationId": "invokeGovernedModel",
+        "summary": "Invoke the governed Model Gateway for one physical attempt.",
+        "security": [
+          {
+            "workloadIdentity": [],
+            "taskCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestDigest"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "x-anvilkit-idempotency": {
+          "scope": "attempt-and-operation",
+          "sameKeySameDigest": "return-recorded-outcome",
+          "sameKeyDifferentBytes": "IDEMPOTENCY_KEY_REUSED"
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "anvilkit://schema/model-invocation-request?digest=sha256:d252ec3a90e6e2e318a03fdd78aa88623c559e9c796aa402c5d708989fb160f9"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Governed model result metered against the attempt.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "description": "true when a recorded semantic outcome is replayed.",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "X-AnvilKit-Request-Digest": {
+                "description": "Canonical request digest accepted for the operation.",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/model-invocation-result?digest=sha256:41fcacd2068f245cd5be8ea1f218b258b76afcfb47e079a6bda9882a4aa8693b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable contract problem.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not authorized.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown addressed resource.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key reused with different bytes, or the addressed state moved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The addressed attempt is expired, superseded, or fenced out; no state changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Canonical contract validation failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal problem.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/runtime/contract-runtime-invocations": {
+      "servers": [
+        {
+          "url": "https://agent.internal.invalid/v1",
+          "description": "The Agent Service runtime boundary. Only authenticated runtime workloads reach it."
+        }
+      ],
+      "post": {
+        "operationId": "invokeGovernedContractRuntime",
+        "summary": "Invoke the deterministic Contract Runtime as a controlled tool.",
+        "security": [
+          {
+            "workloadIdentity": [],
+            "taskCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestDigest"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "x-anvilkit-idempotency": {
+          "scope": "attempt-and-operation",
+          "sameKeySameDigest": "return-recorded-outcome",
+          "sameKeyDifferentBytes": "IDEMPOTENCY_KEY_REUSED"
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "anvilkit://schema/contract-runtime-request?digest=sha256:0400c3b836ee560c5d21f82cd118e26aad404014f87b740ecf2b80d143708bff"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deterministic contract runtime result.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "description": "true when a recorded semantic outcome is replayed.",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "X-AnvilKit-Request-Digest": {
+                "description": "Canonical request digest accepted for the operation.",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/contract-runtime-result?digest=sha256:b22a03aa428e3e5cdc0b6913ca491a7bba4b95680855a9d45118d35181edb643"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable contract problem.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not authorized.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown addressed resource.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key reused with different bytes, or the addressed state moved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The addressed attempt is expired, superseded, or fenced out; no state changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Canonical contract validation failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal problem.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/runtime/artifact-content-grants": {
+      "servers": [
+        {
+          "url": "https://agent.internal.invalid/v1",
+          "description": "The Agent Service runtime boundary. Only authenticated runtime workloads reach it."
+        }
+      ],
+      "post": {
+        "operationId": "issueRuntimeArtifactContentGrant",
+        "summary": "Obtain bounded, expiring read access to one artifact's bytes.",
+        "security": [
+          {
+            "workloadIdentity": [],
+            "taskCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestDigest"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "x-anvilkit-idempotency": {
+          "scope": "attempt-and-operation",
+          "sameKeySameDigest": "return-recorded-outcome",
+          "sameKeyDifferentBytes": "IDEMPOTENCY_KEY_REUSED"
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "anvilkit://schema/issue-artifact-content-grant-request?digest=sha256:2270580ea7b2e0226b8450130e4ee7312db2b101650fc012ea2f90823892c0b1"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Bounded, expiring content grant.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "description": "true when a recorded semantic outcome is replayed.",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "X-AnvilKit-Request-Digest": {
+                "description": "Canonical request digest accepted for the operation.",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/artifact-content-grant?digest=sha256:d4608f216d773faf2747d5350440deb844e17d93a7602e06397d0f18d1c81a3c"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable contract problem.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not authorized.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown addressed resource.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key reused with different bytes, or the addressed state moved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The addressed attempt is expired, superseded, or fenced out; no state changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Canonical contract validation failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal problem.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/internal/runtime/artifacts": {
+      "servers": [
+        {
+          "url": "https://agent.internal.invalid/v1",
+          "description": "The Agent Service runtime boundary. Only authenticated runtime workloads reach it."
+        }
+      ],
+      "post": {
+        "operationId": "submitRuntimeArtifact",
+        "summary": "Submit one immutable page candidate artifact produced by the attempt.",
+        "security": [
+          {
+            "workloadIdentity": [],
+            "taskCredential": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/RequestDigest"
+          },
+          {
+            "$ref": "#/components/parameters/Traceparent"
+          }
+        ],
+        "x-anvilkit-idempotency": {
+          "scope": "attempt-and-operation",
+          "sameKeySameDigest": "return-recorded-outcome",
+          "sameKeyDifferentBytes": "IDEMPOTENCY_KEY_REUSED"
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "anvilkit://schema/page-candidate?digest=sha256:21292ad166afb23da381528343829ea2be75d7520364839759e9bd1d05f38e69"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Immutable artifact metadata for the submitted candidate.",
+            "headers": {
+              "Idempotency-Replayed": {
+                "description": "true when a recorded semantic outcome is replayed.",
+                "schema": {
+                  "type": "boolean"
+                }
+              },
+              "X-AnvilKit-Request-Digest": {
+                "description": "Canonical request digest accepted for the operation.",
+                "schema": {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/agent-artifact?digest=sha256:0776014482233fa9db255075fd51ca229e421b2232c624213cb09d13795aac43"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Stable contract problem.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated but not authorized.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown addressed resource.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency key reused with different bytes, or the addressed state moved.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The addressed attempt is expired, superseded, or fenced out; no state changed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Canonical contract validation failed.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected internal problem.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "workloadIdentity": {
+        "type": "mutualTLS",
+        "description": "Authenticated internal service or runtime workload identity."
+      },
+      "taskCredential": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Task-scoped credential issued by Agent Service for exactly one physical attempt. It names the runtime audience the attempt was dispatched to, expires with the attempt, and carries no authority beyond it. No token-issuing endpoint is advertised here: the credential arrives with the dispatched task."
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "RequestDigest": {
+        "name": "X-AnvilKit-Request-Digest",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "Traceparent": {
+        "name": "traceparent",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{2}-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$"
+        }
+      }
+    },
+    "schemas": {
+      "AgentTask": {
+        "$ref": "anvilkit://schema/agent-task?digest=sha256:0db34f07c19ac81a3adacd43fc25d10f4c0168b5ca57c6bddd0a7374a0d32176"
+      },
+      "AgentRuntimeResult": {
+        "$ref": "anvilkit://schema/agent-runtime-result?digest=sha256:1a5d69d36daad9780502a62fb32ed6732f70bd8e5806ad80023a7ea978a8a7f8"
+      },
+      "AgentRuntimeManifest": {
+        "$ref": "anvilkit://schema/agent-runtime-manifest?digest=sha256:c25e809d4143ddf6623287af922510f10acccd4f73581bc802251c6eca9cfbfd"
+      },
+      "ModelInvocationRequest": {
+        "$ref": "anvilkit://schema/model-invocation-request?digest=sha256:d252ec3a90e6e2e318a03fdd78aa88623c559e9c796aa402c5d708989fb160f9"
+      },
+      "ModelInvocationResult": {
+        "$ref": "anvilkit://schema/model-invocation-result?digest=sha256:41fcacd2068f245cd5be8ea1f218b258b76afcfb47e079a6bda9882a4aa8693b"
+      },
+      "ContractRuntimeRequest": {
+        "$ref": "anvilkit://schema/contract-runtime-request?digest=sha256:0400c3b836ee560c5d21f82cd118e26aad404014f87b740ecf2b80d143708bff"
+      },
+      "ContractRuntimeResult": {
+        "$ref": "anvilkit://schema/contract-runtime-result?digest=sha256:b22a03aa428e3e5cdc0b6913ca491a7bba4b95680855a9d45118d35181edb643"
+      },
+      "IssueArtifactContentGrantRequest": {
+        "$ref": "anvilkit://schema/issue-artifact-content-grant-request?digest=sha256:2270580ea7b2e0226b8450130e4ee7312db2b101650fc012ea2f90823892c0b1"
+      },
+      "ArtifactContentGrant": {
+        "$ref": "anvilkit://schema/artifact-content-grant?digest=sha256:d4608f216d773faf2747d5350440deb844e17d93a7602e06397d0f18d1c81a3c"
+      },
+      "PageCandidate": {
+        "$ref": "anvilkit://schema/page-candidate?digest=sha256:21292ad166afb23da381528343829ea2be75d7520364839759e9bd1d05f38e69"
+      },
+      "AgentArtifact": {
+        "$ref": "anvilkit://schema/agent-artifact?digest=sha256:0776014482233fa9db255075fd51ca229e421b2232c624213cb09d13795aac43"
+      },
+      "ProblemDetails": {
+        "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"
+      }
+    }
+  }
+}

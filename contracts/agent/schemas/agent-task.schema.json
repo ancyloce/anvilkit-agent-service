@@ -2,16 +2,24 @@
   "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
   "$id": "https://contracts.anvilkit.dev/agent/schemas/agent-task.schema.json",
   "title": "AgentTask contract",
-  "description": "Bounded AgentTask wire contract governed by PRD 0012.",
+  "description": "Bounded AgentTask wire contract governed by PRD 0012. One AgentTask is a logical unit of work; each actual execution of it is a physical attempt with its own attempt identity, lease epoch, and fence token. The task pins the Agent Definition and the runtime release permitted to execute it, carries the audience the task-scoped credential is issued for, and expires: a runtime may not admit it after expiresAt. The raw fence token is a commit capability and must never be written to logs or public events; persistent diagnostics may record its digest instead.",
   "type": "object",
-  "minProperties": 14,
-  "maxProperties": 14,
+  "minProperties": 22,
+  "maxProperties": 22,
   "required": [
     "kind",
     "taskId",
     "runId",
     "rootRunId",
+    "physicalAttemptId",
+    "attemptNumber",
     "executionGeneration",
+    "leaseEpoch",
+    "fenceToken",
+    "expiresAt",
+    "definition",
+    "runtimeBinding",
+    "authorizationAudience",
     "capability",
     "inputSchema",
     "artifactInputs",
@@ -35,10 +43,74 @@
     "rootRunId": {
       "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
     },
+    "physicalAttemptId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PhysicalAttemptId"
+    },
+    "attemptNumber": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
     "executionGeneration": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
+    },
+    "leaseEpoch": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "fenceToken": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
+    "expiresAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    },
+    "definition": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/DefinitionReference"
+    },
+    "runtimeBinding": {
+      "type": "object",
+      "minProperties": 5,
+      "maxProperties": 5,
+      "required": [
+        "runtimeUnitId",
+        "runtimeManifestDigest",
+        "runtimeImageDigest",
+        "invocationProtocolDigest",
+        "runtimeAudience"
+      ],
+      "properties": {
+        "runtimeUnitId": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+        },
+        "runtimeManifestDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "runtimeImageDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "invocationProtocolDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "runtimeAudience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "authorizationAudience": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$"
     },
     "capability": {
       "enum": [
@@ -110,7 +182,15 @@
       "/taskId",
       "/runId",
       "/rootRunId",
+      "/physicalAttemptId",
+      "/attemptNumber",
       "/executionGeneration",
+      "/leaseEpoch",
+      "/fenceToken",
+      "/expiresAt",
+      "/definition",
+      "/runtimeBinding",
+      "/authorizationAudience",
       "/capability",
       "/inputSchema",
       "/parameters",
@@ -121,7 +201,8 @@
     ],
     "maximumSerializedBytes": 65536,
     "descriptions": [
-      "contracts/agent/asyncapi/agent-events.asyncapi.json"
+      "contracts/agent/asyncapi/agent-events.asyncapi.json",
+      "contracts/agent/openapi/agent-runtime.openapi.json"
     ]
   }
 }

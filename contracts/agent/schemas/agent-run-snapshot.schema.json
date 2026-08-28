@@ -16,7 +16,7 @@
       "const": "AgentRunSnapshot"
     },
     "run": {
-      "$ref": "anvilkit://schema/agent-run?digest=sha256:e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564"
+      "$ref": "anvilkit://schema/agent-run?digest=sha256:6265dda23cd50d6b716d5ee15a5cd8d9f427b10cfff63a29e3ce2cd727d7d09d"
     },
     "artifacts": {
       "type": "array",

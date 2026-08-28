@@ -1,0 +1,125 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/model-invocation-result.schema.json",
+  "title": "ModelInvocationResult contract",
+  "description": "Bounded result the governed Model Gateway returns for exactly one ModelInvocationRequest. It carries the bounded model output and its content digest, the governed outcome and reason code, and the token, duration, and cost usage the gateway metered and recorded against the attempt. It never carries provider credentials, provider-native payloads, or an instruction to call another runtime unit.",
+  "type": "object",
+  "minProperties": 12,
+  "maxProperties": 12,
+  "required": [
+    "kind",
+    "invocationId",
+    "taskId",
+    "physicalAttemptId",
+    "attemptNumber",
+    "executionGeneration",
+    "outcome",
+    "reasonCode",
+    "output",
+    "outputDigest",
+    "usage",
+    "traceContext"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ModelInvocationResult"
+    },
+    "invocationId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "taskId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TaskId"
+    },
+    "physicalAttemptId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PhysicalAttemptId"
+    },
+    "attemptNumber": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "executionGeneration": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "outcome": {
+      "enum": [
+        "ok",
+        "refused",
+        "problem"
+      ]
+    },
+    "reasonCode": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 64,
+      "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
+    },
+    "output": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+    },
+    "outputDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "usage": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "required": [
+        "inputTokens",
+        "outputTokens",
+        "durationMilliseconds",
+        "cost"
+      ],
+      "properties": {
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "durationMilliseconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3600000
+        },
+        "cost": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Cost"
+        }
+      },
+      "additionalProperties": false
+    },
+    "traceContext": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TraceContext"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ModelInvocationResult",
+    "componentName": "anvilkit.contract.schema.model-invocation-result",
+    "owner": "Agent Service Model Gateway owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/invocationId",
+      "/taskId",
+      "/physicalAttemptId",
+      "/attemptNumber",
+      "/executionGeneration",
+      "/outcome",
+      "/reasonCode",
+      "/output",
+      "/outputDigest",
+      "/usage",
+      "/traceContext"
+    ],
+    "maximumSerializedBytes": 65536,
+    "descriptions": [
+      "contracts/agent/openapi/agent-runtime.openapi.json"
+    ]
+  }
+}

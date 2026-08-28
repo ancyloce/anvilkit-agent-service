@@ -2,10 +2,10 @@
   "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
   "$id": "https://contracts.anvilkit.dev/agent/schemas/agent-definition.schema.json",
   "title": "AgentDefinition contract",
-  "description": "Bounded AgentDefinition wire contract governed by PRD 0012 and ADR-018. A definition is immutable by definitionId and definitionDigest and carries role, owner, instruction digest, input/output schema identity, Tool profile, delegation constraints, repair policy, and evaluation profile.",
+  "description": "Bounded AgentDefinition wire contract governed by PRD 0012 and ADR-018. A definition is immutable by definitionId and definitionDigest and carries role, owner, instruction digest, input/output schema identity, Tool profile, delegation constraints, repair policy, and evaluation profile. The runtime binding names the one runtime release permitted to execute this definition — unit, manifest digest, image digest, invocation protocol digest, and workload audience. It is an immutable pin, not a mutable discovery hint.",
   "type": "object",
-  "minProperties": 20,
-  "maxProperties": 20,
+  "minProperties": 21,
+  "maxProperties": 21,
   "required": [
     "kind",
     "role",
@@ -25,6 +25,7 @@
     "turnLimit",
     "stopConditions",
     "evaluators",
+    "runtimeBinding",
     "definitionId",
     "definitionDigest"
   ],
@@ -164,6 +165,39 @@
         "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/SchemaReference"
       }
     },
+    "runtimeBinding": {
+      "type": "object",
+      "minProperties": 5,
+      "maxProperties": 5,
+      "required": [
+        "runtimeUnitId",
+        "runtimeManifestDigest",
+        "runtimeImageDigest",
+        "invocationProtocolDigest",
+        "runtimeAudience"
+      ],
+      "properties": {
+        "runtimeUnitId": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+        },
+        "runtimeManifestDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "runtimeImageDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "invocationProtocolDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "runtimeAudience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$"
+        }
+      },
+      "additionalProperties": false
+    },
     "definitionId": {
       "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
     },
@@ -195,6 +229,7 @@
       "/turnLimit",
       "/stopConditions",
       "/evaluators",
+      "/runtimeBinding",
       "/definitionId"
     ],
     "maximumSerializedBytes": 65536,

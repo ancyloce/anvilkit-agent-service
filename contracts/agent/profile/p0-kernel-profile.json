@@ -47,7 +47,7 @@
     },
     "registrySet": {
       "path": "contracts/agent/registries/registry-set.json",
-      "digest": "sha256:353896b7d7b600bb07c373e329f9c5aa3fd419ff6236d77bcd2c0d61f52acce6"
+      "digest": "sha256:f1dcdfbd0f1a8473eb9abf440a7f6c349a3522d7c2822986aa079df820c7bccf"
     },
     "registrySetSchema": {
       "path": "contracts/agent/registries/registry-set.schema.json",
@@ -55,8 +55,12 @@
     },
     "openapi": [
       {
+        "path": "contracts/agent/openapi/agent-runtime.openapi.json",
+        "digest": "sha256:a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450"
+      },
+      {
         "path": "contracts/agent/openapi/agent-service.openapi.json",
-        "digest": "sha256:475d66561676066313d47d3e9aaf7168b284db1828e22709beec895dbf469953"
+        "digest": "sha256:13c64266794947b2c55d1e75832ec9d974fc404fefc71533484fca4b7c041da5"
       },
       {
         "path": "contracts/agent/openapi/pagix-agent-integration.openapi.json",
@@ -66,7 +70,7 @@
     "asyncapi": [
       {
         "path": "contracts/agent/asyncapi/agent-events.asyncapi.json",
-        "digest": "sha256:3543383bb8cd39b1aee8416d36f213ef751414be6bd28276b7f543a2606cd1ba"
+        "digest": "sha256:be4b6fe71d31ecdf98720bd488062e9d07ed1d43f76de3d3cc1498281d64d12d"
       },
       {
         "path": "contracts/agent/asyncapi/pagix-domain-events.asyncapi.json",
@@ -75,7 +79,7 @@
     ],
     "fixtureManifest": {
       "path": "contracts/agent/fixtures/manifest.json",
-      "digest": "sha256:17f7faf205839ea75c1b2b0441b03353f63407932f17c215e54ec8ee7800774f"
+      "digest": "sha256:6225db6c72f81e73e0e82de407fe431f55b8c59f3a741a7d1839fca7092ca6ac"
     },
     "fixtureManifestSchema": {
       "path": "contracts/agent/fixtures/manifest.schema.json",
@@ -91,9 +95,24 @@
     },
     "signatureCases": {
       "path": "contracts/agent/fixtures/signing/signature-cases.json",
-      "digest": "sha256:2ad1cff5b6bcb77060978200acc7c6b4c7faa7fdc53e26e8d1c7c00dddee76f3"
+      "digest": "sha256:864fdc7eb50c65685db38d135614a7634796c6e589c169b7c525b279a7607b71"
     }
   },
+  "signedStatements": [
+    {
+      "contract": "AgentRuntimeResult",
+      "statement": "the canonical document with the envelope pointer removed",
+      "envelopePointer": "/signature",
+      "canonicalization": "RFC8785",
+      "digestAlgorithm": "sha256",
+      "payloadType": "application/vnd.anvilkit.agent-runtime-result+json",
+      "signatureAlgorithms": [
+        "dsse-ed25519-v1",
+        "jws-eddsa-v1"
+      ],
+      "knownAnswerVectors": "contracts/agent/fixtures/signing/signature-cases.json#/runtimeStatement"
+    }
+  ],
   "contracts": [
     {
       "logicalId": "AgentArtifact",
@@ -137,7 +156,7 @@
       "logicalId": "AgentDefinition",
       "componentName": "anvilkit.contract.schema.agent-definition",
       "schemaPath": "contracts/agent/schemas/agent-definition.schema.json",
-      "digest": "sha256:59ea772874f19e68bf7dc7b3e83c2429a0e72e7a645ae23b5217d411130d4bfe",
+      "digest": "sha256:09122ada3e6c0814476bb44d0d291560ef7d95baa14a79f1c8587b300ee515e4",
       "owner": "Platform Definitions owner",
       "stability": "p0-kernel",
       "fixtureCoverage": [
@@ -189,7 +208,7 @@
       "logicalId": "AgentRun",
       "componentName": "anvilkit.contract.schema.agent-run",
       "schemaPath": "contracts/agent/schemas/agent-run.schema.json",
-      "digest": "sha256:e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564",
+      "digest": "sha256:6265dda23cd50d6b716d5ee15a5cd8d9f427b10cfff63a29e3ce2cd727d7d09d",
       "owner": "Agent Service owner",
       "stability": "p0-kernel",
       "fixtureCoverage": [
@@ -207,7 +226,7 @@
       "logicalId": "AgentRunSnapshot",
       "componentName": "anvilkit.contract.schema.agent-run-snapshot",
       "schemaPath": "contracts/agent/schemas/agent-run-snapshot.schema.json",
-      "digest": "sha256:a75079baf5ecfa347ef501e113ac96abaedb8bdbcf0c06a1cfe568e065ac55db",
+      "digest": "sha256:bc667183fc52ba4141132bbde63ea9022c0324c74b9a269a9a01b50484b0dbdd",
       "owner": "Platform Composition and API owner",
       "stability": "p0-kernel",
       "fixtureCoverage": [
@@ -223,7 +242,7 @@
       "logicalId": "AgentRuntimeManifest",
       "componentName": "anvilkit.contract.schema.agent-runtime-manifest",
       "schemaPath": "contracts/agent/schemas/agent-runtime-manifest.schema.json",
-      "digest": "sha256:de8a0324315e3f25201113a5b03dd320c1025bba2ef313cbbd25e4e910b10136",
+      "digest": "sha256:c25e809d4143ddf6623287af922510f10acccd4f73581bc802251c6eca9cfbfd",
       "owner": "Agent Runtime Release owner",
       "stability": "p0-kernel",
       "fixtureCoverage": [
@@ -233,13 +252,15 @@
         "invalid",
         "adversarial"
       ],
-      "descriptions": []
+      "descriptions": [
+        "contracts/agent/openapi/agent-runtime.openapi.json"
+      ]
     },
     {
       "logicalId": "AgentRuntimeResult",
       "componentName": "anvilkit.contract.schema.agent-runtime-result",
       "schemaPath": "contracts/agent/schemas/agent-runtime-result.schema.json",
-      "digest": "sha256:8272047727a6a468e4bddbd579cf26c7c7307fce63b5f50297c933dbda2392d1",
+      "digest": "sha256:1a5d69d36daad9780502a62fb32ed6732f70bd8e5806ad80023a7ea978a8a7f8",
       "owner": "Agent Service Scheduler owner",
       "stability": "p0-kernel",
       "fixtureCoverage": [
@@ -249,7 +270,9 @@
         "invalid",
         "adversarial"
       ],
-      "descriptions": []
+      "descriptions": [
+        "contracts/agent/openapi/agent-runtime.openapi.json"
+      ]
     },
     {
       "logicalId": "ArtifactContentGrant",
@@ -306,7 +329,7 @@
       "logicalId": "AgentTask",
       "componentName": "anvilkit.contract.schema.agent-task",
       "schemaPath": "contracts/agent/schemas/agent-task.schema.json",
-      "digest": "sha256:323739e5173befedf6c54f79ee0c05a3757460329a7ffef765622a26da711939",
+      "digest": "sha256:0db34f07c19ac81a3adacd43fc25d10f4c0168b5ca57c6bddd0a7374a0d32176",
       "owner": "Agent Service Scheduler owner",
       "stability": "p0-kernel",
       "fixtureCoverage": [
@@ -317,7 +340,8 @@
         "adversarial"
       ],
       "descriptions": [
-        "contracts/agent/asyncapi/agent-events.asyncapi.json"
+        "contracts/agent/asyncapi/agent-events.asyncapi.json",
+        "contracts/agent/openapi/agent-runtime.openapi.json"
       ]
     },
     {
@@ -602,6 +626,38 @@
       "descriptions": [
         "contracts/agent/openapi/agent-service.openapi.json",
         "contracts/agent/openapi/pagix-agent-integration.openapi.json"
+      ]
+    },
+    {
+      "logicalId": "ModelInvocationRequest",
+      "componentName": "anvilkit.contract.schema.model-invocation-request",
+      "schemaPath": "contracts/agent/schemas/model-invocation-request.schema.json",
+      "digest": "sha256:d252ec3a90e6e2e318a03fdd78aa88623c559e9c796aa402c5d708989fb160f9",
+      "owner": "Agent Service Model Gateway owner",
+      "stability": "p0-kernel",
+      "fixtureCoverage": [
+        "minimum",
+        "invalid",
+        "adversarial"
+      ],
+      "descriptions": [
+        "contracts/agent/openapi/agent-runtime.openapi.json"
+      ]
+    },
+    {
+      "logicalId": "ModelInvocationResult",
+      "componentName": "anvilkit.contract.schema.model-invocation-result",
+      "schemaPath": "contracts/agent/schemas/model-invocation-result.schema.json",
+      "digest": "sha256:41fcacd2068f245cd5be8ea1f218b258b76afcfb47e079a6bda9882a4aa8693b",
+      "owner": "Agent Service Model Gateway owner",
+      "stability": "p0-kernel",
+      "fixtureCoverage": [
+        "minimum",
+        "invalid",
+        "adversarial"
+      ],
+      "descriptions": [
+        "contracts/agent/openapi/agent-runtime.openapi.json"
       ]
     },
     {

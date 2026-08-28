@@ -2,22 +2,26 @@
   "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
   "$id": "https://contracts.anvilkit.dev/agent/schemas/agent-runtime-result.schema.json",
   "title": "AgentRuntimeResult contract",
-  "description": "Signed, bounded result returned by one Agent Runtime Unit for exactly one AgentTask attempt. It reports which definition, runtime manifest, invocation protocol, and image digests actually served the attempt, the physical attempt identity and execution generation it belongs to, the metered usage it consumed, one bounded TurnDecision, safe coded diagnostics, and its signature and provenance references. It is a proposal that Agent Service validates and may reject: it never carries authoritative workflow state, never commits, approves, or publishes, and never names another Agent Runtime Unit to call.",
+  "description": "Signed, bounded result returned by one Agent Runtime Unit for exactly one physical attempt of one AgentTask. It echoes the complete binding it was dispatched under — logical task, physical attempt, attempt number, execution generation, lease epoch, fence token, and the runtime unit, manifest, image, and invocation protocol digests that actually served the attempt — reports one bounded TurnDecision with its artifact outputs and content digests, a result status with a governed reason code, the per-attempt model, tool, token, duration, and cost usage it consumed, safe coded diagnostics, and a complete signature envelope over the RFC 8785 canonical bytes of the result statement. It is a proposal Agent Service verifies and may reject: it never carries authoritative workflow state, never commits, approves, or publishes, and never names another Agent Runtime Unit to call.",
   "type": "object",
-  "minProperties": 12,
-  "maxProperties": 12,
+  "minProperties": 16,
+  "maxProperties": 16,
   "required": [
     "kind",
     "taskId",
     "runId",
     "rootRunId",
     "physicalAttemptId",
+    "attemptNumber",
     "executionGeneration",
+    "leaseEpoch",
+    "fenceToken",
     "selected",
+    "status",
     "turnDecision",
     "usage",
     "diagnostics",
-    "provenance",
+    "signature",
     "traceContext"
   ],
   "properties": {
@@ -36,22 +40,42 @@
     "physicalAttemptId": {
       "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PhysicalAttemptId"
     },
+    "attemptNumber": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
     "executionGeneration": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991
     },
+    "leaseEpoch": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "fenceToken": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9._~-]+$"
+    },
     "selected": {
       "type": "object",
-      "minProperties": 4,
-      "maxProperties": 4,
+      "minProperties": 5,
+      "maxProperties": 5,
       "required": [
+        "runtimeUnitId",
         "definitionDigest",
         "runtimeManifestDigest",
         "invocationProtocolDigest",
         "imageDigest"
       ],
       "properties": {
+        "runtimeUnitId": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+        },
         "definitionDigest": {
           "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
         },
@@ -63,6 +87,32 @@
         },
         "imageDigest": {
           "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "status": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "status",
+        "reasonCode"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "completed",
+            "failed",
+            "refused",
+            "cancelled"
+          ]
+        },
+        "reasonCode": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 64,
+          "pattern": "^[A-Z][A-Z0-9_]{2,63}$"
         }
       },
       "additionalProperties": false
@@ -103,14 +153,27 @@
     },
     "usage": {
       "type": "object",
-      "minProperties": 3,
-      "maxProperties": 3,
+      "minProperties": 6,
+      "maxProperties": 6,
       "required": [
+        "modelCalls",
+        "toolCalls",
         "inputTokens",
         "outputTokens",
-        "durationMilliseconds"
+        "durationMilliseconds",
+        "cost"
       ],
       "properties": {
+        "modelCalls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
+        "toolCalls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10000
+        },
         "inputTokens": {
           "type": "integer",
           "minimum": 0,
@@ -125,6 +188,9 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 3600000
+        },
+        "cost": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Cost"
         }
       },
       "additionalProperties": false
@@ -157,26 +223,40 @@
         "additionalProperties": false
       }
     },
-    "provenance": {
+    "signature": {
       "type": "object",
-      "minProperties": 3,
-      "maxProperties": 3,
+      "minProperties": 5,
+      "maxProperties": 5,
       "required": [
-        "signatureAlgorithm",
-        "signatureDigest",
-        "statementDigest"
+        "algorithm",
+        "keyId",
+        "statementDigest",
+        "signature",
+        "provenanceReference"
       ],
       "properties": {
-        "signatureAlgorithm": {
+        "algorithm": {
           "enum": [
             "dsse-ed25519-v1",
             "jws-eddsa-v1"
           ]
         },
-        "signatureDigest": {
-          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        "keyId": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 256,
+          "pattern": "^urn:anvilkit:key:[a-z0-9][a-z0-9:-]{14,255}$"
         },
         "statementDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 86,
+          "maxLength": 512,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "provenanceReference": {
           "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
         }
       },
@@ -197,13 +277,19 @@
       "/runId",
       "/rootRunId",
       "/physicalAttemptId",
+      "/attemptNumber",
       "/executionGeneration",
+      "/leaseEpoch",
+      "/fenceToken",
       "/selected",
+      "/status",
       "/turnDecision",
       "/usage",
-      "/provenance"
+      "/signature"
     ],
     "maximumSerializedBytes": 65536,
-    "descriptions": []
+    "descriptions": [
+      "contracts/agent/openapi/agent-runtime.openapi.json"
+    ]
   }
 }

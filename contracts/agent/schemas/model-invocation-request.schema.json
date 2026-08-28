@@ -1,0 +1,103 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/model-invocation-request.schema.json",
+  "title": "ModelInvocationRequest contract",
+  "description": "Bounded request one Agent Runtime Unit sends to the governed Model Gateway for exactly one physical attempt. The runtime never holds provider credentials and never selects a provider: it names the attempt it is executing, the definition and model policy the Agent Service pinned, and the digests of the compiled context and prompt the gateway must use. The gateway resolves the provider, enforces the policy and the attempt's remaining budget, and attributes every token it spends to this attempt.",
+  "type": "object",
+  "minProperties": 15,
+  "maxProperties": 15,
+  "required": [
+    "kind",
+    "runId",
+    "rootRunId",
+    "taskId",
+    "physicalAttemptId",
+    "attemptNumber",
+    "executionGeneration",
+    "definition",
+    "modelPolicy",
+    "contextDigest",
+    "promptDigest",
+    "limits",
+    "idempotency",
+    "traceContext",
+    "contractBomReference"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ModelInvocationRequest"
+    },
+    "runId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
+    },
+    "rootRunId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/RunId"
+    },
+    "taskId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TaskId"
+    },
+    "physicalAttemptId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PhysicalAttemptId"
+    },
+    "attemptNumber": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "executionGeneration": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "definition": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/DefinitionReference"
+    },
+    "modelPolicy": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PolicyReference"
+    },
+    "contextDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "promptDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "limits": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ResourceLimits"
+    },
+    "idempotency": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Idempotency"
+    },
+    "traceContext": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/TraceContext"
+    },
+    "contractBomReference": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ContractBomReference"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ModelInvocationRequest",
+    "componentName": "anvilkit.contract.schema.model-invocation-request",
+    "owner": "Agent Service Model Gateway owner",
+    "stability": "p0-kernel",
+    "identityFields": [
+      "/runId",
+      "/rootRunId",
+      "/taskId",
+      "/physicalAttemptId",
+      "/attemptNumber",
+      "/executionGeneration",
+      "/definition",
+      "/modelPolicy",
+      "/contextDigest",
+      "/promptDigest",
+      "/limits",
+      "/idempotency",
+      "/traceContext"
+    ],
+    "maximumSerializedBytes": 65536,
+    "descriptions": [
+      "contracts/agent/openapi/agent-runtime.openapi.json"
+    ]
+  }
+}

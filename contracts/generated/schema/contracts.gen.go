@@ -773,7 +773,10 @@ func (j *AgentBudget) UnmarshalJSON(value []byte) error {
 // Bounded AgentDefinition wire contract governed by PRD 0012 and ADR-018. A
 // definition is immutable by definitionId and definitionDigest and carries role,
 // owner, instruction digest, input/output schema identity, Tool profile,
-// delegation constraints, repair policy, and evaluation profile.
+// delegation constraints, repair policy, and evaluation profile. The runtime
+// binding names the one runtime release permitted to execute this definition —
+// unit, manifest digest, image digest, invocation protocol digest, and workload
+// audience. It is an immutable pin, not a mutable discovery hint.
 type AgentDefinition struct {
 	// AllowedDelegates corresponds to the JSON schema field "allowedDelegates".
 	AllowedDelegates []SharedPrimitivesOpaqueId `json:"allowedDelegates" yaml:"allowedDelegates" mapstructure:"allowedDelegates"`
@@ -826,6 +829,9 @@ type AgentDefinition struct {
 
 	// Role corresponds to the JSON schema field "role".
 	Role AgentDefinitionRole `json:"role" yaml:"role" mapstructure:"role"`
+
+	// RuntimeBinding corresponds to the JSON schema field "runtimeBinding".
+	RuntimeBinding AgentDefinitionRuntimeBinding `json:"runtimeBinding" yaml:"runtimeBinding" mapstructure:"runtimeBinding"`
 
 	// StopConditions corresponds to the JSON schema field "stopConditions".
 	StopConditions []AgentDefinitionStopConditionsElem `json:"stopConditions" yaml:"stopConditions" mapstructure:"stopConditions"`
@@ -976,6 +982,67 @@ func (j *AgentDefinitionRole) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+type AgentDefinitionRuntimeBinding struct {
+	// InvocationProtocolDigest corresponds to the JSON schema field
+	// "invocationProtocolDigest".
+	InvocationProtocolDigest SharedPrimitivesDigest `json:"invocationProtocolDigest" yaml:"invocationProtocolDigest" mapstructure:"invocationProtocolDigest"`
+
+	// RuntimeAudience corresponds to the JSON schema field "runtimeAudience".
+	RuntimeAudience string `json:"runtimeAudience" yaml:"runtimeAudience" mapstructure:"runtimeAudience"`
+
+	// RuntimeImageDigest corresponds to the JSON schema field "runtimeImageDigest".
+	RuntimeImageDigest SharedPrimitivesDigest `json:"runtimeImageDigest" yaml:"runtimeImageDigest" mapstructure:"runtimeImageDigest"`
+
+	// RuntimeManifestDigest corresponds to the JSON schema field
+	// "runtimeManifestDigest".
+	RuntimeManifestDigest SharedPrimitivesDigest `json:"runtimeManifestDigest" yaml:"runtimeManifestDigest" mapstructure:"runtimeManifestDigest"`
+
+	// RuntimeUnitId corresponds to the JSON schema field "runtimeUnitId".
+	RuntimeUnitId SharedPrimitivesOpaqueId `json:"runtimeUnitId" yaml:"runtimeUnitId" mapstructure:"runtimeUnitId"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentDefinitionRuntimeBinding) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["invocationProtocolDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field invocationProtocolDigest in AgentDefinitionRuntimeBinding: required")
+	}
+	if _, ok := raw["runtimeAudience"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeAudience in AgentDefinitionRuntimeBinding: required")
+	}
+	if _, ok := raw["runtimeImageDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeImageDigest in AgentDefinitionRuntimeBinding: required")
+	}
+	if _, ok := raw["runtimeManifestDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeManifestDigest in AgentDefinitionRuntimeBinding: required")
+	}
+	if _, ok := raw["runtimeUnitId"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeUnitId in AgentDefinitionRuntimeBinding: required")
+	}
+	type Plain AgentDefinitionRuntimeBinding
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$`, string(plain.RuntimeAudience)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "RuntimeAudience", `^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.RuntimeAudience)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "runtimeAudience", 1)
+	}
+	if utf8.RuneCountInString(string(plain.RuntimeAudience)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "runtimeAudience", 256)
+	}
+	*j = AgentDefinitionRuntimeBinding(plain)
+	return nil
+}
+
 type AgentDefinitionStopConditionsElem string
 
 const AgentDefinitionStopConditionsElemApprovalRequired AgentDefinitionStopConditionsElem = "approval-required"
@@ -1118,6 +1185,9 @@ func (j *AgentDefinition) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["role"]; raw != nil && !ok {
 		return fmt.Errorf("field role in AgentDefinition: required")
+	}
+	if _, ok := raw["runtimeBinding"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeBinding in AgentDefinition: required")
 	}
 	if _, ok := raw["stopConditions"]; raw != nil && !ok {
 		return fmt.Errorf("field stopConditions in AgentDefinition: required")
@@ -1629,7 +1699,9 @@ func (j *AgentEvidence) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Bounded AgentRun wire contract governed by PRD 0012.
+// Bounded AgentRun wire contract governed by PRD 0012. The runtime binding pinned
+// at creation is immutable for the life of the Run: registry changes after Run
+// creation never alter which runtime release its attempts may execute on.
 type AgentRun struct {
 	// ActorId corresponds to the JSON schema field "actorId".
 	ActorId SharedPrimitivesOpaqueId `json:"actorId" yaml:"actorId" mapstructure:"actorId"`
@@ -1679,6 +1751,9 @@ type AgentRun struct {
 
 	// RunId corresponds to the JSON schema field "runId".
 	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
+
+	// RuntimeBinding corresponds to the JSON schema field "runtimeBinding".
+	RuntimeBinding AgentRunRuntimeBinding `json:"runtimeBinding" yaml:"runtimeBinding" mapstructure:"runtimeBinding"`
 
 	// Status corresponds to the JSON schema field "status".
 	Status AgentRunStatus `json:"status" yaml:"status" mapstructure:"status"`
@@ -1762,6 +1837,67 @@ func (j *AgentRunOperation) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRunOperation, v)
 	}
 	*j = AgentRunOperation(v)
+	return nil
+}
+
+type AgentRunRuntimeBinding struct {
+	// InvocationProtocolDigest corresponds to the JSON schema field
+	// "invocationProtocolDigest".
+	InvocationProtocolDigest SharedPrimitivesDigest `json:"invocationProtocolDigest" yaml:"invocationProtocolDigest" mapstructure:"invocationProtocolDigest"`
+
+	// RuntimeAudience corresponds to the JSON schema field "runtimeAudience".
+	RuntimeAudience string `json:"runtimeAudience" yaml:"runtimeAudience" mapstructure:"runtimeAudience"`
+
+	// RuntimeImageDigest corresponds to the JSON schema field "runtimeImageDigest".
+	RuntimeImageDigest SharedPrimitivesDigest `json:"runtimeImageDigest" yaml:"runtimeImageDigest" mapstructure:"runtimeImageDigest"`
+
+	// RuntimeManifestDigest corresponds to the JSON schema field
+	// "runtimeManifestDigest".
+	RuntimeManifestDigest SharedPrimitivesDigest `json:"runtimeManifestDigest" yaml:"runtimeManifestDigest" mapstructure:"runtimeManifestDigest"`
+
+	// RuntimeUnitId corresponds to the JSON schema field "runtimeUnitId".
+	RuntimeUnitId SharedPrimitivesOpaqueId `json:"runtimeUnitId" yaml:"runtimeUnitId" mapstructure:"runtimeUnitId"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRunRuntimeBinding) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["invocationProtocolDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field invocationProtocolDigest in AgentRunRuntimeBinding: required")
+	}
+	if _, ok := raw["runtimeAudience"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeAudience in AgentRunRuntimeBinding: required")
+	}
+	if _, ok := raw["runtimeImageDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeImageDigest in AgentRunRuntimeBinding: required")
+	}
+	if _, ok := raw["runtimeManifestDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeManifestDigest in AgentRunRuntimeBinding: required")
+	}
+	if _, ok := raw["runtimeUnitId"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeUnitId in AgentRunRuntimeBinding: required")
+	}
+	type Plain AgentRunRuntimeBinding
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$`, string(plain.RuntimeAudience)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "RuntimeAudience", `^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.RuntimeAudience)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "runtimeAudience", 1)
+	}
+	if utf8.RuneCountInString(string(plain.RuntimeAudience)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "runtimeAudience", 256)
+	}
+	*j = AgentRunRuntimeBinding(plain)
 	return nil
 }
 
@@ -2021,6 +2157,9 @@ func (j *AgentRun) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["runId"]; raw != nil && !ok {
 		return fmt.Errorf("field runId in AgentRun: required")
 	}
+	if _, ok := raw["runtimeBinding"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeBinding in AgentRun: required")
+	}
 	if _, ok := raw["status"]; raw != nil && !ok {
 		return fmt.Errorf("field status in AgentRun: required")
 	}
@@ -2061,8 +2200,15 @@ func (j *AgentRun) UnmarshalJSON(value []byte) error {
 // scaling, telemetry, drain, and rollback profile it is operated under. It carries
 // execution-plane binding only: it never confers AgentRun, workflow, Tool, budget,
 // approval, artifact, or business authority, and a runtime unit cannot reach
-// another Agent Runtime Unit through it.
+// another Agent Runtime Unit through it. The manifest also declares the role the
+// unit plays, the task capabilities it is able to serve — the surface
+// deterministic selection matches an AgentTask against — and its release lifecycle
+// state, so revocation and emergency disable are contract surface rather than
+// operational convention.
 type AgentRuntimeManifest struct {
+	// Capabilities corresponds to the JSON schema field "capabilities".
+	Capabilities []AgentRuntimeManifestCapabilitiesElem `json:"capabilities" yaml:"capabilities" mapstructure:"capabilities"`
+
 	// Definition corresponds to the JSON schema field "definition".
 	Definition SharedPrimitivesDefinitionReference `json:"definition" yaml:"definition" mapstructure:"definition"`
 
@@ -2075,11 +2221,17 @@ type AgentRuntimeManifest struct {
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
+	// Lifecycle corresponds to the JSON schema field "lifecycle".
+	Lifecycle AgentRuntimeManifestLifecycle `json:"lifecycle" yaml:"lifecycle" mapstructure:"lifecycle"`
+
 	// Protocol corresponds to the JSON schema field "protocol".
 	Protocol AgentRuntimeManifestProtocol `json:"protocol" yaml:"protocol" mapstructure:"protocol"`
 
 	// Release corresponds to the JSON schema field "release".
 	Release AgentRuntimeManifestRelease `json:"release" yaml:"release" mapstructure:"release"`
+
+	// Role corresponds to the JSON schema field "role".
+	Role AgentRuntimeManifestRole `json:"role" yaml:"role" mapstructure:"role"`
 
 	// RuntimeUnitId corresponds to the JSON schema field "runtimeUnitId".
 	RuntimeUnitId SharedPrimitivesOpaqueId `json:"runtimeUnitId" yaml:"runtimeUnitId" mapstructure:"runtimeUnitId"`
@@ -2092,6 +2244,43 @@ type AgentRuntimeManifest struct {
 
 	// Workload corresponds to the JSON schema field "workload".
 	Workload AgentRuntimeManifestWorkload `json:"workload" yaml:"workload" mapstructure:"workload"`
+}
+
+type AgentRuntimeManifestCapabilitiesElem string
+
+const AgentRuntimeManifestCapabilitiesElemArtifactScan AgentRuntimeManifestCapabilitiesElem = "artifact.scan"
+const AgentRuntimeManifestCapabilitiesElemContractValidate AgentRuntimeManifestCapabilitiesElem = "contract.validate"
+const AgentRuntimeManifestCapabilitiesElemFakeExecute AgentRuntimeManifestCapabilitiesElem = "fake.execute"
+const AgentRuntimeManifestCapabilitiesElemProviderInvoke AgentRuntimeManifestCapabilitiesElem = "provider.invoke"
+
+var enumValues_AgentRuntimeManifestCapabilitiesElem = []interface{}{
+	"provider.invoke",
+	"contract.validate",
+	"artifact.scan",
+	"fake.execute",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRuntimeManifestCapabilitiesElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AgentRuntimeManifestCapabilitiesElem {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRuntimeManifestCapabilitiesElem, v)
+	}
+	*j = AgentRuntimeManifestCapabilitiesElem(v)
+	return nil
 }
 
 type AgentRuntimeManifestExecution struct {
@@ -2273,6 +2462,87 @@ func (j *AgentRuntimeManifestImage) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+type AgentRuntimeManifestLifecycle struct {
+	// EffectiveAt corresponds to the JSON schema field "effectiveAt".
+	EffectiveAt SharedPrimitivesTimestamp `json:"effectiveAt" yaml:"effectiveAt" mapstructure:"effectiveAt"`
+
+	// ReasonCode corresponds to the JSON schema field "reasonCode".
+	ReasonCode *string `json:"reasonCode,omitempty,omitzero" yaml:"reasonCode,omitempty" mapstructure:"reasonCode,omitempty"`
+
+	// State corresponds to the JSON schema field "state".
+	State AgentRuntimeManifestLifecycleState `json:"state" yaml:"state" mapstructure:"state"`
+}
+
+type AgentRuntimeManifestLifecycleState string
+
+const AgentRuntimeManifestLifecycleStateActive AgentRuntimeManifestLifecycleState = "active"
+const AgentRuntimeManifestLifecycleStateDisabled AgentRuntimeManifestLifecycleState = "disabled"
+const AgentRuntimeManifestLifecycleStateRevoked AgentRuntimeManifestLifecycleState = "revoked"
+
+var enumValues_AgentRuntimeManifestLifecycleState = []interface{}{
+	"active",
+	"revoked",
+	"disabled",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRuntimeManifestLifecycleState) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AgentRuntimeManifestLifecycleState {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRuntimeManifestLifecycleState, v)
+	}
+	*j = AgentRuntimeManifestLifecycleState(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRuntimeManifestLifecycle) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["effectiveAt"]; raw != nil && !ok {
+		return fmt.Errorf("field effectiveAt in AgentRuntimeManifestLifecycle: required")
+	}
+	if _, ok := raw["state"]; raw != nil && !ok {
+		return fmt.Errorf("field state in AgentRuntimeManifestLifecycle: required")
+	}
+	type Plain AgentRuntimeManifestLifecycle
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.ReasonCode != nil {
+		if matched, _ := regexp.MatchString(`^[A-Z][A-Z0-9_]{2,63}$`, string(*plain.ReasonCode)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "ReasonCode", `^[A-Z][A-Z0-9_]{2,63}$`)
+		}
+	}
+	if plain.ReasonCode != nil && utf8.RuneCountInString(string(*plain.ReasonCode)) < 3 {
+		return fmt.Errorf("field %s length: must be >= %d", "reasonCode", 3)
+	}
+	if plain.ReasonCode != nil && utf8.RuneCountInString(string(*plain.ReasonCode)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "reasonCode", 64)
+	}
+	*j = AgentRuntimeManifestLifecycle(plain)
+	return nil
+}
+
 type AgentRuntimeManifestProtocol struct {
 	// ContractBomReference corresponds to the JSON schema field
 	// "contractBomReference".
@@ -2391,6 +2661,39 @@ func (j *AgentRuntimeManifestRelease) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("field %s length: must be <= %d", "owner", 128)
 	}
 	*j = AgentRuntimeManifestRelease(plain)
+	return nil
+}
+
+type AgentRuntimeManifestRole string
+
+const AgentRuntimeManifestRoleManager AgentRuntimeManifestRole = "manager"
+const AgentRuntimeManifestRoleSpecialist AgentRuntimeManifestRole = "specialist"
+
+var enumValues_AgentRuntimeManifestRole = []interface{}{
+	"manager",
+	"specialist",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRuntimeManifestRole) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AgentRuntimeManifestRole {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRuntimeManifestRole, v)
+	}
+	*j = AgentRuntimeManifestRole(v)
 	return nil
 }
 
@@ -2624,6 +2927,9 @@ func (j *AgentRuntimeManifest) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
+	if _, ok := raw["capabilities"]; raw != nil && !ok {
+		return fmt.Errorf("field capabilities in AgentRuntimeManifest: required")
+	}
 	if _, ok := raw["definition"]; raw != nil && !ok {
 		return fmt.Errorf("field definition in AgentRuntimeManifest: required")
 	}
@@ -2636,11 +2942,17 @@ func (j *AgentRuntimeManifest) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["kind"]; raw != nil && !ok {
 		return fmt.Errorf("field kind in AgentRuntimeManifest: required")
 	}
+	if _, ok := raw["lifecycle"]; raw != nil && !ok {
+		return fmt.Errorf("field lifecycle in AgentRuntimeManifest: required")
+	}
 	if _, ok := raw["protocol"]; raw != nil && !ok {
 		return fmt.Errorf("field protocol in AgentRuntimeManifest: required")
 	}
 	if _, ok := raw["release"]; raw != nil && !ok {
 		return fmt.Errorf("field release in AgentRuntimeManifest: required")
+	}
+	if _, ok := raw["role"]; raw != nil && !ok {
+		return fmt.Errorf("field role in AgentRuntimeManifest: required")
 	}
 	if _, ok := raw["runtimeUnitId"]; raw != nil && !ok {
 		return fmt.Errorf("field runtimeUnitId in AgentRuntimeManifest: required")
@@ -2659,33 +2971,49 @@ func (j *AgentRuntimeManifest) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if plain.Capabilities != nil && len(plain.Capabilities) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "capabilities", 1)
+	}
+	if len(plain.Capabilities) > 8 {
+		return fmt.Errorf("field %s length: must be <= %d", "capabilities", 8)
+	}
 	*j = AgentRuntimeManifest(plain)
 	return nil
 }
 
 // Signed, bounded result returned by one Agent Runtime Unit for exactly one
-// AgentTask attempt. It reports which definition, runtime manifest, invocation
-// protocol, and image digests actually served the attempt, the physical attempt
-// identity and execution generation it belongs to, the metered usage it consumed,
-// one bounded TurnDecision, safe coded diagnostics, and its signature and
-// provenance references. It is a proposal that Agent Service validates and may
-// reject: it never carries authoritative workflow state, never commits, approves,
-// or publishes, and never names another Agent Runtime Unit to call.
+// physical attempt of one AgentTask. It echoes the complete binding it was
+// dispatched under — logical task, physical attempt, attempt number, execution
+// generation, lease epoch, fence token, and the runtime unit, manifest, image, and
+// invocation protocol digests that actually served the attempt — reports one
+// bounded TurnDecision with its artifact outputs and content digests, a result
+// status with a governed reason code, the per-attempt model, tool, token,
+// duration, and cost usage it consumed, safe coded diagnostics, and a complete
+// signature envelope over the RFC 8785 canonical bytes of the result statement. It
+// is a proposal Agent Service verifies and may reject: it never carries
+// authoritative workflow state, never commits, approves, or publishes, and never
+// names another Agent Runtime Unit to call.
 type AgentRuntimeResult struct {
+	// AttemptNumber corresponds to the JSON schema field "attemptNumber".
+	AttemptNumber int `json:"attemptNumber" yaml:"attemptNumber" mapstructure:"attemptNumber"`
+
 	// Diagnostics corresponds to the JSON schema field "diagnostics".
 	Diagnostics []AgentRuntimeResultDiagnosticsElem `json:"diagnostics" yaml:"diagnostics" mapstructure:"diagnostics"`
 
 	// ExecutionGeneration corresponds to the JSON schema field "executionGeneration".
 	ExecutionGeneration int `json:"executionGeneration" yaml:"executionGeneration" mapstructure:"executionGeneration"`
 
+	// FenceToken corresponds to the JSON schema field "fenceToken".
+	FenceToken string `json:"fenceToken" yaml:"fenceToken" mapstructure:"fenceToken"`
+
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
+	// LeaseEpoch corresponds to the JSON schema field "leaseEpoch".
+	LeaseEpoch int `json:"leaseEpoch" yaml:"leaseEpoch" mapstructure:"leaseEpoch"`
+
 	// PhysicalAttemptId corresponds to the JSON schema field "physicalAttemptId".
 	PhysicalAttemptId SharedPrimitivesOpaqueId `json:"physicalAttemptId" yaml:"physicalAttemptId" mapstructure:"physicalAttemptId"`
-
-	// Provenance corresponds to the JSON schema field "provenance".
-	Provenance AgentRuntimeResultProvenance `json:"provenance" yaml:"provenance" mapstructure:"provenance"`
 
 	// RootRunId corresponds to the JSON schema field "rootRunId".
 	RootRunId SharedPrimitivesOpaqueId `json:"rootRunId" yaml:"rootRunId" mapstructure:"rootRunId"`
@@ -2695,6 +3023,12 @@ type AgentRuntimeResult struct {
 
 	// Selected corresponds to the JSON schema field "selected".
 	Selected AgentRuntimeResultSelected `json:"selected" yaml:"selected" mapstructure:"selected"`
+
+	// Signature corresponds to the JSON schema field "signature".
+	Signature AgentRuntimeResultSignature `json:"signature" yaml:"signature" mapstructure:"signature"`
+
+	// Status corresponds to the JSON schema field "status".
+	Status AgentRuntimeResultStatus `json:"status" yaml:"status" mapstructure:"status"`
 
 	// TaskId corresponds to the JSON schema field "taskId".
 	TaskId SharedPrimitivesOpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
@@ -2756,77 +3090,6 @@ func (j *AgentRuntimeResultDiagnosticsElem) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-type AgentRuntimeResultProvenance struct {
-	// SignatureAlgorithm corresponds to the JSON schema field "signatureAlgorithm".
-	SignatureAlgorithm AgentRuntimeResultProvenanceSignatureAlgorithm `json:"signatureAlgorithm" yaml:"signatureAlgorithm" mapstructure:"signatureAlgorithm"`
-
-	// SignatureDigest corresponds to the JSON schema field "signatureDigest".
-	SignatureDigest SharedPrimitivesDigest `json:"signatureDigest" yaml:"signatureDigest" mapstructure:"signatureDigest"`
-
-	// StatementDigest corresponds to the JSON schema field "statementDigest".
-	StatementDigest SharedPrimitivesDigest `json:"statementDigest" yaml:"statementDigest" mapstructure:"statementDigest"`
-}
-
-type AgentRuntimeResultProvenanceSignatureAlgorithm string
-
-const AgentRuntimeResultProvenanceSignatureAlgorithmDsseEd25519V1 AgentRuntimeResultProvenanceSignatureAlgorithm = "dsse-ed25519-v1"
-const AgentRuntimeResultProvenanceSignatureAlgorithmJwsEddsaV1 AgentRuntimeResultProvenanceSignatureAlgorithm = "jws-eddsa-v1"
-
-var enumValues_AgentRuntimeResultProvenanceSignatureAlgorithm = []interface{}{
-	"dsse-ed25519-v1",
-	"jws-eddsa-v1",
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentRuntimeResultProvenanceSignatureAlgorithm) UnmarshalJSON(value []byte) error {
-	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
-		return err
-	}
-	var v string
-	if err := json.Unmarshal(value, &v); err != nil {
-		return err
-	}
-	var ok bool
-	for _, expected := range enumValues_AgentRuntimeResultProvenanceSignatureAlgorithm {
-		if reflect.DeepEqual(v, expected) {
-			ok = true
-			break
-		}
-	}
-	if !ok {
-		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRuntimeResultProvenanceSignatureAlgorithm, v)
-	}
-	*j = AgentRuntimeResultProvenanceSignatureAlgorithm(v)
-	return nil
-}
-
-// UnmarshalJSON implements json.Unmarshaler.
-func (j *AgentRuntimeResultProvenance) UnmarshalJSON(value []byte) error {
-	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
-		return err
-	}
-	var raw map[string]interface{}
-	if err := json.Unmarshal(value, &raw); err != nil {
-		return err
-	}
-	if _, ok := raw["signatureAlgorithm"]; raw != nil && !ok {
-		return fmt.Errorf("field signatureAlgorithm in AgentRuntimeResultProvenance: required")
-	}
-	if _, ok := raw["signatureDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field signatureDigest in AgentRuntimeResultProvenance: required")
-	}
-	if _, ok := raw["statementDigest"]; raw != nil && !ok {
-		return fmt.Errorf("field statementDigest in AgentRuntimeResultProvenance: required")
-	}
-	type Plain AgentRuntimeResultProvenance
-	var plain Plain
-	if err := json.Unmarshal(value, &plain); err != nil {
-		return err
-	}
-	*j = AgentRuntimeResultProvenance(plain)
-	return nil
-}
-
 type AgentRuntimeResultSelected struct {
 	// DefinitionDigest corresponds to the JSON schema field "definitionDigest".
 	DefinitionDigest SharedPrimitivesDigest `json:"definitionDigest" yaml:"definitionDigest" mapstructure:"definitionDigest"`
@@ -2841,6 +3104,9 @@ type AgentRuntimeResultSelected struct {
 	// RuntimeManifestDigest corresponds to the JSON schema field
 	// "runtimeManifestDigest".
 	RuntimeManifestDigest SharedPrimitivesDigest `json:"runtimeManifestDigest" yaml:"runtimeManifestDigest" mapstructure:"runtimeManifestDigest"`
+
+	// RuntimeUnitId corresponds to the JSON schema field "runtimeUnitId".
+	RuntimeUnitId SharedPrimitivesOpaqueId `json:"runtimeUnitId" yaml:"runtimeUnitId" mapstructure:"runtimeUnitId"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -2864,12 +3130,194 @@ func (j *AgentRuntimeResultSelected) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["runtimeManifestDigest"]; raw != nil && !ok {
 		return fmt.Errorf("field runtimeManifestDigest in AgentRuntimeResultSelected: required")
 	}
+	if _, ok := raw["runtimeUnitId"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeUnitId in AgentRuntimeResultSelected: required")
+	}
 	type Plain AgentRuntimeResultSelected
 	var plain Plain
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
 	*j = AgentRuntimeResultSelected(plain)
+	return nil
+}
+
+type AgentRuntimeResultSignature struct {
+	// Algorithm corresponds to the JSON schema field "algorithm".
+	Algorithm AgentRuntimeResultSignatureAlgorithm `json:"algorithm" yaml:"algorithm" mapstructure:"algorithm"`
+
+	// KeyId corresponds to the JSON schema field "keyId".
+	KeyId string `json:"keyId" yaml:"keyId" mapstructure:"keyId"`
+
+	// ProvenanceReference corresponds to the JSON schema field "provenanceReference".
+	ProvenanceReference SharedPrimitivesDigest `json:"provenanceReference" yaml:"provenanceReference" mapstructure:"provenanceReference"`
+
+	// Signature corresponds to the JSON schema field "signature".
+	Signature string `json:"signature" yaml:"signature" mapstructure:"signature"`
+
+	// StatementDigest corresponds to the JSON schema field "statementDigest".
+	StatementDigest SharedPrimitivesDigest `json:"statementDigest" yaml:"statementDigest" mapstructure:"statementDigest"`
+}
+
+type AgentRuntimeResultSignatureAlgorithm string
+
+const AgentRuntimeResultSignatureAlgorithmDsseEd25519V1 AgentRuntimeResultSignatureAlgorithm = "dsse-ed25519-v1"
+const AgentRuntimeResultSignatureAlgorithmJwsEddsaV1 AgentRuntimeResultSignatureAlgorithm = "jws-eddsa-v1"
+
+var enumValues_AgentRuntimeResultSignatureAlgorithm = []interface{}{
+	"dsse-ed25519-v1",
+	"jws-eddsa-v1",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRuntimeResultSignatureAlgorithm) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AgentRuntimeResultSignatureAlgorithm {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRuntimeResultSignatureAlgorithm, v)
+	}
+	*j = AgentRuntimeResultSignatureAlgorithm(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRuntimeResultSignature) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["algorithm"]; raw != nil && !ok {
+		return fmt.Errorf("field algorithm in AgentRuntimeResultSignature: required")
+	}
+	if _, ok := raw["keyId"]; raw != nil && !ok {
+		return fmt.Errorf("field keyId in AgentRuntimeResultSignature: required")
+	}
+	if _, ok := raw["provenanceReference"]; raw != nil && !ok {
+		return fmt.Errorf("field provenanceReference in AgentRuntimeResultSignature: required")
+	}
+	if _, ok := raw["signature"]; raw != nil && !ok {
+		return fmt.Errorf("field signature in AgentRuntimeResultSignature: required")
+	}
+	if _, ok := raw["statementDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field statementDigest in AgentRuntimeResultSignature: required")
+	}
+	type Plain AgentRuntimeResultSignature
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^urn:anvilkit:key:[a-z0-9][a-z0-9:-]{14,255}$`, string(plain.KeyId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "KeyId", `^urn:anvilkit:key:[a-z0-9][a-z0-9:-]{14,255}$`)
+	}
+	if utf8.RuneCountInString(string(plain.KeyId)) < 20 {
+		return fmt.Errorf("field %s length: must be >= %d", "keyId", 20)
+	}
+	if utf8.RuneCountInString(string(plain.KeyId)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "keyId", 256)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9_-]+$`, string(plain.Signature)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Signature", `^[A-Za-z0-9_-]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.Signature)) < 86 {
+		return fmt.Errorf("field %s length: must be >= %d", "signature", 86)
+	}
+	if utf8.RuneCountInString(string(plain.Signature)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "signature", 512)
+	}
+	*j = AgentRuntimeResultSignature(plain)
+	return nil
+}
+
+type AgentRuntimeResultStatus struct {
+	// ReasonCode corresponds to the JSON schema field "reasonCode".
+	ReasonCode string `json:"reasonCode" yaml:"reasonCode" mapstructure:"reasonCode"`
+
+	// Status corresponds to the JSON schema field "status".
+	Status AgentRuntimeResultStatusStatus `json:"status" yaml:"status" mapstructure:"status"`
+}
+
+type AgentRuntimeResultStatusStatus string
+
+const AgentRuntimeResultStatusStatusCancelled AgentRuntimeResultStatusStatus = "cancelled"
+const AgentRuntimeResultStatusStatusCompleted AgentRuntimeResultStatusStatus = "completed"
+const AgentRuntimeResultStatusStatusFailed AgentRuntimeResultStatusStatus = "failed"
+const AgentRuntimeResultStatusStatusRefused AgentRuntimeResultStatusStatus = "refused"
+
+var enumValues_AgentRuntimeResultStatusStatus = []interface{}{
+	"completed",
+	"failed",
+	"refused",
+	"cancelled",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRuntimeResultStatusStatus) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_AgentRuntimeResultStatusStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_AgentRuntimeResultStatusStatus, v)
+	}
+	*j = AgentRuntimeResultStatusStatus(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentRuntimeResultStatus) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["reasonCode"]; raw != nil && !ok {
+		return fmt.Errorf("field reasonCode in AgentRuntimeResultStatus: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in AgentRuntimeResultStatus: required")
+	}
+	type Plain AgentRuntimeResultStatus
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Z][A-Z0-9_]{2,63}$`, string(plain.ReasonCode)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ReasonCode", `^[A-Z][A-Z0-9_]{2,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.ReasonCode)) < 3 {
+		return fmt.Errorf("field %s length: must be >= %d", "reasonCode", 3)
+	}
+	if utf8.RuneCountInString(string(plain.ReasonCode)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "reasonCode", 64)
+	}
+	*j = AgentRuntimeResultStatus(plain)
 	return nil
 }
 
@@ -2956,6 +3404,9 @@ func (j *AgentRuntimeResultTurnDecision) UnmarshalJSON(value []byte) error {
 }
 
 type AgentRuntimeResultUsage struct {
+	// Cost corresponds to the JSON schema field "cost".
+	Cost SharedPrimitivesCost `json:"cost" yaml:"cost" mapstructure:"cost"`
+
 	// DurationMilliseconds corresponds to the JSON schema field
 	// "durationMilliseconds".
 	DurationMilliseconds int `json:"durationMilliseconds" yaml:"durationMilliseconds" mapstructure:"durationMilliseconds"`
@@ -2963,8 +3414,14 @@ type AgentRuntimeResultUsage struct {
 	// InputTokens corresponds to the JSON schema field "inputTokens".
 	InputTokens int `json:"inputTokens" yaml:"inputTokens" mapstructure:"inputTokens"`
 
+	// ModelCalls corresponds to the JSON schema field "modelCalls".
+	ModelCalls int `json:"modelCalls" yaml:"modelCalls" mapstructure:"modelCalls"`
+
 	// OutputTokens corresponds to the JSON schema field "outputTokens".
 	OutputTokens int `json:"outputTokens" yaml:"outputTokens" mapstructure:"outputTokens"`
+
+	// ToolCalls corresponds to the JSON schema field "toolCalls".
+	ToolCalls int `json:"toolCalls" yaml:"toolCalls" mapstructure:"toolCalls"`
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -2976,14 +3433,23 @@ func (j *AgentRuntimeResultUsage) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
+	if _, ok := raw["cost"]; raw != nil && !ok {
+		return fmt.Errorf("field cost in AgentRuntimeResultUsage: required")
+	}
 	if _, ok := raw["durationMilliseconds"]; raw != nil && !ok {
 		return fmt.Errorf("field durationMilliseconds in AgentRuntimeResultUsage: required")
 	}
 	if _, ok := raw["inputTokens"]; raw != nil && !ok {
 		return fmt.Errorf("field inputTokens in AgentRuntimeResultUsage: required")
 	}
+	if _, ok := raw["modelCalls"]; raw != nil && !ok {
+		return fmt.Errorf("field modelCalls in AgentRuntimeResultUsage: required")
+	}
 	if _, ok := raw["outputTokens"]; raw != nil && !ok {
 		return fmt.Errorf("field outputTokens in AgentRuntimeResultUsage: required")
+	}
+	if _, ok := raw["toolCalls"]; raw != nil && !ok {
+		return fmt.Errorf("field toolCalls in AgentRuntimeResultUsage: required")
 	}
 	type Plain AgentRuntimeResultUsage
 	var plain Plain
@@ -3002,11 +3468,23 @@ func (j *AgentRuntimeResultUsage) UnmarshalJSON(value []byte) error {
 	if 0 > plain.InputTokens {
 		return fmt.Errorf("field %s: must be >= %v", "inputTokens", 0)
 	}
+	if 10000 < plain.ModelCalls {
+		return fmt.Errorf("field %s: must be <= %v", "modelCalls", 10000)
+	}
+	if 0 > plain.ModelCalls {
+		return fmt.Errorf("field %s: must be >= %v", "modelCalls", 0)
+	}
 	if 9007199254740991 < plain.OutputTokens {
 		return fmt.Errorf("field %s: must be <= %v", "outputTokens", 9007199254740991)
 	}
 	if 0 > plain.OutputTokens {
 		return fmt.Errorf("field %s: must be >= %v", "outputTokens", 0)
+	}
+	if 10000 < plain.ToolCalls {
+		return fmt.Errorf("field %s: must be <= %v", "toolCalls", 10000)
+	}
+	if 0 > plain.ToolCalls {
+		return fmt.Errorf("field %s: must be >= %v", "toolCalls", 0)
 	}
 	*j = AgentRuntimeResultUsage(plain)
 	return nil
@@ -3021,20 +3499,26 @@ func (j *AgentRuntimeResult) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &raw); err != nil {
 		return err
 	}
+	if _, ok := raw["attemptNumber"]; raw != nil && !ok {
+		return fmt.Errorf("field attemptNumber in AgentRuntimeResult: required")
+	}
 	if _, ok := raw["diagnostics"]; raw != nil && !ok {
 		return fmt.Errorf("field diagnostics in AgentRuntimeResult: required")
 	}
 	if _, ok := raw["executionGeneration"]; raw != nil && !ok {
 		return fmt.Errorf("field executionGeneration in AgentRuntimeResult: required")
 	}
+	if _, ok := raw["fenceToken"]; raw != nil && !ok {
+		return fmt.Errorf("field fenceToken in AgentRuntimeResult: required")
+	}
 	if _, ok := raw["kind"]; raw != nil && !ok {
 		return fmt.Errorf("field kind in AgentRuntimeResult: required")
 	}
+	if _, ok := raw["leaseEpoch"]; raw != nil && !ok {
+		return fmt.Errorf("field leaseEpoch in AgentRuntimeResult: required")
+	}
 	if _, ok := raw["physicalAttemptId"]; raw != nil && !ok {
 		return fmt.Errorf("field physicalAttemptId in AgentRuntimeResult: required")
-	}
-	if _, ok := raw["provenance"]; raw != nil && !ok {
-		return fmt.Errorf("field provenance in AgentRuntimeResult: required")
 	}
 	if _, ok := raw["rootRunId"]; raw != nil && !ok {
 		return fmt.Errorf("field rootRunId in AgentRuntimeResult: required")
@@ -3044,6 +3528,12 @@ func (j *AgentRuntimeResult) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["selected"]; raw != nil && !ok {
 		return fmt.Errorf("field selected in AgentRuntimeResult: required")
+	}
+	if _, ok := raw["signature"]; raw != nil && !ok {
+		return fmt.Errorf("field signature in AgentRuntimeResult: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in AgentRuntimeResult: required")
 	}
 	if _, ok := raw["taskId"]; raw != nil && !ok {
 		return fmt.Errorf("field taskId in AgentRuntimeResult: required")
@@ -3062,6 +3552,12 @@ func (j *AgentRuntimeResult) UnmarshalJSON(value []byte) error {
 	if err := json.Unmarshal(value, &plain); err != nil {
 		return err
 	}
+	if 1000000 < plain.AttemptNumber {
+		return fmt.Errorf("field %s: must be <= %v", "attemptNumber", 1000000)
+	}
+	if 1 > plain.AttemptNumber {
+		return fmt.Errorf("field %s: must be >= %v", "attemptNumber", 1)
+	}
 	if len(plain.Diagnostics) > 16 {
 		return fmt.Errorf("field %s length: must be <= %d", "diagnostics", 16)
 	}
@@ -3070,6 +3566,21 @@ func (j *AgentRuntimeResult) UnmarshalJSON(value []byte) error {
 	}
 	if 0 > plain.ExecutionGeneration {
 		return fmt.Errorf("field %s: must be >= %v", "executionGeneration", 0)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9._~-]+$`, string(plain.FenceToken)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "FenceToken", `^[A-Za-z0-9._~-]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.FenceToken)) < 16 {
+		return fmt.Errorf("field %s length: must be >= %d", "fenceToken", 16)
+	}
+	if utf8.RuneCountInString(string(plain.FenceToken)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "fenceToken", 512)
+	}
+	if 9007199254740991 < plain.LeaseEpoch {
+		return fmt.Errorf("field %s: must be <= %v", "leaseEpoch", 9007199254740991)
+	}
+	if 0 > plain.LeaseEpoch {
+		return fmt.Errorf("field %s: must be >= %v", "leaseEpoch", 0)
 	}
 	*j = AgentRuntimeResult(plain)
 	return nil
@@ -3184,10 +3695,24 @@ func (j *AgentStreamDelta) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
-// Bounded AgentTask wire contract governed by PRD 0012.
+// Bounded AgentTask wire contract governed by PRD 0012. One AgentTask is a logical
+// unit of work; each actual execution of it is a physical attempt with its own
+// attempt identity, lease epoch, and fence token. The task pins the Agent
+// Definition and the runtime release permitted to execute it, carries the audience
+// the task-scoped credential is issued for, and expires: a runtime may not admit
+// it after expiresAt. The raw fence token is a commit capability and must never be
+// written to logs or public events; persistent diagnostics may record its digest
+// instead.
 type AgentTask struct {
 	// ArtifactInputs corresponds to the JSON schema field "artifactInputs".
 	ArtifactInputs []SharedPrimitivesArtifactReference `json:"artifactInputs" yaml:"artifactInputs" mapstructure:"artifactInputs"`
+
+	// AttemptNumber corresponds to the JSON schema field "attemptNumber".
+	AttemptNumber int `json:"attemptNumber" yaml:"attemptNumber" mapstructure:"attemptNumber"`
+
+	// AuthorizationAudience corresponds to the JSON schema field
+	// "authorizationAudience".
+	AuthorizationAudience string `json:"authorizationAudience" yaml:"authorizationAudience" mapstructure:"authorizationAudience"`
 
 	// Capability corresponds to the JSON schema field "capability".
 	Capability AgentTaskCapability `json:"capability" yaml:"capability" mapstructure:"capability"`
@@ -3196,8 +3721,17 @@ type AgentTask struct {
 	// "contractBomReference".
 	ContractBomReference SharedPrimitivesContractBomReference `json:"contractBomReference" yaml:"contractBomReference" mapstructure:"contractBomReference"`
 
+	// Definition corresponds to the JSON schema field "definition".
+	Definition SharedPrimitivesDefinitionReference `json:"definition" yaml:"definition" mapstructure:"definition"`
+
 	// ExecutionGeneration corresponds to the JSON schema field "executionGeneration".
 	ExecutionGeneration int `json:"executionGeneration" yaml:"executionGeneration" mapstructure:"executionGeneration"`
+
+	// ExpiresAt corresponds to the JSON schema field "expiresAt".
+	ExpiresAt SharedPrimitivesTimestamp `json:"expiresAt" yaml:"expiresAt" mapstructure:"expiresAt"`
+
+	// FenceToken corresponds to the JSON schema field "fenceToken".
+	FenceToken string `json:"fenceToken" yaml:"fenceToken" mapstructure:"fenceToken"`
 
 	// Idempotency corresponds to the JSON schema field "idempotency".
 	Idempotency SharedPrimitivesIdempotency `json:"idempotency" yaml:"idempotency" mapstructure:"idempotency"`
@@ -3208,11 +3742,17 @@ type AgentTask struct {
 	// Kind corresponds to the JSON schema field "kind".
 	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
 
+	// LeaseEpoch corresponds to the JSON schema field "leaseEpoch".
+	LeaseEpoch int `json:"leaseEpoch" yaml:"leaseEpoch" mapstructure:"leaseEpoch"`
+
 	// Limits corresponds to the JSON schema field "limits".
 	Limits SharedPrimitivesResourceLimits `json:"limits" yaml:"limits" mapstructure:"limits"`
 
 	// Parameters corresponds to the JSON schema field "parameters".
 	Parameters SharedPrimitivesBoundedStringMap `json:"parameters" yaml:"parameters" mapstructure:"parameters"`
+
+	// PhysicalAttemptId corresponds to the JSON schema field "physicalAttemptId".
+	PhysicalAttemptId SharedPrimitivesOpaqueId `json:"physicalAttemptId" yaml:"physicalAttemptId" mapstructure:"physicalAttemptId"`
 
 	// Resources corresponds to the JSON schema field "resources".
 	Resources AgentTaskResources `json:"resources" yaml:"resources" mapstructure:"resources"`
@@ -3222,6 +3762,9 @@ type AgentTask struct {
 
 	// RunId corresponds to the JSON schema field "runId".
 	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
+
+	// RuntimeBinding corresponds to the JSON schema field "runtimeBinding".
+	RuntimeBinding AgentTaskRuntimeBinding `json:"runtimeBinding" yaml:"runtimeBinding" mapstructure:"runtimeBinding"`
 
 	// TaskId corresponds to the JSON schema field "taskId".
 	TaskId SharedPrimitivesOpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
@@ -3342,6 +3885,67 @@ func (j *AgentTaskResources) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+type AgentTaskRuntimeBinding struct {
+	// InvocationProtocolDigest corresponds to the JSON schema field
+	// "invocationProtocolDigest".
+	InvocationProtocolDigest SharedPrimitivesDigest `json:"invocationProtocolDigest" yaml:"invocationProtocolDigest" mapstructure:"invocationProtocolDigest"`
+
+	// RuntimeAudience corresponds to the JSON schema field "runtimeAudience".
+	RuntimeAudience string `json:"runtimeAudience" yaml:"runtimeAudience" mapstructure:"runtimeAudience"`
+
+	// RuntimeImageDigest corresponds to the JSON schema field "runtimeImageDigest".
+	RuntimeImageDigest SharedPrimitivesDigest `json:"runtimeImageDigest" yaml:"runtimeImageDigest" mapstructure:"runtimeImageDigest"`
+
+	// RuntimeManifestDigest corresponds to the JSON schema field
+	// "runtimeManifestDigest".
+	RuntimeManifestDigest SharedPrimitivesDigest `json:"runtimeManifestDigest" yaml:"runtimeManifestDigest" mapstructure:"runtimeManifestDigest"`
+
+	// RuntimeUnitId corresponds to the JSON schema field "runtimeUnitId".
+	RuntimeUnitId SharedPrimitivesOpaqueId `json:"runtimeUnitId" yaml:"runtimeUnitId" mapstructure:"runtimeUnitId"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *AgentTaskRuntimeBinding) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["invocationProtocolDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field invocationProtocolDigest in AgentTaskRuntimeBinding: required")
+	}
+	if _, ok := raw["runtimeAudience"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeAudience in AgentTaskRuntimeBinding: required")
+	}
+	if _, ok := raw["runtimeImageDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeImageDigest in AgentTaskRuntimeBinding: required")
+	}
+	if _, ok := raw["runtimeManifestDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeManifestDigest in AgentTaskRuntimeBinding: required")
+	}
+	if _, ok := raw["runtimeUnitId"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeUnitId in AgentTaskRuntimeBinding: required")
+	}
+	type Plain AgentTaskRuntimeBinding
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$`, string(plain.RuntimeAudience)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "RuntimeAudience", `^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.RuntimeAudience)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "runtimeAudience", 1)
+	}
+	if utf8.RuneCountInString(string(plain.RuntimeAudience)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "runtimeAudience", 256)
+	}
+	*j = AgentTaskRuntimeBinding(plain)
+	return nil
+}
+
 // UnmarshalJSON implements json.Unmarshaler.
 func (j *AgentTask) UnmarshalJSON(value []byte) error {
 	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
@@ -3354,14 +3958,29 @@ func (j *AgentTask) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["artifactInputs"]; raw != nil && !ok {
 		return fmt.Errorf("field artifactInputs in AgentTask: required")
 	}
+	if _, ok := raw["attemptNumber"]; raw != nil && !ok {
+		return fmt.Errorf("field attemptNumber in AgentTask: required")
+	}
+	if _, ok := raw["authorizationAudience"]; raw != nil && !ok {
+		return fmt.Errorf("field authorizationAudience in AgentTask: required")
+	}
 	if _, ok := raw["capability"]; raw != nil && !ok {
 		return fmt.Errorf("field capability in AgentTask: required")
 	}
 	if _, ok := raw["contractBomReference"]; raw != nil && !ok {
 		return fmt.Errorf("field contractBomReference in AgentTask: required")
 	}
+	if _, ok := raw["definition"]; raw != nil && !ok {
+		return fmt.Errorf("field definition in AgentTask: required")
+	}
 	if _, ok := raw["executionGeneration"]; raw != nil && !ok {
 		return fmt.Errorf("field executionGeneration in AgentTask: required")
+	}
+	if _, ok := raw["expiresAt"]; raw != nil && !ok {
+		return fmt.Errorf("field expiresAt in AgentTask: required")
+	}
+	if _, ok := raw["fenceToken"]; raw != nil && !ok {
+		return fmt.Errorf("field fenceToken in AgentTask: required")
 	}
 	if _, ok := raw["idempotency"]; raw != nil && !ok {
 		return fmt.Errorf("field idempotency in AgentTask: required")
@@ -3372,11 +3991,17 @@ func (j *AgentTask) UnmarshalJSON(value []byte) error {
 	if _, ok := raw["kind"]; raw != nil && !ok {
 		return fmt.Errorf("field kind in AgentTask: required")
 	}
+	if _, ok := raw["leaseEpoch"]; raw != nil && !ok {
+		return fmt.Errorf("field leaseEpoch in AgentTask: required")
+	}
 	if _, ok := raw["limits"]; raw != nil && !ok {
 		return fmt.Errorf("field limits in AgentTask: required")
 	}
 	if _, ok := raw["parameters"]; raw != nil && !ok {
 		return fmt.Errorf("field parameters in AgentTask: required")
+	}
+	if _, ok := raw["physicalAttemptId"]; raw != nil && !ok {
+		return fmt.Errorf("field physicalAttemptId in AgentTask: required")
 	}
 	if _, ok := raw["resources"]; raw != nil && !ok {
 		return fmt.Errorf("field resources in AgentTask: required")
@@ -3386,6 +4011,9 @@ func (j *AgentTask) UnmarshalJSON(value []byte) error {
 	}
 	if _, ok := raw["runId"]; raw != nil && !ok {
 		return fmt.Errorf("field runId in AgentTask: required")
+	}
+	if _, ok := raw["runtimeBinding"]; raw != nil && !ok {
+		return fmt.Errorf("field runtimeBinding in AgentTask: required")
 	}
 	if _, ok := raw["taskId"]; raw != nil && !ok {
 		return fmt.Errorf("field taskId in AgentTask: required")
@@ -3401,11 +4029,41 @@ func (j *AgentTask) UnmarshalJSON(value []byte) error {
 	if len(plain.ArtifactInputs) > 32 {
 		return fmt.Errorf("field %s length: must be <= %d", "artifactInputs", 32)
 	}
+	if 1000000 < plain.AttemptNumber {
+		return fmt.Errorf("field %s: must be <= %v", "attemptNumber", 1000000)
+	}
+	if 1 > plain.AttemptNumber {
+		return fmt.Errorf("field %s: must be >= %v", "attemptNumber", 1)
+	}
+	if matched, _ := regexp.MatchString(`^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$`, string(plain.AuthorizationAudience)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "AuthorizationAudience", `^urn:anvilkit:audience:[a-z0-9][a-z0-9-]{1,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.AuthorizationAudience)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "authorizationAudience", 1)
+	}
+	if utf8.RuneCountInString(string(plain.AuthorizationAudience)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "authorizationAudience", 256)
+	}
 	if 9007199254740991 < plain.ExecutionGeneration {
 		return fmt.Errorf("field %s: must be <= %v", "executionGeneration", 9007199254740991)
 	}
 	if 0 > plain.ExecutionGeneration {
 		return fmt.Errorf("field %s: must be >= %v", "executionGeneration", 0)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9._~-]+$`, string(plain.FenceToken)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "FenceToken", `^[A-Za-z0-9._~-]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.FenceToken)) < 16 {
+		return fmt.Errorf("field %s length: must be >= %d", "fenceToken", 16)
+	}
+	if utf8.RuneCountInString(string(plain.FenceToken)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "fenceToken", 512)
+	}
+	if 9007199254740991 < plain.LeaseEpoch {
+		return fmt.Errorf("field %s: must be <= %v", "leaseEpoch", 9007199254740991)
+	}
+	if 0 > plain.LeaseEpoch {
+		return fmt.Errorf("field %s: must be >= %v", "leaseEpoch", 0)
 	}
 	*j = AgentTask(plain)
 	return nil
@@ -6951,6 +7609,14 @@ type ContractsBundleJson struct {
 	// "IssuedApplyAuthorization".
 	IssuedApplyAuthorization *IssuedApplyAuthorization `json:"IssuedApplyAuthorization,omitempty,omitzero" yaml:"IssuedApplyAuthorization,omitempty" mapstructure:"IssuedApplyAuthorization,omitempty"`
 
+	// ModelInvocationRequest corresponds to the JSON schema field
+	// "ModelInvocationRequest".
+	ModelInvocationRequest *ModelInvocationRequest `json:"ModelInvocationRequest,omitempty,omitzero" yaml:"ModelInvocationRequest,omitempty" mapstructure:"ModelInvocationRequest,omitempty"`
+
+	// ModelInvocationResult corresponds to the JSON schema field
+	// "ModelInvocationResult".
+	ModelInvocationResult *ModelInvocationResult `json:"ModelInvocationResult,omitempty,omitzero" yaml:"ModelInvocationResult,omitempty" mapstructure:"ModelInvocationResult,omitempty"`
+
 	// PageCandidate corresponds to the JSON schema field "PageCandidate".
 	PageCandidate *PageCandidate `json:"PageCandidate,omitempty,omitzero" yaml:"PageCandidate,omitempty" mapstructure:"PageCandidate,omitempty"`
 
@@ -7865,6 +8531,353 @@ func (j *IssuedApplyAuthorization) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("field %s length: must be <= %d", "compactJws", 16384)
 	}
 	*j = IssuedApplyAuthorization(plain)
+	return nil
+}
+
+// Bounded request one Agent Runtime Unit sends to the governed Model Gateway for
+// exactly one physical attempt. The runtime never holds provider credentials and
+// never selects a provider: it names the attempt it is executing, the definition
+// and model policy the Agent Service pinned, and the digests of the compiled
+// context and prompt the gateway must use. The gateway resolves the provider,
+// enforces the policy and the attempt's remaining budget, and attributes every
+// token it spends to this attempt.
+type ModelInvocationRequest struct {
+	// AttemptNumber corresponds to the JSON schema field "attemptNumber".
+	AttemptNumber int `json:"attemptNumber" yaml:"attemptNumber" mapstructure:"attemptNumber"`
+
+	// ContextDigest corresponds to the JSON schema field "contextDigest".
+	ContextDigest SharedPrimitivesDigest `json:"contextDigest" yaml:"contextDigest" mapstructure:"contextDigest"`
+
+	// ContractBomReference corresponds to the JSON schema field
+	// "contractBomReference".
+	ContractBomReference SharedPrimitivesContractBomReference `json:"contractBomReference" yaml:"contractBomReference" mapstructure:"contractBomReference"`
+
+	// Definition corresponds to the JSON schema field "definition".
+	Definition SharedPrimitivesDefinitionReference `json:"definition" yaml:"definition" mapstructure:"definition"`
+
+	// ExecutionGeneration corresponds to the JSON schema field "executionGeneration".
+	ExecutionGeneration int `json:"executionGeneration" yaml:"executionGeneration" mapstructure:"executionGeneration"`
+
+	// Idempotency corresponds to the JSON schema field "idempotency".
+	Idempotency SharedPrimitivesIdempotency `json:"idempotency" yaml:"idempotency" mapstructure:"idempotency"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Limits corresponds to the JSON schema field "limits".
+	Limits SharedPrimitivesResourceLimits `json:"limits" yaml:"limits" mapstructure:"limits"`
+
+	// ModelPolicy corresponds to the JSON schema field "modelPolicy".
+	ModelPolicy SharedPrimitivesPolicyReference `json:"modelPolicy" yaml:"modelPolicy" mapstructure:"modelPolicy"`
+
+	// PhysicalAttemptId corresponds to the JSON schema field "physicalAttemptId".
+	PhysicalAttemptId SharedPrimitivesOpaqueId `json:"physicalAttemptId" yaml:"physicalAttemptId" mapstructure:"physicalAttemptId"`
+
+	// PromptDigest corresponds to the JSON schema field "promptDigest".
+	PromptDigest SharedPrimitivesDigest `json:"promptDigest" yaml:"promptDigest" mapstructure:"promptDigest"`
+
+	// RootRunId corresponds to the JSON schema field "rootRunId".
+	RootRunId SharedPrimitivesOpaqueId `json:"rootRunId" yaml:"rootRunId" mapstructure:"rootRunId"`
+
+	// RunId corresponds to the JSON schema field "runId".
+	RunId SharedPrimitivesOpaqueId `json:"runId" yaml:"runId" mapstructure:"runId"`
+
+	// TaskId corresponds to the JSON schema field "taskId".
+	TaskId SharedPrimitivesOpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
+
+	// TraceContext corresponds to the JSON schema field "traceContext".
+	TraceContext SharedPrimitivesTraceContext `json:"traceContext" yaml:"traceContext" mapstructure:"traceContext"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ModelInvocationRequest) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["attemptNumber"]; raw != nil && !ok {
+		return fmt.Errorf("field attemptNumber in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["contextDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field contextDigest in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["contractBomReference"]; raw != nil && !ok {
+		return fmt.Errorf("field contractBomReference in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["definition"]; raw != nil && !ok {
+		return fmt.Errorf("field definition in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["executionGeneration"]; raw != nil && !ok {
+		return fmt.Errorf("field executionGeneration in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["idempotency"]; raw != nil && !ok {
+		return fmt.Errorf("field idempotency in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["limits"]; raw != nil && !ok {
+		return fmt.Errorf("field limits in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["modelPolicy"]; raw != nil && !ok {
+		return fmt.Errorf("field modelPolicy in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["physicalAttemptId"]; raw != nil && !ok {
+		return fmt.Errorf("field physicalAttemptId in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["promptDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field promptDigest in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["rootRunId"]; raw != nil && !ok {
+		return fmt.Errorf("field rootRunId in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["runId"]; raw != nil && !ok {
+		return fmt.Errorf("field runId in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["taskId"]; raw != nil && !ok {
+		return fmt.Errorf("field taskId in ModelInvocationRequest: required")
+	}
+	if _, ok := raw["traceContext"]; raw != nil && !ok {
+		return fmt.Errorf("field traceContext in ModelInvocationRequest: required")
+	}
+	type Plain ModelInvocationRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 1000000 < plain.AttemptNumber {
+		return fmt.Errorf("field %s: must be <= %v", "attemptNumber", 1000000)
+	}
+	if 1 > plain.AttemptNumber {
+		return fmt.Errorf("field %s: must be >= %v", "attemptNumber", 1)
+	}
+	if 9007199254740991 < plain.ExecutionGeneration {
+		return fmt.Errorf("field %s: must be <= %v", "executionGeneration", 9007199254740991)
+	}
+	if 0 > plain.ExecutionGeneration {
+		return fmt.Errorf("field %s: must be >= %v", "executionGeneration", 0)
+	}
+	*j = ModelInvocationRequest(plain)
+	return nil
+}
+
+// Bounded result the governed Model Gateway returns for exactly one
+// ModelInvocationRequest. It carries the bounded model output and its content
+// digest, the governed outcome and reason code, and the token, duration, and cost
+// usage the gateway metered and recorded against the attempt. It never carries
+// provider credentials, provider-native payloads, or an instruction to call
+// another runtime unit.
+type ModelInvocationResult struct {
+	// AttemptNumber corresponds to the JSON schema field "attemptNumber".
+	AttemptNumber int `json:"attemptNumber" yaml:"attemptNumber" mapstructure:"attemptNumber"`
+
+	// ExecutionGeneration corresponds to the JSON schema field "executionGeneration".
+	ExecutionGeneration int `json:"executionGeneration" yaml:"executionGeneration" mapstructure:"executionGeneration"`
+
+	// InvocationId corresponds to the JSON schema field "invocationId".
+	InvocationId SharedPrimitivesOpaqueId `json:"invocationId" yaml:"invocationId" mapstructure:"invocationId"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Outcome corresponds to the JSON schema field "outcome".
+	Outcome ModelInvocationResultOutcome `json:"outcome" yaml:"outcome" mapstructure:"outcome"`
+
+	// Output corresponds to the JSON schema field "output".
+	Output SharedPrimitivesBoundedStringMap `json:"output" yaml:"output" mapstructure:"output"`
+
+	// OutputDigest corresponds to the JSON schema field "outputDigest".
+	OutputDigest SharedPrimitivesDigest `json:"outputDigest" yaml:"outputDigest" mapstructure:"outputDigest"`
+
+	// PhysicalAttemptId corresponds to the JSON schema field "physicalAttemptId".
+	PhysicalAttemptId SharedPrimitivesOpaqueId `json:"physicalAttemptId" yaml:"physicalAttemptId" mapstructure:"physicalAttemptId"`
+
+	// ReasonCode corresponds to the JSON schema field "reasonCode".
+	ReasonCode string `json:"reasonCode" yaml:"reasonCode" mapstructure:"reasonCode"`
+
+	// TaskId corresponds to the JSON schema field "taskId".
+	TaskId SharedPrimitivesOpaqueId `json:"taskId" yaml:"taskId" mapstructure:"taskId"`
+
+	// TraceContext corresponds to the JSON schema field "traceContext".
+	TraceContext SharedPrimitivesTraceContext `json:"traceContext" yaml:"traceContext" mapstructure:"traceContext"`
+
+	// Usage corresponds to the JSON schema field "usage".
+	Usage ModelInvocationResultUsage `json:"usage" yaml:"usage" mapstructure:"usage"`
+}
+
+type ModelInvocationResultOutcome string
+
+const ModelInvocationResultOutcomeOk ModelInvocationResultOutcome = "ok"
+const ModelInvocationResultOutcomeProblem ModelInvocationResultOutcome = "problem"
+const ModelInvocationResultOutcomeRefused ModelInvocationResultOutcome = "refused"
+
+var enumValues_ModelInvocationResultOutcome = []interface{}{
+	"ok",
+	"refused",
+	"problem",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ModelInvocationResultOutcome) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ModelInvocationResultOutcome {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ModelInvocationResultOutcome, v)
+	}
+	*j = ModelInvocationResultOutcome(v)
+	return nil
+}
+
+type ModelInvocationResultUsage struct {
+	// Cost corresponds to the JSON schema field "cost".
+	Cost SharedPrimitivesCost `json:"cost" yaml:"cost" mapstructure:"cost"`
+
+	// DurationMilliseconds corresponds to the JSON schema field
+	// "durationMilliseconds".
+	DurationMilliseconds int `json:"durationMilliseconds" yaml:"durationMilliseconds" mapstructure:"durationMilliseconds"`
+
+	// InputTokens corresponds to the JSON schema field "inputTokens".
+	InputTokens int `json:"inputTokens" yaml:"inputTokens" mapstructure:"inputTokens"`
+
+	// OutputTokens corresponds to the JSON schema field "outputTokens".
+	OutputTokens int `json:"outputTokens" yaml:"outputTokens" mapstructure:"outputTokens"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ModelInvocationResultUsage) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["cost"]; raw != nil && !ok {
+		return fmt.Errorf("field cost in ModelInvocationResultUsage: required")
+	}
+	if _, ok := raw["durationMilliseconds"]; raw != nil && !ok {
+		return fmt.Errorf("field durationMilliseconds in ModelInvocationResultUsage: required")
+	}
+	if _, ok := raw["inputTokens"]; raw != nil && !ok {
+		return fmt.Errorf("field inputTokens in ModelInvocationResultUsage: required")
+	}
+	if _, ok := raw["outputTokens"]; raw != nil && !ok {
+		return fmt.Errorf("field outputTokens in ModelInvocationResultUsage: required")
+	}
+	type Plain ModelInvocationResultUsage
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 3600000 < plain.DurationMilliseconds {
+		return fmt.Errorf("field %s: must be <= %v", "durationMilliseconds", 3600000)
+	}
+	if 0 > plain.DurationMilliseconds {
+		return fmt.Errorf("field %s: must be >= %v", "durationMilliseconds", 0)
+	}
+	if 9007199254740991 < plain.InputTokens {
+		return fmt.Errorf("field %s: must be <= %v", "inputTokens", 9007199254740991)
+	}
+	if 0 > plain.InputTokens {
+		return fmt.Errorf("field %s: must be >= %v", "inputTokens", 0)
+	}
+	if 9007199254740991 < plain.OutputTokens {
+		return fmt.Errorf("field %s: must be <= %v", "outputTokens", 9007199254740991)
+	}
+	if 0 > plain.OutputTokens {
+		return fmt.Errorf("field %s: must be >= %v", "outputTokens", 0)
+	}
+	*j = ModelInvocationResultUsage(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ModelInvocationResult) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["attemptNumber"]; raw != nil && !ok {
+		return fmt.Errorf("field attemptNumber in ModelInvocationResult: required")
+	}
+	if _, ok := raw["executionGeneration"]; raw != nil && !ok {
+		return fmt.Errorf("field executionGeneration in ModelInvocationResult: required")
+	}
+	if _, ok := raw["invocationId"]; raw != nil && !ok {
+		return fmt.Errorf("field invocationId in ModelInvocationResult: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ModelInvocationResult: required")
+	}
+	if _, ok := raw["outcome"]; raw != nil && !ok {
+		return fmt.Errorf("field outcome in ModelInvocationResult: required")
+	}
+	if _, ok := raw["output"]; raw != nil && !ok {
+		return fmt.Errorf("field output in ModelInvocationResult: required")
+	}
+	if _, ok := raw["outputDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field outputDigest in ModelInvocationResult: required")
+	}
+	if _, ok := raw["physicalAttemptId"]; raw != nil && !ok {
+		return fmt.Errorf("field physicalAttemptId in ModelInvocationResult: required")
+	}
+	if _, ok := raw["reasonCode"]; raw != nil && !ok {
+		return fmt.Errorf("field reasonCode in ModelInvocationResult: required")
+	}
+	if _, ok := raw["taskId"]; raw != nil && !ok {
+		return fmt.Errorf("field taskId in ModelInvocationResult: required")
+	}
+	if _, ok := raw["traceContext"]; raw != nil && !ok {
+		return fmt.Errorf("field traceContext in ModelInvocationResult: required")
+	}
+	if _, ok := raw["usage"]; raw != nil && !ok {
+		return fmt.Errorf("field usage in ModelInvocationResult: required")
+	}
+	type Plain ModelInvocationResult
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 1000000 < plain.AttemptNumber {
+		return fmt.Errorf("field %s: must be <= %v", "attemptNumber", 1000000)
+	}
+	if 1 > plain.AttemptNumber {
+		return fmt.Errorf("field %s: must be >= %v", "attemptNumber", 1)
+	}
+	if 9007199254740991 < plain.ExecutionGeneration {
+		return fmt.Errorf("field %s: must be <= %v", "executionGeneration", 9007199254740991)
+	}
+	if 0 > plain.ExecutionGeneration {
+		return fmt.Errorf("field %s: must be >= %v", "executionGeneration", 0)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Z][A-Z0-9_]{2,63}$`, string(plain.ReasonCode)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ReasonCode", `^[A-Z][A-Z0-9_]{2,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.ReasonCode)) < 3 {
+		return fmt.Errorf("field %s length: must be >= %d", "reasonCode", 3)
+	}
+	if utf8.RuneCountInString(string(plain.ReasonCode)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "reasonCode", 64)
+	}
+	*j = ModelInvocationResult(plain)
 	return nil
 }
 
@@ -12050,6 +13063,37 @@ func scanJSONValue(decoder *json.Decoder, depth int) error {
 	}
 	_, err = decoder.Token()
 	return err
+}
+
+// canonicalTimestampLayout is the one timestamp form the canonical contracts
+// admit: RFC 3339, UTC, exactly three fractional digits. It is the layout the
+// shared Timestamp pattern describes.
+const canonicalTimestampLayout = "2006-01-02T15:04:05.000Z"
+
+// UnmarshalJSON decodes a canonical timestamp.
+//
+// The generator emits Timestamp as a defined type over time.Time, and a defined
+// type inherits none of time.Time's methods — without these the binding could
+// not decode, or re-encode, its own canonical fixtures. Parsing with the
+// canonical layout also means a timestamp in any other shape is rejected at the
+// boundary rather than silently normalized later.
+func (j *SharedPrimitivesTimestamp) UnmarshalJSON(value []byte) error {
+	var plain string
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	parsed, err := time.Parse(canonicalTimestampLayout, plain)
+	if err != nil {
+		return fmt.Errorf("timestamp %q is not canonical RFC 3339 UTC with milliseconds", plain)
+	}
+	*j = SharedPrimitivesTimestamp(parsed)
+	return nil
+}
+
+// MarshalJSON writes the canonical timestamp form, so a document this binding
+// produced and a document it consumed serialize identically.
+func (j SharedPrimitivesTimestamp) MarshalJSON() ([]byte, error) {
+	return json.Marshal(time.Time(j).UTC().Format(canonicalTimestampLayout))
 }
 
 // UnmarshalJSON enforces the bounds declared by BoundedStringMap.

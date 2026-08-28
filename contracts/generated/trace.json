@@ -2,7 +2,7 @@
   "traceVersion": 1,
   "language": "go",
   "packageVersion": "0.1.0",
-  "sourceSetSha256": "e966f8fa88e6f67f510b939f5da27b804f390407f70309a941682c83637fd6e3",
+  "sourceSetSha256": "3cea58242c12f15c03478040e9b42a53a8e3f9b6d761821172971a55f04b16f6",
   "sources": [
     {
       "path": "contracts/agent/schemas/agent-artifact.schema.json",
@@ -14,7 +14,7 @@
     },
     {
       "path": "contracts/agent/schemas/agent-definition.schema.json",
-      "sha256": "59ea772874f19e68bf7dc7b3e83c2429a0e72e7a645ae23b5217d411130d4bfe"
+      "sha256": "09122ada3e6c0814476bb44d0d291560ef7d95baa14a79f1c8587b300ee515e4"
     },
     {
       "path": "contracts/agent/schemas/agent-event.schema.json",
@@ -26,19 +26,19 @@
     },
     {
       "path": "contracts/agent/schemas/agent-run-snapshot.schema.json",
-      "sha256": "a75079baf5ecfa347ef501e113ac96abaedb8bdbcf0c06a1cfe568e065ac55db"
+      "sha256": "bc667183fc52ba4141132bbde63ea9022c0324c74b9a269a9a01b50484b0dbdd"
     },
     {
       "path": "contracts/agent/schemas/agent-run.schema.json",
-      "sha256": "e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564"
+      "sha256": "6265dda23cd50d6b716d5ee15a5cd8d9f427b10cfff63a29e3ce2cd727d7d09d"
     },
     {
       "path": "contracts/agent/schemas/agent-runtime-manifest.schema.json",
-      "sha256": "de8a0324315e3f25201113a5b03dd320c1025bba2ef313cbbd25e4e910b10136"
+      "sha256": "c25e809d4143ddf6623287af922510f10acccd4f73581bc802251c6eca9cfbfd"
     },
     {
       "path": "contracts/agent/schemas/agent-runtime-result.schema.json",
-      "sha256": "8272047727a6a468e4bddbd579cf26c7c7307fce63b5f50297c933dbda2392d1"
+      "sha256": "1a5d69d36daad9780502a62fb32ed6732f70bd8e5806ad80023a7ea978a8a7f8"
     },
     {
       "path": "contracts/agent/schemas/agent-stream-delta.schema.json",
@@ -46,7 +46,7 @@
     },
     {
       "path": "contracts/agent/schemas/agent-task.schema.json",
-      "sha256": "323739e5173befedf6c54f79ee0c05a3757460329a7ffef765622a26da711939"
+      "sha256": "0db34f07c19ac81a3adacd43fc25d10f4c0168b5ca57c6bddd0a7374a0d32176"
     },
     {
       "path": "contracts/agent/schemas/apply-authorization.schema.json",
@@ -129,6 +129,14 @@
       "sha256": "c9a436fa08c5e1c43c1bbfda5ad87e0b7aa4c1d2ada620929284028fbb7b3b5e"
     },
     {
+      "path": "contracts/agent/schemas/model-invocation-request.schema.json",
+      "sha256": "d252ec3a90e6e2e318a03fdd78aa88623c559e9c796aa402c5d708989fb160f9"
+    },
+    {
+      "path": "contracts/agent/schemas/model-invocation-result.schema.json",
+      "sha256": "41fcacd2068f245cd5be8ea1f218b258b76afcfb47e079a6bda9882a4aa8693b"
+    },
+    {
       "path": "contracts/agent/schemas/page-candidate.schema.json",
       "sha256": "21292ad166afb23da381528343829ea2be75d7520364839759e9bd1d05f38e69"
     },
@@ -193,8 +201,12 @@
       "sha256": "81fabb41058af81f39623846816223f3b30efd1372c40f545b825ee6fca1cd08"
     },
     {
+      "path": "contracts/agent/openapi/agent-runtime.openapi.json",
+      "sha256": "a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450"
+    },
+    {
       "path": "contracts/agent/openapi/agent-service.openapi.json",
-      "sha256": "475d66561676066313d47d3e9aaf7168b284db1828e22709beec895dbf469953"
+      "sha256": "13c64266794947b2c55d1e75832ec9d974fc404fefc71533484fca4b7c041da5"
     },
     {
       "path": "contracts/agent/openapi/pagix-agent-integration.openapi.json",
@@ -202,10 +214,11 @@
     }
   ],
   "projections": {
-    "schemaBundleSha256": "bd5d617fbced5e7a10a5de3e7abe6447d435b04f3e5dad6c08b286f2559299a4",
+    "schemaBundleSha256": "1395059a205bff9c19c48abefc026a6a21eabd4f4f413c8e08b1651f35cee614",
     "openapi": {
-      "agent-service": "6236ad2bff2dbafdb312f21db97432d491c98606f9df05a55f908234e16f99fc",
-      "pagix-agent-integration": "5dc57a15e1ba0305315d33b36668b7eaf62b7902ac1eceeb295b3abb943a65cd"
+      "agent-runtime": "bf0791a72f8fb0acca3249fac9b0470007af144604fbe0acd221b7d5baf5d309",
+      "agent-service": "d5186b30b0141e0562d398c5fae5a2cc1fbeee52bb774420905dc07e231d5133",
+      "pagix-agent-integration": "8c2fdf898e8234bd4c471bf9079a7661a74430292702d1ce5c6a936f2b93ba5b"
     }
   },
   "generators": {
@@ -219,15 +232,15 @@
     }
   },
   "output": {
-    "bytes": 898122,
-    "files": 3,
-    "sha256": "9d7ba2f5f309f9f7bf2b40654fe750272943b75e731c93afed0ca98047171125",
+    "bytes": 865208,
+    "files": 4,
+    "sha256": "b86df64b2f62b875b1826d4de5d43a7ebd841cd41b83b002157112ea6feb3a5e",
     "directories": [
       {
         "directory": "generated",
-        "bytes": 898122,
-        "files": 3,
-        "sha256": "d2f71f066f4fbb29e913b0f2bbb83326d315e2dcd0c67a4c5032b404ac65c74d"
+        "bytes": 865208,
+        "files": 4,
+        "sha256": "6001b5927fd1db24f50a5eb2243892f796e36538f6ede9ea48a6a3e43f12dc08"
       }
     ]
   }
