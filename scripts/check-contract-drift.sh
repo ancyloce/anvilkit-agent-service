@@ -16,12 +16,14 @@ check_file() {
 }
 
 check_file packages/contracts-go/generated/agentclient/client.gen.go contracts/generated/agentclient/client.gen.go
+check_file packages/contracts-go/generated/agentruntimeclient/client.gen.go contracts/generated/agentruntimeclient/client.gen.go
 check_file packages/contracts-go/generated/pagixclient/client.gen.go contracts/generated/pagixclient/client.gen.go
 check_file packages/contracts-go/generated/schema/contracts.gen.go contracts/generated/schema/contracts.gen.go
 check_file packages/contracts-go/generated/trace.json contracts/generated/trace.json
 check_file packages/contracts-go/validator/validator.go contracts/validator/validator.go
 check_file contracts/agent/profile/p0-kernel-profile.json contracts/agent/profile/p0-kernel-profile.json
 check_file contracts/agent/lock/contracts.lock.json contracts/agent/lock/contracts.lock.json
+check_file contracts/agent/openapi/agent-runtime.openapi.json contracts/agent/openapi/agent-runtime.openapi.json
 
 for source in "${platform_root}"/contracts/agent/schemas/*.schema.json; do
   check_file "contracts/agent/schemas/$(basename "${source}")" "contracts/agent/schemas/$(basename "${source}")"
