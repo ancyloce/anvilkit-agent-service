@@ -53,7 +53,7 @@ func TestCreateIsDurableBeforeWorkflowAndReplayIsStable(t *testing.T) {
 	service := NewService(store, starter, fixedID("run-1"), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), admitAll())
 	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
 	digest, _ := canonical.Digest(raw)
-	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Raw: raw, Authority: testAuthority()}
+	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Raw: raw, Authority: testAuthority(), RuntimeBinding: testRuntimeBinding()}
 	input.Traceparent = testTraceparent
 	first, err := service.Create(context.Background(), input)
 	if err != nil {
@@ -70,7 +70,7 @@ func TestCreateIsDurableBeforeWorkflowAndReplayIsStable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	findings := guard.Validate(context.Background(), contractguard.APIIn, "anvilkit://schema/agent-run?digest=sha256:e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564", first.Bytes)
+	findings := guard.Validate(context.Background(), contractguard.APIIn, "anvilkit://schema/agent-run?digest=sha256:6265dda23cd50d6b716d5ee15a5cd8d9f427b10cfff63a29e3ce2cd727d7d09d", first.Bytes)
 	if len(findings) != 0 {
 		t.Fatalf("created representation violates AgentRun: %#v raw=%s", findings, first.Bytes)
 	}
@@ -82,7 +82,7 @@ func TestConversationalAndHeadlessCreateHaveInteractionParity(t *testing.T) {
 	create := func(runID, key string) CreateOutcome {
 		store := &fakeStore{}
 		service := NewService(store, &checkingStarter{store: store}, fixedID(runID), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), admitAll())
-		outcome, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: key, ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()})
+		outcome, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: key, ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority(), RuntimeBinding: testRuntimeBinding()})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -103,7 +103,7 @@ func TestCreateCannotAcknowledgeWhenReceiptJournalIsUnavailable(t *testing.T) {
 	service := NewService(store, starter, fixedID("run-journal"), fixedClock{time.Unix(100, 0)}, receipts, admitAll())
 	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
 	digest, _ := canonical.Digest(raw)
-	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "journal-key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()}
+	input := CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "journal-key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority(), RuntimeBinding: testRuntimeBinding()}
 	if _, err := service.Create(context.Background(), input); err == nil {
 		t.Fatal("create acknowledged without independent journal")
 	}
@@ -140,7 +140,7 @@ func TestCreateRejectsGeneratedIdentityThatCannotProduceBoundedEventIDs(t *testi
 	service := NewService(store, &checkingStarter{store: store}, fixedID(strings.Repeat("r", 108)), fixedClock{time.Unix(100, 0)}, journal.NewMemoryStore(), admitAll())
 	raw := []byte(`{"kind":"CreateAgentRunRequest","definition":{"definitionId":"definition.test","definitionDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"operation":"artifact-validation","target":{"targetType":"page","targetId":"page-1","workspaceId":"workspace","projectId":"project"}}`)
 	digest, _ := canonical.Digest(raw)
-	_, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority()})
+	_, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: testAuthority(), RuntimeBinding: testRuntimeBinding()})
 	if err == nil || store.created != nil {
 		t.Fatalf("unbounded generated identity reached persistence: err=%v", err)
 	}
@@ -217,7 +217,7 @@ func TestCreateIsDeniedWhenTheDeclaredTargetIsRevoked(t *testing.T) {
 	digest, _ := canonical.Digest(raw)
 	revoked := testAuthority()
 	revoked.RevokedTargets = []string{"page-1"}
-	_, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key-revoked", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: revoked})
+	_, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key-revoked", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: revoked, RuntimeBinding: testRuntimeBinding()})
 	var details problem.Details
 	if !errors.As(err, &details) || details.Code != string(problem.CodeAuthorityStale) {
 		t.Fatalf("create against a revoked target = %v", err)
@@ -227,7 +227,7 @@ func TestCreateIsDeniedWhenTheDeclaredTargetIsRevoked(t *testing.T) {
 	}
 	unrelated := testAuthority()
 	unrelated.RevokedTargets = []string{"page-other"}
-	if _, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key-unrelated", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: unrelated}); err != nil {
+	if _, err := service.Create(context.Background(), CreateInput{Scope: Scope{WorkspaceID: "workspace", ProjectID: "project", ActorID: "actor"}, Key: "key-unrelated", ClaimedDigest: digest, Traceparent: testTraceparent, Raw: raw, Authority: unrelated, RuntimeBinding: testRuntimeBinding()}); err != nil {
 		t.Fatalf("an unrelated target revocation denied the create: %v", err)
 	}
 }
@@ -267,4 +267,11 @@ func TestMissingAdmissionGateFailsClosed(t *testing.T) {
 	if store.created != nil {
 		t.Fatal("a durable run record was written with no admission gate configured")
 	}
+}
+
+// testRuntimeBinding is the server-owned runtime pin a create path copies from
+// the definition the registry resolved. Every run carries one: a run with no
+// pinned runtime release could be served by whatever runtime answered.
+func testRuntimeBinding() json.RawMessage {
+	return json.RawMessage(`{"runtimeUnitId":"runtime.platform.page-change-manager","runtimeManifestDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","runtimeImageDigest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","invocationProtocolDigest":"sha256:3333333333333333333333333333333333333333333333333333333333333333","runtimeAudience":"urn:anvilkit:audience:runtime-page-change-manager"}`)
 }

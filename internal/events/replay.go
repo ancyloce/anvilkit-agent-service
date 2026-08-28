@@ -42,7 +42,7 @@ type ReplayPage struct {
 
 // AgentRunSnapshotSchemaURI pins the canonical AgentRunSnapshot contract the
 // governed recovery response is proved against before it leaves the service.
-const AgentRunSnapshotSchemaURI = "anvilkit://schema/agent-run-snapshot?digest=sha256:a75079baf5ecfa347ef501e113ac96abaedb8bdbcf0c06a1cfe568e065ac55db"
+const AgentRunSnapshotSchemaURI = "anvilkit://schema/agent-run-snapshot?digest=sha256:bc667183fc52ba4141132bbde63ea9022c0324c74b9a269a9a01b50484b0dbdd"
 
 // AgentRunSnapshotKind is the canonical kind every rendered snapshot carries.
 const AgentRunSnapshotKind = "AgentRunSnapshot"

@@ -17,6 +17,9 @@ import (
 func TestPostgresJournalAssignsGlobalOrderAndRejectsConflicts(t *testing.T) {
 	databaseURL := os.Getenv("POSTGRES_TEST_URL")
 	if databaseURL == "" {
+		if os.Getenv("ANVILKIT_REQUIRE_POSTGRES_PROOFS") != "" {
+			t.Fatal("POSTGRES_TEST_URL is not set but ANVILKIT_REQUIRE_POSTGRES_PROOFS requires these proofs; point POSTGRES_TEST_URL at a disposable PostgreSQL database")
+		}
 		t.Skip("POSTGRES_TEST_URL is not set")
 	}
 	ctx := context.Background()

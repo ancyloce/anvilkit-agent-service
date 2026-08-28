@@ -104,27 +104,31 @@ type IdempotencyProjection struct {
 	CanonicalRequestDigest string `json:"canonicalRequestDigest"`
 }
 type Snapshot struct {
-	Kind                string                `json:"kind"`
-	RunID               ID                    `json:"runId"`
-	RootRunID           ID                    `json:"rootRunId"`
-	ParentRunID         *ID                   `json:"parentRunId,omitempty"`
-	WorkspaceID         string                `json:"workspaceId"`
-	ActorID             string                `json:"actorId"`
-	Domain              string                `json:"domain"`
-	Operation           string                `json:"operation"`
-	Target              Target                `json:"target"`
-	Definition          json.RawMessage       `json:"definition"`
-	ContractBOM         json.RawMessage       `json:"contractBomReference"`
-	Policy              json.RawMessage       `json:"policy"`
-	Budget              json.RawMessage       `json:"budget"`
-	Idempotency         IdempotencyProjection `json:"idempotency"`
-	Status              State                 `json:"status"`
-	Version             uint64                `json:"-"`
-	ExecutionGeneration uint64                `json:"executionGeneration"`
-	Problem             *problem.Details      `json:"problem,omitempty"`
-	LatestEventID       string                `json:"-"`
-	CreatedAt           time.Time             `json:"createdAt"`
-	UpdatedAt           time.Time             `json:"updatedAt"`
+	Kind        string                `json:"kind"`
+	RunID       ID                    `json:"runId"`
+	RootRunID   ID                    `json:"rootRunId"`
+	ParentRunID *ID                   `json:"parentRunId,omitempty"`
+	WorkspaceID string                `json:"workspaceId"`
+	ActorID     string                `json:"actorId"`
+	Domain      string                `json:"domain"`
+	Operation   string                `json:"operation"`
+	Target      Target                `json:"target"`
+	Definition  json.RawMessage       `json:"definition"`
+	ContractBOM json.RawMessage       `json:"contractBomReference"`
+	Policy      json.RawMessage       `json:"policy"`
+	Budget      json.RawMessage       `json:"budget"`
+	Idempotency IdempotencyProjection `json:"idempotency"`
+	Status      State                 `json:"status"`
+	// RuntimeBinding is copied from the definition the registry resolved at
+	// creation and never re-read afterwards: a registry change must not move a
+	// live run onto a different runtime release.
+	RuntimeBinding      json.RawMessage  `json:"runtimeBinding"`
+	Version             uint64           `json:"-"`
+	ExecutionGeneration uint64           `json:"executionGeneration"`
+	Problem             *problem.Details `json:"problem,omitempty"`
+	LatestEventID       string           `json:"-"`
+	CreatedAt           time.Time        `json:"createdAt"`
+	UpdatedAt           time.Time        `json:"updatedAt"`
 }
 
 func (s Snapshot) MarshalJSON() ([]byte, error) {
@@ -146,11 +150,12 @@ func (s Snapshot) MarshalJSON() ([]byte, error) {
 		Status              State                 `json:"status"`
 		ExecutionGeneration uint64                `json:"executionGeneration"`
 		ResourceRevision    uint64                `json:"resourceRevision"`
+		RuntimeBinding      json.RawMessage       `json:"runtimeBinding"`
 		Problem             *problem.Details      `json:"problem,omitempty"`
 		CreatedAt           string                `json:"createdAt"`
 		UpdatedAt           string                `json:"updatedAt"`
 	}
-	return json.Marshal(wire{Kind: s.Kind, RunID: s.RunID, RootRunID: s.RootRunID, ParentRunID: s.ParentRunID, WorkspaceID: s.WorkspaceID, ActorID: s.ActorID, Domain: s.Domain, Operation: s.Operation, Target: s.Target, Definition: s.Definition, ContractBOM: s.ContractBOM, Policy: s.Policy, Budget: s.Budget, Idempotency: s.Idempotency, Status: s.Status, ExecutionGeneration: s.ExecutionGeneration, ResourceRevision: s.Version, Problem: s.Problem, CreatedAt: contractTimestamp(s.CreatedAt), UpdatedAt: contractTimestamp(s.UpdatedAt)})
+	return json.Marshal(wire{Kind: s.Kind, RunID: s.RunID, RootRunID: s.RootRunID, ParentRunID: s.ParentRunID, WorkspaceID: s.WorkspaceID, ActorID: s.ActorID, Domain: s.Domain, Operation: s.Operation, Target: s.Target, Definition: s.Definition, ContractBOM: s.ContractBOM, Policy: s.Policy, Budget: s.Budget, Idempotency: s.Idempotency, Status: s.Status, ExecutionGeneration: s.ExecutionGeneration, ResourceRevision: s.Version, RuntimeBinding: s.RuntimeBinding, Problem: s.Problem, CreatedAt: contractTimestamp(s.CreatedAt), UpdatedAt: contractTimestamp(s.UpdatedAt)})
 }
 
 func contractTimestamp(value time.Time) string {
@@ -165,6 +170,9 @@ type CreateInput struct {
 	Traceparent        string
 	Raw                []byte
 	Authority          Authority
+	// RuntimeBinding is server-owned: it comes from the definition the registry
+	// resolved for this request, never from the request itself.
+	RuntimeBinding json.RawMessage
 }
 type CreateRecord struct {
 	Scope                    Scope
@@ -363,7 +371,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (CreateOutcome,
 	if now.IsZero() {
 		return CreateOutcome{}, problem.New(problem.CodeAuthorityStale, "")
 	}
-	snapshot := Snapshot{Kind: "AgentRun", RunID: runID, RootRunID: runID, WorkspaceID: input.Scope.WorkspaceID, ActorID: input.Scope.ActorID, Domain: domain, Operation: request.Operation, Target: Target{Type: request.Target.Type, ID: request.Target.ID, WorkspaceID: input.Scope.WorkspaceID, ProjectID: input.Scope.ProjectID}, Definition: append(json.RawMessage(nil), input.Authority.Definition...), ContractBOM: append(json.RawMessage(nil), input.Authority.ContractBOM...), Policy: append(json.RawMessage(nil), input.Authority.Policy...), Budget: append(json.RawMessage(nil), input.Authority.Budget...), Idempotency: IdempotencyProjection{Scope: input.Scope.WorkspaceID + ":create-run", Key: input.Key, CanonicalRequestDigest: digest}, Status: Created, Version: 1, ExecutionGeneration: 1, LatestEventID: string(runID) + ":1", CreatedAt: now, UpdatedAt: now}
+	snapshot := Snapshot{Kind: "AgentRun", RunID: runID, RootRunID: runID, WorkspaceID: input.Scope.WorkspaceID, ActorID: input.Scope.ActorID, Domain: domain, Operation: request.Operation, Target: Target{Type: request.Target.Type, ID: request.Target.ID, WorkspaceID: input.Scope.WorkspaceID, ProjectID: input.Scope.ProjectID}, Definition: append(json.RawMessage(nil), input.Authority.Definition...), ContractBOM: append(json.RawMessage(nil), input.Authority.ContractBOM...), Policy: append(json.RawMessage(nil), input.Authority.Policy...), Budget: append(json.RawMessage(nil), input.Authority.Budget...), Idempotency: IdempotencyProjection{Scope: input.Scope.WorkspaceID + ":create-run", Key: input.Key, CanonicalRequestDigest: digest}, RuntimeBinding: append(json.RawMessage(nil), input.RuntimeBinding...), Status: Created, Version: 1, ExecutionGeneration: 1, LatestEventID: string(runID) + ":1", CreatedAt: now, UpdatedAt: now}
 	outcome, err := s.store.Create(ctx, CreateRecord{Scope: input.Scope, Key: input.Key, Digest: digest, Traceparent: input.Traceparent, Snapshot: snapshot})
 	if err != nil {
 		return CreateOutcome{}, err

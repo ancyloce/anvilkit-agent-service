@@ -12,6 +12,7 @@ package trust
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -225,4 +226,87 @@ func contains(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// Statement is the signed claim that one digest is approved material. Both the
+// approved definition catalog and the approved runtime release catalog are
+// attested with this shape; the profile below says which kind of statement is
+// being read, so the two can never be mistaken for each other.
+type Statement struct {
+	Kind      string `json:"kind"`
+	Algorithm string `json:"algorithm"`
+	Issuer    string `json:"issuer"`
+	Audience  string `json:"audience"`
+	KeyID     string `json:"keyId"`
+	Subject   struct {
+		Digest    string `json:"digest"`
+		MediaType string `json:"mediaType"`
+	} `json:"subject"`
+	IssuedAt  string `json:"issuedAt"`
+	NotBefore string `json:"notBefore"`
+	ExpiresAt string `json:"expiresAt"`
+}
+
+// StatementProfile is the exact statement one caller will accept. Every field
+// is required: a verifier that accepted any kind, payload type, media type, or
+// audience would accept a statement written to attest something else.
+type StatementProfile struct {
+	Context     string
+	Kind        string
+	PayloadType string
+	MediaType   string
+	Audience    string
+	Algorithm   string
+}
+
+// VerifyStatement authenticates one signed statement against an
+// operator-distributed trust root. It fails closed on an unknown, inactive,
+// expired, or wrong-purpose key, on a signature that does not verify, and on a
+// statement that binds any digest other than the material the caller loaded.
+func VerifyStatement(rootBytes, envelopeBytes []byte, profile StatementProfile, subjectDigest string, now time.Time) error {
+	root, skew, err := ParseRoot(rootBytes, now, profile.Context)
+	if err != nil {
+		return err
+	}
+	payload, signature, envelopeKeyID, err := OpenEnvelope(envelopeBytes, profile.PayloadType, profile.Context)
+	if err != nil {
+		return err
+	}
+	var statement Statement
+	if err := DecodeJSON(payload, &statement); err != nil {
+		return fmt.Errorf("%s: decode statement: %w", profile.Context, err)
+	}
+	if statement.Kind != profile.Kind || statement.Algorithm != profile.Algorithm {
+		return fmt.Errorf("%s: the statement kind or algorithm is outside the accepted profile", profile.Context)
+	}
+	if statement.Audience != profile.Audience {
+		return fmt.Errorf("%s: the statement is not addressed to this service", profile.Context)
+	}
+	if statement.Subject.MediaType != profile.MediaType ||
+		len(statement.Subject.Digest) != len(subjectDigest) ||
+		subtle.ConstantTimeCompare([]byte(statement.Subject.Digest), []byte(subjectDigest)) != 1 {
+		return fmt.Errorf("%s: the statement does not bind the material this process loaded", profile.Context)
+	}
+	if statement.KeyID == "" || statement.KeyID != envelopeKeyID {
+		return fmt.Errorf("%s: the envelope key identity does not match the statement", profile.Context)
+	}
+	notBefore, err := time.Parse(Timestamp, statement.NotBefore)
+	if err != nil {
+		return fmt.Errorf("%s: the statement validity start is malformed", profile.Context)
+	}
+	expiresAt, err := time.Parse(Timestamp, statement.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("%s: the statement validity end is malformed", profile.Context)
+	}
+	if now.Add(skew).Before(notBefore) || now.After(expiresAt.Add(skew)) {
+		return fmt.Errorf("%s: the statement is outside its validity interval", profile.Context)
+	}
+	key, err := ResolveKey(root, KeyRequest{KeyID: statement.KeyID, Issuer: statement.Issuer, Audience: statement.Audience, Algorithm: profile.Algorithm}, now, skew, profile.Context)
+	if err != nil {
+		return err
+	}
+	if !Verify(key, profile.PayloadType, payload, signature) {
+		return fmt.Errorf("%s: the statement signature does not verify", profile.Context)
+	}
+	return nil
 }

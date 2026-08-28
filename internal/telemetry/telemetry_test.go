@@ -11,8 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/ancyloce/anvilkit-agent-service/internal/agent/runner"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -113,6 +116,64 @@ func TestTelemetryOutageDoesNotBlockWork(t *testing.T) {
 	span.End()
 	if err := telemetry.Observe(ctx, Fields{Outcome: "accepted", DurationMilliseconds: 4}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The dispatch path's metrics carry only bounded labels: the runtime unit,
+// closed outcome and stage vocabularies, and governed reason codes. No task,
+// run, attempt, fence, token, or signature value is a label, and the metric
+// names share one namespace.
+func TestDispatchMetricsCarryOnlyBoundedLabels(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	telemetry, err := newTelemetry("agent-service", nil, NewRedactor(nil), reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	const unit = "runtime.platform.page-change-manager"
+	telemetry.ObserveDispatchStarted(ctx, unit)
+	telemetry.ObserveDispatch(ctx, unit, runner.DispatchAnswered, 250*time.Millisecond)
+	telemetry.ObserveReplacement(ctx, unit, "DISPATCH_FAILED")
+	telemetry.ObserveRejection(ctx, runner.RejectionSignature, "RESULT_SIGNATURE_UNVERIFIED")
+	telemetry.ObserveResult(ctx, unit, runner.ResultCommitted, 300*time.Millisecond)
+	telemetry.ObserveAttemptUsage(ctx, unit, "completed", "RUNTIME_COMPLETED", runner.AttemptUsage{ModelCalls: 2, ToolCalls: 1, InputTokens: 40, OutputTokens: 12, DurationMilliseconds: 300, CostMicros: 1200})
+
+	var resource metricdata.ResourceMetrics
+	if err := reader.Collect(ctx, &resource); err != nil {
+		t.Fatal(err)
+	}
+	allowedKeys := map[string]bool{"runtime_unit": true, "outcome": true, "reason": true, "stage": true, "status": true, "reason_code": true, "meter": true}
+	seen := map[string]bool{}
+	for _, scope := range resource.ScopeMetrics {
+		for _, candidate := range scope.Metrics {
+			if !strings.HasPrefix(candidate.Name, "anvilkit_agent_service_runtime_") {
+				continue
+			}
+			seen[candidate.Name] = true
+			var attributeSets []attribute.Set
+			switch data := candidate.Data.(type) {
+			case metricdata.Sum[int64]:
+				for _, point := range data.DataPoints {
+					attributeSets = append(attributeSets, point.Attributes)
+				}
+			case metricdata.Histogram[float64]:
+				for _, point := range data.DataPoints {
+					attributeSets = append(attributeSets, point.Attributes)
+				}
+			}
+			for _, set := range attributeSets {
+				for _, value := range set.ToSlice() {
+					if !allowedKeys[string(value.Key)] {
+						t.Fatalf("%s carries the unbounded label %s", candidate.Name, value.Key)
+					}
+				}
+			}
+		}
+	}
+	for _, name := range []string{metricDispatches, metricDispatchWait, metricAttemptsActive, metricSuperseded, metricRejections, metricResults, metricResultLatency, metricAttemptsSettled, metricAttemptUsage} {
+		if !seen[name] {
+			t.Fatalf("%s was not recorded", name)
+		}
 	}
 }
 

@@ -29,9 +29,9 @@ type Pools struct {
 
 // Reconciler answers whether a cancelled run still has an unresolved external
 // effect. It inspects, in order, the authoritative domain effect, the provider
-// invocations the run disclosed to, the worker tasks and leases it holds, the
-// tool dispatches its executor leases may still be running, and the artifacts
-// it left behind.
+// invocations the run disclosed to, the runtime attempts it dispatched, the
+// worker tasks and leases it holds, the tool dispatches its executor leases may
+// still be running, and the artifacts it left behind.
 type Reconciler struct{ pools Pools }
 
 // New builds the reconciler. It fails closed when any store is missing.
@@ -72,6 +72,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, scope runs.Scope, id runs.ID
 		query func(context.Context, runs.Scope, runs.ID) (bool, error)
 	}{
 		{"provider", r.providerInFlight},
+		{"runtime", r.runtimeInFlight},
 		{"worker", r.workerInFlight},
 		{"tool", r.toolInFlight},
 		{"artifact", r.artifactInFlight},
@@ -146,6 +147,15 @@ func (r *Reconciler) workerInFlight(ctx context.Context, scope runs.Scope, id ru
 		}
 	}
 	return false, nil
+}
+
+// runtimeInFlight reports whether the run still has an execution outstanding on
+// a runtime release. An attempt that is accepted or running is work in another
+// process: cancellation cannot claim to be settled while a release may still be
+// executing on the run's behalf, whether or not its answer will be allowed to
+// commit.
+func (r *Reconciler) runtimeInFlight(ctx context.Context, scope runs.Scope, id runs.ID) (bool, error) {
+	return r.exists(ctx, r.pools.Workflow, `SELECT 1 FROM agent_workflow.runtime_attempts a JOIN agent_workflow.runtime_tasks t ON t.workspace_id=a.workspace_id AND t.project_id=a.project_id AND t.task_id=a.task_id WHERE a.workspace_id=$1 AND a.project_id=$2 AND t.run_id=$3 AND a.dispatch_status IN ('accepted','running') LIMIT 1`, scope, id)
 }
 
 // toolInFlight reports whether a tool dispatch may still be running. Tool

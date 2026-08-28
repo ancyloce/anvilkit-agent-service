@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -58,15 +59,61 @@ type Limits struct {
 }
 
 type Config struct {
-	ServiceName                   string
-	ServiceVersion                string
-	Environment                   Environment
-	HTTPAddress                   string
-	MigrationMode                 string
-	MigrationDatabase             string
-	ContractRoot                  string
-	DefinitionTrustRoot           string
-	DefinitionAttestation         string
+	ServiceName    string
+	ServiceVersion string
+	Environment    Environment
+	// EnvironmentDeclared reports whether the environment was named by the
+	// configuration rather than assumed by default. It is what makes the
+	// test profile explicit: controlled implementations are admitted under a
+	// development or test environment the operator declared, never under one
+	// this service filled in because nobody said otherwise.
+	EnvironmentDeclared   bool
+	HTTPAddress           string
+	MigrationMode         string
+	MigrationDatabase     string
+	ContractRoot          string
+	DefinitionTrustRoot   string
+	DefinitionAttestation string
+	// The approved runtime release catalog is attested the same way the
+	// definition catalog is, and the dispatcher that reaches a selected release
+	// is selected explicitly. RuntimeEndpoints maps a runtime unit identity to
+	// the address its release answers on: which unit must serve the work is
+	// contract material, where that unit is deployed is not.
+	RuntimeTrustRoot       string
+	RuntimeAttestation     string
+	RuntimeDispatcher      string
+	RuntimeEndpoints       map[string]string
+	RuntimeDispatchTimeout time.Duration
+	// RuntimeTaskMemoryBytes and RuntimeTaskCPUMillis are the resource
+	// envelope a dispatched task declares. They are contract fields the
+	// runtime's own deployment enforces: the task says what the work was
+	// admitted for, and the deployment decides whether it gets it.
+	RuntimeTaskMemoryBytes int64
+	RuntimeTaskCPUMillis   int
+	// RuntimeCredentialTTL bounds the life of a task-scoped credential. It is
+	// short by default: a credential that outlives the attempt it was issued
+	// for is authority nobody is watching.
+	RuntimeCredentialTTL time.Duration
+	// RuntimeCredentialKey and RuntimeCredentialKeyID are the Ed25519 key this
+	// service mints task-scoped credentials with, and the identity a runtime
+	// resolves its public half by. The key is asymmetric on purpose: a shared
+	// secret would let any runtime holding it mint credentials for every other
+	// runtime, which is the authority expansion the execution boundary exists
+	// to prevent.
+	RuntimeCredentialKey   SecretRef
+	RuntimeCredentialKeyID string
+	// RuntimeCredentialTrustRoot is the operator-distributed trust root a
+	// presented task credential is resolved against. This service reads it to
+	// admit work at the in-process boundary; the same document is distributed
+	// to released units, which is what lets a runtime verify a credential
+	// rather than believe it.
+	RuntimeCredentialTrustRoot string
+	// RuntimeSigningTrust maps a runtime result-signing key identity to the
+	// runtime units, audiences, released manifests, and image provenances that
+	// key is approved to sign for. A result signed by a key outside this
+	// document cannot be attributed to a release, and an unattributable result
+	// commits nothing.
+	RuntimeSigningTrust           string
 	AuthTrustSnapshot             string
 	AuthIssuers                   []string
 	AuthAudience                  string
@@ -225,6 +272,24 @@ func (p ProtectedAuditProvisioning) RequiresSeparateLogins() bool {
 	}
 }
 
+// Deployed reports whether this configuration describes a deployed
+// environment — staging or production — as opposed to a developer's machine
+// or a test. The execution plane is held to one rule in both deployed
+// environments: what may execute in staging is what may execute in production.
+func (c Config) Deployed() bool {
+	return c.Environment == EnvironmentStaging || c.Environment == EnvironmentProduction
+}
+
+// ControlledProfile reports whether this configuration is an explicit test
+// profile: a development or test environment the operator declared. It is the
+// only profile under which controlled, fake, and mock implementations, and a
+// runtime that runs inside this process, may be configured or composed. A
+// deployed environment is never one, and neither is an environment nobody
+// declared — a default is not a decision.
+func (c Config) ControlledProfile() bool {
+	return c.EnvironmentDeclared && (c.Environment == EnvironmentDevelopment || c.Environment == EnvironmentTest)
+}
+
 // Load reads the complete typed configuration surface. No other package may
 // read process environment directly; cmd/boundarycheck enforces that rule.
 func Load() (Config, error) {
@@ -232,12 +297,21 @@ func Load() (Config, error) {
 		ServiceName:                   env("ANVILKIT_SERVICE_NAME", "agent-service"),
 		ServiceVersion:                env("ANVILKIT_SERVICE_VERSION", "dev"),
 		Environment:                   Environment(env("ANVILKIT_ENVIRONMENT", "development")),
+		EnvironmentDeclared:           os.Getenv("ANVILKIT_ENVIRONMENT") != "",
 		HTTPAddress:                   env("ANVILKIT_HTTP_ADDRESS", ":8080"),
 		MigrationMode:                 env("ANVILKIT_MIGRATION_MODE", "validate"),
 		MigrationDatabase:             os.Getenv("ANVILKIT_MIGRATION_DATABASE_URL"),
 		ContractRoot:                  env("ANVILKIT_CONTRACT_ROOT", "."),
 		DefinitionTrustRoot:           env("ANVILKIT_DEFINITION_TRUST_ROOT", ""),
 		DefinitionAttestation:         env("ANVILKIT_DEFINITION_ATTESTATION", ""),
+		RuntimeTrustRoot:              env("ANVILKIT_RUNTIME_TRUST_ROOT", ""),
+		RuntimeAttestation:            env("ANVILKIT_RUNTIME_ATTESTATION", ""),
+		RuntimeCredentialKey:          secret("ANVILKIT_RUNTIME_CREDENTIAL_KEY_REF", "ANVILKIT_RUNTIME_CREDENTIAL_KEY"),
+		RuntimeCredentialKeyID:        env("ANVILKIT_RUNTIME_CREDENTIAL_KEY_ID", ""),
+		RuntimeCredentialTrustRoot:    env("ANVILKIT_RUNTIME_CREDENTIAL_TRUST_ROOT", ""),
+		RuntimeSigningTrust:           env("ANVILKIT_RUNTIME_SIGNING_TRUST", ""),
+		RuntimeDispatcher:             os.Getenv("ANVILKIT_RUNTIME_DISPATCHER"),
+		RuntimeEndpoints:              runtimeEndpoints(env("ANVILKIT_RUNTIME_ENDPOINTS", "")),
 		AuthTrustSnapshot:             os.Getenv("ANVILKIT_AUTH_TRUST_SNAPSHOT"),
 		StreamCursorSpool:             os.Getenv("ANVILKIT_STREAM_CURSOR_SPOOL"),
 		AuthIssuers:                   csv(os.Getenv("ANVILKIT_AUTH_ISSUERS")),
@@ -322,6 +396,20 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.OTelSampleRatio, err = decimal("ANVILKIT_OTEL_SAMPLE_RATIO", 0.1); err != nil {
+		return Config{}, err
+	}
+	// A dispatch that cannot time out cannot be recovered, so the deadline is
+	// configuration with a default rather than something a caller may omit.
+	if cfg.RuntimeDispatchTimeout, err = duration("ANVILKIT_RUNTIME_DISPATCH_TIMEOUT", 2*time.Minute); err != nil {
+		return Config{}, err
+	}
+	if cfg.RuntimeTaskMemoryBytes, err = integer64("ANVILKIT_RUNTIME_TASK_MEMORY_BYTES", 512<<20); err != nil {
+		return Config{}, err
+	}
+	if cfg.RuntimeTaskCPUMillis, err = integer("ANVILKIT_RUNTIME_TASK_CPU_MILLIS", 2000); err != nil {
+		return Config{}, err
+	}
+	if cfg.RuntimeCredentialTTL, err = duration("ANVILKIT_RUNTIME_CREDENTIAL_TTL", 5*time.Minute); err != nil {
 		return Config{}, err
 	}
 	if cfg.RunTimeout, err = duration("ANVILKIT_RUN_TIMEOUT", 30*time.Minute); err != nil {
@@ -438,27 +526,81 @@ func (c Config) Validate() error {
 	// idempotency, and canonical schema validation each fail closed on their
 	// own, and composition refuses to serve the API at all without its
 	// authentication trust material and durable stores.
-	if c.Environment == EnvironmentProduction {
+	// Controlled, fake, and mock implementations — and a runtime that runs
+	// inside this process — are admitted only under an explicit test profile:
+	// a development or test environment the operator declared, never one
+	// assumed by default and never a deployed one. Staging is held to
+	// production's rule here because it is production-shaped: what may
+	// execute there is what may execute in production.
+	if !c.ControlledProfile() {
 		if strings.Contains(strings.ToLower(c.WorkerImplementation), "fake") || strings.Contains(strings.ToLower(c.WorkerImplementation), "mock") {
-			return problem.InvalidConfiguration("ANVILKIT_WORKER_IMPLEMENTATION", "fake and mock workers are forbidden in production")
+			return problem.InvalidConfiguration("ANVILKIT_WORKER_IMPLEMENTATION", "fake and mock workers are admitted only under an explicit test profile")
 		}
-		for name, value := range map[string]string{"ANVILKIT_MODEL_IMPLEMENTATION": c.ModelImplementation, "ANVILKIT_TOOL_IMPLEMENTATION": c.ToolImplementation, "ANVILKIT_DOMAIN_IMPLEMENTATION": c.DomainImplementation, "ANVILKIT_CONTRACT_RUNTIME_IMPLEMENTATION": c.ContractRuntimeImplementation} {
+		for name, value := range map[string]string{"ANVILKIT_MODEL_IMPLEMENTATION": c.ModelImplementation, "ANVILKIT_TOOL_IMPLEMENTATION": c.ToolImplementation, "ANVILKIT_DOMAIN_IMPLEMENTATION": c.DomainImplementation, "ANVILKIT_CONTRACT_RUNTIME_IMPLEMENTATION": c.ContractRuntimeImplementation,
+			// A runtime that runs inside this process is not a separate
+			// execution plane, whatever it is called. Outside a test profile
+			// this service dispatches across a process boundary or it does
+			// not dispatch.
+			"ANVILKIT_RUNTIME_DISPATCHER": c.RuntimeDispatcher} {
 			lowered := strings.ToLower(value)
 			if strings.Contains(lowered, "fake") || strings.Contains(lowered, "mock") || strings.Contains(lowered, "controlled") {
-				return problem.InvalidConfiguration(name, "controlled, fake, and mock implementations are forbidden in production")
+				return problem.InvalidConfiguration(name, "controlled, fake, and mock implementations are admitted only under an explicit test profile (ANVILKIT_ENVIRONMENT declared as development or test)")
 			}
 		}
 		for _, provider := range c.ProviderPriority {
 			if strings.Contains(strings.ToLower(provider), "fake") || strings.Contains(strings.ToLower(provider), "mock") {
-				return problem.InvalidConfiguration("ANVILKIT_PROVIDER_PRIORITY", "fake and mock providers are forbidden in production")
+				return problem.InvalidConfiguration("ANVILKIT_PROVIDER_PRIORITY", "fake and mock providers are admitted only under an explicit test profile")
 			}
 		}
-		for name, target := range map[string]string{"ANVILKIT_AUTH_TRUST_SNAPSHOT": c.AuthTrustSnapshot, "ANVILKIT_AUTH_ISSUERS": strings.Join(c.AuthIssuers, ","), "ANVILKIT_MIGRATION_DATABASE_URL": c.MigrationDatabase, "ANVILKIT_CONTROL_DATABASE_URL": c.ControlDatabase, "ANVILKIT_WORKFLOW_DATABASE_URL": c.WorkflowDatabase, "ANVILKIT_EVENTS_DATABASE_URL": c.EventsDatabase, "ANVILKIT_ARTIFACTS_DATABASE_URL": c.ArtifactsDatabase, "ANVILKIT_EVALUATION_DATABASE_URL": c.EvaluationDatabase, "ANVILKIT_RECEIPT_JOURNAL_URL": c.ReceiptJournal.URL, "ANVILKIT_RECOVERY_REGISTER_URL": c.RecoveryRegister.URL, "ANVILKIT_AUTHORITATIVE_TIME_URL": c.AuthoritativeTime.URL, "ANVILKIT_AUTHORITATIVE_TIME_TRUST_REF": c.AuthoritativeTime.TrustRef, "ANVILKIT_AUTHORITATIVE_TIME_TRUST_ROOT": c.AuthoritativeTimeTrustRoot, "ANVILKIT_PROTECTED_AUDIT_URL": c.ProtectedAudit.URL, "ANVILKIT_POLICY_SNAPSHOT": c.PolicySnapshot, "ANVILKIT_CAPABILITY_SNAPSHOT": c.CapabilitySnapshot,
+		// Naming rules catch a value called "fake" or "controlled"; they do not
+		// catch one called "in-process-runtime". Outside a test profile only a
+		// transport that is known to cross a process boundary is accepted, and
+		// the composition root additionally refuses any implementation that
+		// does not declare itself fit for a deployed environment.
+		if c.RuntimeDispatcher != "" && c.RuntimeDispatcher != RuntimeDispatcherHTTP {
+			return problem.InvalidConfiguration("ANVILKIT_RUNTIME_DISPATCHER", "outside an explicit test profile this service dispatches to a separate runtime process; only the "+RuntimeDispatcherHTTP+" transport does that")
+		}
+	}
+	// A deployed environment executes only on attested releases, dispatches
+	// only across a process boundary, and authenticates both sides of that
+	// boundary with operator-distributed material.
+	if c.Deployed() {
+		for name, target := range map[string]string{
 			// The approved Agent definition catalog must be authenticated
-			// against an operator-distributed trust root in production. The
-			// repository ships no signing key, so production cannot fall back
-			// to trusting its own copy of the catalog.
-			"ANVILKIT_DEFINITION_TRUST_ROOT": c.DefinitionTrustRoot, "ANVILKIT_DEFINITION_ATTESTATION": c.DefinitionAttestation} {
+			// against an operator-distributed trust root. The repository ships
+			// no signing key, so a deployed service cannot fall back to
+			// trusting its own copy of the catalog.
+			"ANVILKIT_DEFINITION_TRUST_ROOT": c.DefinitionTrustRoot, "ANVILKIT_DEFINITION_ATTESTATION": c.DefinitionAttestation,
+			// A runtime release catalog this service signed for itself would
+			// approve whatever it happened to carry, so a deployed service
+			// requires operator-distributed material for releases exactly as
+			// it does for definitions.
+			"ANVILKIT_RUNTIME_TRUST_ROOT": c.RuntimeTrustRoot, "ANVILKIT_RUNTIME_ATTESTATION": c.RuntimeAttestation,
+			"ANVILKIT_RUNTIME_DISPATCHER": c.RuntimeDispatcher, "ANVILKIT_RUNTIME_ENDPOINTS": strings.Join(sortedKeys(c.RuntimeEndpoints), ","),
+			// The security boundary between this service and a runtime rests on
+			// two operator documents and one key. Without the credential key a
+			// runtime cannot tell an issued task from an invented one; without
+			// the two trust stores neither side can resolve the other's key,
+			// and a boundary where nobody verifies anything is not a boundary.
+			"ANVILKIT_RUNTIME_CREDENTIAL_KEY_ID":     c.RuntimeCredentialKeyID,
+			"ANVILKIT_RUNTIME_CREDENTIAL_TRUST_ROOT": c.RuntimeCredentialTrustRoot,
+			"ANVILKIT_RUNTIME_SIGNING_TRUST":         c.RuntimeSigningTrust} {
+			if target == "" {
+				return problem.InvalidConfiguration(name, "is required in a deployed environment")
+			}
+		}
+		if c.RuntimeDispatcher != RuntimeDispatcherHTTP {
+			return problem.InvalidConfiguration("ANVILKIT_RUNTIME_DISPATCHER", "a deployed environment dispatches to a separate runtime process; only the "+RuntimeDispatcherHTTP+" transport does that")
+		}
+		if !c.RuntimeCredentialKey.Present() {
+			return problem.InvalidConfiguration("ANVILKIT_RUNTIME_CREDENTIAL_KEY", "is required in a deployed environment: a task credential nobody signed is not authority")
+		}
+		if !c.SigningKey.Present() {
+			return problem.InvalidConfiguration("ANVILKIT_SIGNING_KEY", "a secret reference is required in a deployed environment")
+		}
+	}
+	if c.Environment == EnvironmentProduction {
+		for name, target := range map[string]string{"ANVILKIT_AUTH_TRUST_SNAPSHOT": c.AuthTrustSnapshot, "ANVILKIT_AUTH_ISSUERS": strings.Join(c.AuthIssuers, ","), "ANVILKIT_MIGRATION_DATABASE_URL": c.MigrationDatabase, "ANVILKIT_CONTROL_DATABASE_URL": c.ControlDatabase, "ANVILKIT_WORKFLOW_DATABASE_URL": c.WorkflowDatabase, "ANVILKIT_EVENTS_DATABASE_URL": c.EventsDatabase, "ANVILKIT_ARTIFACTS_DATABASE_URL": c.ArtifactsDatabase, "ANVILKIT_EVALUATION_DATABASE_URL": c.EvaluationDatabase, "ANVILKIT_RECEIPT_JOURNAL_URL": c.ReceiptJournal.URL, "ANVILKIT_RECOVERY_REGISTER_URL": c.RecoveryRegister.URL, "ANVILKIT_AUTHORITATIVE_TIME_URL": c.AuthoritativeTime.URL, "ANVILKIT_AUTHORITATIVE_TIME_TRUST_REF": c.AuthoritativeTime.TrustRef, "ANVILKIT_AUTHORITATIVE_TIME_TRUST_ROOT": c.AuthoritativeTimeTrustRoot, "ANVILKIT_PROTECTED_AUDIT_URL": c.ProtectedAudit.URL, "ANVILKIT_POLICY_SNAPSHOT": c.PolicySnapshot, "ANVILKIT_CAPABILITY_SNAPSHOT": c.CapabilitySnapshot} {
 			if target == "" {
 				return problem.InvalidConfiguration(name, "is required in production")
 			}
@@ -472,9 +614,6 @@ func (c Config) Validate() error {
 			if productionStandIn(target) {
 				return problem.InvalidConfiguration(name, "fake, mock, loopback, and local-development endpoints are forbidden in production")
 			}
-		}
-		if !c.SigningKey.Present() {
-			return problem.InvalidConfiguration("ANVILKIT_SIGNING_KEY", "a secret reference is required in production")
 		}
 	}
 	if c.OTelSampleRatio < 0 || c.OTelSampleRatio > 1 {
@@ -532,8 +671,14 @@ func (c Config) Validate() error {
 		return problem.InvalidConfiguration("ANVILKIT_CONTROLLED_MODEL_SCRIPT", "the controlled model script must carry between 1 and 16 steps")
 	}
 	for _, step := range c.ControlledModelScript {
-		if step != "final" && step != "need-input" && step != "tool-echo" {
-			return problem.InvalidConfiguration("ANVILKIT_CONTROLLED_MODEL_SCRIPT", "controlled model script steps must be final, need-input, or tool-echo")
+		switch step {
+		case "final", "final-page", "need-input", "tool-echo":
+		// The runtime-facing vocabulary: governed output documents for a
+		// dispatched Manager or Specialist, used by compositions whose
+		// dispatcher crosses a process boundary.
+		case "plan-need-input", "delegate-page-specialist", "compose-page":
+		default:
+			return problem.InvalidConfiguration("ANVILKIT_CONTROLLED_MODEL_SCRIPT", "controlled model script steps must be final, final-page, need-input, tool-echo, plan-need-input, delegate-page-specialist, or compose-page")
 		}
 	}
 	if c.RunTimeout <= 0 || c.DwellDeadline <= 0 || c.MaximumClockSkew < 0 || c.AuthRevalidation <= 0 {
@@ -733,4 +878,35 @@ func productionStandIn(endpoint Endpoint) bool {
 	}
 	address := net.ParseIP(host)
 	return address != nil && (address.IsLoopback() || address.IsUnspecified())
+}
+
+// RuntimeDispatcherHTTP is the transport that reaches a runtime release over
+// the canonical runtime boundary description. It is the only dispatcher
+// production accepts: everything else either runs in this process or has not
+// been shown to leave it.
+const RuntimeDispatcherHTTP = "http"
+
+// runtimeEndpoints parses the deployment's runtime address map, written as
+// unit=url pairs. An entry with no address is dropped rather than kept as a
+// unit that resolves to nothing.
+func runtimeEndpoints(value string) map[string]string {
+	endpoints := map[string]string{}
+	for _, pair := range strings.Split(value, ",") {
+		unit, address, found := strings.Cut(strings.TrimSpace(pair), "=")
+		unit, address = strings.TrimSpace(unit), strings.TrimSpace(address)
+		if !found || unit == "" || address == "" {
+			continue
+		}
+		endpoints[unit] = address
+	}
+	return endpoints
+}
+
+func sortedKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

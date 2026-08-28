@@ -171,6 +171,15 @@ func requiredProductionSettings() map[string]string {
 		"ANVILKIT_CAPABILITY_SNAPSHOT":           "/etc/anvilkit/capability.json",
 		"ANVILKIT_DEFINITION_TRUST_ROOT":         "/etc/anvilkit/definition-trust-root.json",
 		"ANVILKIT_DEFINITION_ATTESTATION":        "/etc/anvilkit/definition-catalog.dsse.json",
+		"ANVILKIT_RUNTIME_TRUST_ROOT":            "/etc/anvilkit/runtime-trust-root.json",
+		"ANVILKIT_RUNTIME_ATTESTATION":           "/etc/anvilkit/runtime-releases.dsse.json",
+		"ANVILKIT_RUNTIME_DISPATCHER":            "http",
+		"ANVILKIT_RUNTIME_ENDPOINTS":             "runtime.platform.page-change-manager=https://page-change-manager.internal",
+		"ANVILKIT_RUNTIME_CREDENTIAL_KEY":        "ref://anvilkit/runtime-credential-key",
+		"ANVILKIT_RUNTIME_CREDENTIAL_KEY_ID":     "urn:anvilkit:key:agent-service-task-credential",
+		"ANVILKIT_RUNTIME_CREDENTIAL_TRUST_ROOT": "/etc/anvilkit/task-credential-trust-root.json",
+		"ANVILKIT_RUNTIME_SIGNING_TRUST":         "/etc/anvilkit/runtime-signing-trust.json",
+		"ANVILKIT_SIGNING_KEY":                   "ref://anvilkit/signing-key",
 	}
 }
 
@@ -382,5 +391,137 @@ func TestProductionRequiresAnAuthenticatedTimeAuthority(t *testing.T) {
 				t.Fatalf("production configuration without %s was accepted: %v", missing, err)
 			}
 		})
+	}
+}
+
+// Controlled implementations and the in-process runtime are admitted only
+// under an explicit test profile: a development or test environment the
+// operator declared. An environment nobody declared is not one, and neither is
+// staging, which is held to production's rule because it is production-shaped.
+func TestControlledImplementationsRequireAnExplicitTestProfile(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		environment string
+		refused     bool
+	}{
+		"an undeclared environment": {"", true},
+		"staging":                   {"staging", true},
+		"development, declared":     {"development", false},
+		"test, declared":            {"test", false},
+	} {
+		for setting, value := range map[string]string{
+			"ANVILKIT_MODEL_IMPLEMENTATION":  "controlled-fake",
+			"ANVILKIT_RUNTIME_DISPATCHER":    "controlled-fake",
+			"ANVILKIT_WORKER_IMPLEMENTATION": "fake-worker",
+		} {
+			t.Run(name+"/"+setting, func(t *testing.T) {
+				t.Setenv("ANVILKIT_ENVIRONMENT", testCase.environment)
+				t.Setenv(setting, value)
+				if testCase.refused {
+					assertRefusedField(t, Load, setting)
+					return
+				}
+				if _, err := Load(); err != nil {
+					t.Fatalf("the declared %s profile refused a controlled implementation: %v", testCase.environment, err)
+				}
+			})
+		}
+	}
+	// A deployed environment must also carry the operator material the
+	// execution boundary rests on: staging cannot select from an unattested
+	// release set or dispatch without authenticating both sides.
+	t.Run("staging requires the runtime material", func(t *testing.T) {
+		t.Setenv("ANVILKIT_ENVIRONMENT", "staging")
+		_, err := Load()
+		var details problem.Details
+		if !errors.As(err, &details) {
+			t.Fatalf("staging without operator material was accepted: %v", err)
+		}
+		deployed := map[string]bool{
+			"ANVILKIT_DEFINITION_TRUST_ROOT": true, "ANVILKIT_DEFINITION_ATTESTATION": true,
+			"ANVILKIT_RUNTIME_TRUST_ROOT": true, "ANVILKIT_RUNTIME_ATTESTATION": true,
+			"ANVILKIT_RUNTIME_DISPATCHER": true, "ANVILKIT_RUNTIME_ENDPOINTS": true,
+			"ANVILKIT_RUNTIME_CREDENTIAL_KEY_ID": true, "ANVILKIT_RUNTIME_CREDENTIAL_TRUST_ROOT": true,
+			"ANVILKIT_RUNTIME_SIGNING_TRUST": true,
+		}
+		for field := range details.Fields {
+			if deployed[field] {
+				return
+			}
+		}
+		t.Fatalf("staging was refused for %v, not for the execution plane's operator material", details.Fields)
+	})
+}
+
+// A production deployment must name operator-distributed material for the
+// runtime releases it selects from, and must dispatch across a process
+// boundary. A runtime that runs inside this process is not a separate
+// execution plane, whatever the value is called.
+func TestProductionRefusesUnattestedOrInProcessRuntimeConfiguration(t *testing.T) {
+	for _, missing := range []string{"ANVILKIT_RUNTIME_TRUST_ROOT", "ANVILKIT_RUNTIME_ATTESTATION", "ANVILKIT_RUNTIME_DISPATCHER", "ANVILKIT_RUNTIME_ENDPOINTS"} {
+		t.Run(missing, func(t *testing.T) {
+			for name, value := range requiredProductionSettings() {
+				if name == missing {
+					continue
+				}
+				t.Setenv(name, value)
+			}
+			t.Setenv(missing, "")
+			// The refusal must name the setting under test. A production
+			// configuration fixture is incomplete in other ways too, so an
+			// assertion that merely saw *an* error would pass whatever this
+			// code did.
+			assertRefusedField(t, Load, missing)
+		})
+	}
+	for _, dispatcher := range []string{"controlled", "in-process-runtime", "fake-runtime", "mock-runtime"} {
+		t.Run(dispatcher, func(t *testing.T) {
+			for name, value := range requiredProductionSettings() {
+				t.Setenv(name, value)
+			}
+			t.Setenv("ANVILKIT_RUNTIME_DISPATCHER", dispatcher)
+			assertRefusedField(t, Load, "ANVILKIT_RUNTIME_DISPATCHER")
+		})
+	}
+}
+
+// The execution boundary is only a boundary if both sides authenticate across
+// it. Production must therefore name the key it mints task credentials with,
+// the trust root that admits one back, and the trust store that attributes a
+// returned result to a release — a deployment missing any one of the three has
+// a dispatch path where something is taken on trust rather than proven.
+func TestProductionRefusesADispatchBoundaryNobodyAuthenticates(t *testing.T) {
+	for _, missing := range []string{
+		"ANVILKIT_RUNTIME_CREDENTIAL_KEY",
+		"ANVILKIT_RUNTIME_CREDENTIAL_KEY_ID",
+		"ANVILKIT_RUNTIME_CREDENTIAL_TRUST_ROOT",
+		"ANVILKIT_RUNTIME_SIGNING_TRUST",
+	} {
+		t.Run(missing, func(t *testing.T) {
+			for name, value := range requiredProductionSettings() {
+				if name == missing {
+					continue
+				}
+				t.Setenv(name, value)
+			}
+			t.Setenv(missing, "")
+			assertRefusedField(t, Load, missing)
+		})
+	}
+}
+
+// assertRefusedField proves the configuration was refused for the named
+// setting, not merely that loading failed.
+func assertRefusedField(t *testing.T, load func() (Config, error), field string) {
+	t.Helper()
+	_, err := load()
+	if err == nil {
+		t.Fatalf("configuration was accepted with %s at fault", field)
+	}
+	var details problem.Details
+	if !errors.As(err, &details) {
+		t.Fatalf("configuration error is not a problem: %v", err)
+	}
+	if _, named := details.Fields[field]; !named {
+		t.Fatalf("configuration was refused for %v, not for %s", details.Fields, field)
 	}
 }

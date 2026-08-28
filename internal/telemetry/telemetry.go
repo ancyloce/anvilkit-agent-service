@@ -16,6 +16,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/ancyloce/anvilkit-agent-service/internal/agent/runner"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events/spool"
 )
@@ -92,6 +93,25 @@ type Telemetry struct {
 	spoolDeferred   metric.Int64Counter
 	spoolSetAside   metric.Int64Counter
 	spoolUnsettable metric.Int64Counter
+	dispatch        dispatchInstruments
+}
+
+// dispatchInstruments is the metric surface of the dispatch path. Every label
+// it records is a closed vocabulary the runner's observer port already
+// bounded: a runtime unit from the approved catalog, an outcome, stage,
+// disposition, or status from a fixed set, a reason code from the governed
+// registry. No task, run, attempt, fence, token, or signature value is ever a
+// label here.
+type dispatchInstruments struct {
+	dispatches      metric.Int64Counter
+	dispatchWait    metric.Float64Histogram
+	attemptsActive  metric.Int64UpDownCounter
+	superseded      metric.Int64Counter
+	rejections      metric.Int64Counter
+	results         metric.Int64Counter
+	resultLatency   metric.Float64Histogram
+	attemptsSettled metric.Int64Counter
+	attemptUsage    metric.Int64Counter
 }
 
 func New(serviceName string, exporter sdktrace.SpanExporter, redactor *Redactor) (*Telemetry, error) {
@@ -157,8 +177,111 @@ func newTelemetry(serviceName string, exporter sdktrace.SpanExporter, redactor *
 	if err != nil {
 		return nil, fmt.Errorf("create stream cursor spool unreadable-record counter: %w", err)
 	}
-	return &Telemetry{provider: provider, metricProvider: metricProvider, spoolHeld: spoolHeld, spoolUnreadable: spoolUnreadable, spoolOldest: spoolOldest, spoolPlaced: spoolPlaced, spoolDeferred: spoolDeferred, spoolSetAside: spoolSetAside, spoolUnsettable: spoolUnsettable, tracer: provider.Tracer("anvilkit-agent-service"), propagator: propagation.TraceContext{}, redactor: redactor, workCounter: workCounter, duration: duration, eventVisibility: eventVisibility, cursorFailures: cursorFailures}, nil
+	dispatch, err := newDispatchInstruments(meter)
+	if err != nil {
+		return nil, err
+	}
+	return &Telemetry{provider: provider, metricProvider: metricProvider, spoolHeld: spoolHeld, spoolUnreadable: spoolUnreadable, spoolOldest: spoolOldest, spoolPlaced: spoolPlaced, spoolDeferred: spoolDeferred, spoolSetAside: spoolSetAside, spoolUnsettable: spoolUnsettable, tracer: provider.Tracer("anvilkit-agent-service"), propagator: propagation.TraceContext{}, redactor: redactor, workCounter: workCounter, duration: duration, eventVisibility: eventVisibility, cursorFailures: cursorFailures, dispatch: dispatch}, nil
 }
+
+// The dispatch metric names, under the service's own namespace.
+const (
+	metricDispatches      = "anvilkit_agent_service_runtime_dispatch_total"
+	metricDispatchWait    = "anvilkit_agent_service_runtime_dispatch_duration_seconds"
+	metricAttemptsActive  = "anvilkit_agent_service_runtime_attempts_active"
+	metricSuperseded      = "anvilkit_agent_service_runtime_attempts_superseded_total"
+	metricRejections      = "anvilkit_agent_service_runtime_result_rejections_total"
+	metricResults         = "anvilkit_agent_service_runtime_results_total"
+	metricResultLatency   = "anvilkit_agent_service_runtime_result_duration_seconds"
+	metricAttemptsSettled = "anvilkit_agent_service_runtime_attempts_settled_total"
+	metricAttemptUsage    = "anvilkit_agent_service_runtime_attempt_usage_total"
+)
+
+func newDispatchInstruments(meter metric.Meter) (dispatchInstruments, error) {
+	var instruments dispatchInstruments
+	var err error
+	if instruments.dispatches, err = meter.Int64Counter(metricDispatches); err != nil {
+		return instruments, fmt.Errorf("create runtime dispatch counter: %w", err)
+	}
+	if instruments.dispatchWait, err = meter.Float64Histogram(metricDispatchWait, metric.WithUnit("s")); err != nil {
+		return instruments, fmt.Errorf("create runtime dispatch duration histogram: %w", err)
+	}
+	if instruments.attemptsActive, err = meter.Int64UpDownCounter(metricAttemptsActive); err != nil {
+		return instruments, fmt.Errorf("create active attempts counter: %w", err)
+	}
+	if instruments.superseded, err = meter.Int64Counter(metricSuperseded); err != nil {
+		return instruments, fmt.Errorf("create superseded attempts counter: %w", err)
+	}
+	if instruments.rejections, err = meter.Int64Counter(metricRejections); err != nil {
+		return instruments, fmt.Errorf("create result rejection counter: %w", err)
+	}
+	if instruments.results, err = meter.Int64Counter(metricResults); err != nil {
+		return instruments, fmt.Errorf("create runtime result counter: %w", err)
+	}
+	if instruments.resultLatency, err = meter.Float64Histogram(metricResultLatency, metric.WithUnit("s")); err != nil {
+		return instruments, fmt.Errorf("create runtime result duration histogram: %w", err)
+	}
+	if instruments.attemptsSettled, err = meter.Int64Counter(metricAttemptsSettled); err != nil {
+		return instruments, fmt.Errorf("create settled attempts counter: %w", err)
+	}
+	if instruments.attemptUsage, err = meter.Int64Counter(metricAttemptUsage); err != nil {
+		return instruments, fmt.Errorf("create attempt usage counter: %w", err)
+	}
+	return instruments, nil
+}
+
+// The dispatch path's observer. See runner.DispatchObserver for the bound on
+// every value these record.
+
+func (t *Telemetry) ObserveDispatchStarted(ctx context.Context, runtimeUnitID string) {
+	t.dispatch.attemptsActive.Add(ctx, 1, metric.WithAttributes(attribute.String("runtime_unit", runtimeUnitID)))
+}
+
+func (t *Telemetry) ObserveDispatch(ctx context.Context, runtimeUnitID string, outcome runner.DispatchOutcome, wait time.Duration) {
+	unit := attribute.String("runtime_unit", runtimeUnitID)
+	t.dispatch.attemptsActive.Add(ctx, -1, metric.WithAttributes(unit))
+	t.dispatch.dispatches.Add(ctx, 1, metric.WithAttributes(unit, attribute.String("outcome", string(outcome))))
+	if wait < 0 {
+		wait = 0
+	}
+	t.dispatch.dispatchWait.Record(ctx, wait.Seconds(), metric.WithAttributes(unit))
+}
+
+func (t *Telemetry) ObserveReplacement(ctx context.Context, runtimeUnitID, reason string) {
+	t.dispatch.superseded.Add(ctx, 1, metric.WithAttributes(attribute.String("runtime_unit", runtimeUnitID), attribute.String("reason", reason)))
+}
+
+func (t *Telemetry) ObserveRejection(ctx context.Context, stage runner.RejectionStage, reason string) {
+	t.dispatch.rejections.Add(ctx, 1, metric.WithAttributes(attribute.String("stage", string(stage)), attribute.String("reason", reason)))
+}
+
+func (t *Telemetry) ObserveResult(ctx context.Context, runtimeUnitID, outcome string, latency time.Duration) {
+	unit := attribute.String("runtime_unit", runtimeUnitID)
+	t.dispatch.results.Add(ctx, 1, metric.WithAttributes(unit, attribute.String("outcome", outcome)))
+	if latency < 0 {
+		latency = 0
+	}
+	t.dispatch.resultLatency.Record(ctx, latency.Seconds(), metric.WithAttributes(unit))
+}
+
+func (t *Telemetry) ObserveAttemptUsage(ctx context.Context, runtimeUnitID, status, reasonCode string, usage runner.AttemptUsage) {
+	unit := attribute.String("runtime_unit", runtimeUnitID)
+	t.dispatch.attemptsSettled.Add(ctx, 1, metric.WithAttributes(unit, attribute.String("status", status), attribute.String("reason_code", reasonCode)))
+	for meterName, value := range map[string]int64{
+		"model_calls":   usage.ModelCalls,
+		"tool_calls":    usage.ToolCalls,
+		"input_tokens":  usage.InputTokens,
+		"output_tokens": usage.OutputTokens,
+		"duration_ms":   usage.DurationMilliseconds,
+		"cost_micros":   usage.CostMicros,
+	} {
+		if value > 0 {
+			t.dispatch.attemptUsage.Add(ctx, value, metric.WithAttributes(unit, attribute.String("meter", meterName)))
+		}
+	}
+}
+
+var _ runner.DispatchObserver = (*Telemetry)(nil)
 
 func (t *Telemetry) Start(ctx context.Context, name string, fields Fields) (context.Context, trace.Span) {
 	attributes, err := fields.attributes(t.redactor)
@@ -185,27 +308,30 @@ func (t *Telemetry) Observe(ctx context.Context, fields Fields) error {
 	}
 	return nil
 }
-func (t *Telemetry) ObserveEventVisibility(ctx context.Context, workspaceID, projectID, runID string, duration time.Duration) {
+
+// ObserveEventVisibility records how long an authorized event took to become
+// visible. The run is deliberately not a label: a run identity is unbounded,
+// and a metric keyed by one grows with every run the service has ever served.
+func (t *Telemetry) ObserveEventVisibility(ctx context.Context, workspaceID, projectID, _ string, duration time.Duration) {
 	if duration < 0 {
 		duration = 0
 	}
-	t.eventVisibility.Record(ctx, duration.Seconds(), metric.WithAttributes(attribute.Bool("authorized", true), attribute.String("workspace.id", workspaceID), attribute.String("project.id", projectID), attribute.String("run.id", runID)))
+	t.eventVisibility.Record(ctx, duration.Seconds(), metric.WithAttributes(attribute.Bool("authorized", true), attribute.String("workspace.id", workspaceID), attribute.String("project.id", projectID)))
 }
 
 // ObserveCursorRecordFailure reports one disconnect record the durable
 // recorder could not persist. The record is the only account of what a
 // disconnected client actually received, so losing one is an operational fact
-// an operator can act on: the counter names the run and connection it belongs
-// to, and the cursor it would have recorded, which is exactly what recovering
-// it by hand needs. The failure itself carries no detail beyond its category
-// — a database error string is not a field this projection admits.
-func (t *Telemetry) ObserveCursorRecordFailure(ctx context.Context, scope events.Scope, runID, connectionID, lastEventID, reason string, _ error) {
+// an operator can act on. The counter is keyed by the tenant scope and the
+// disconnect category only: the run, the connection, and the cursor it would
+// have recorded are unbounded identities, and they belong in the structured
+// log the caller writes beside this count, not on a metric label. The failure
+// itself carries no detail beyond its category — a database error string is
+// not a field this projection admits.
+func (t *Telemetry) ObserveCursorRecordFailure(ctx context.Context, scope events.Scope, _, _, _, reason string, _ error) {
 	t.cursorFailures.Add(ctx, 1, metric.WithAttributes(
 		attribute.String("workspace.id", scope.WorkspaceID),
 		attribute.String("project.id", scope.ProjectID),
-		attribute.String("run.id", runID),
-		attribute.String("connection.id", connectionID),
-		attribute.String("cursor.last_event_id", lastEventID),
 		attribute.String("disconnect.reason", reason),
 	))
 }
