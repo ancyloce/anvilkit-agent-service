@@ -4,6 +4,8 @@
 # Binaries for programs and plugins
 /agent-service
 /protected-audit-provisioner
+/runtime-release
+
 *.exe
 *.exe~
 *.dll
