@@ -39,7 +39,6 @@ func TestProductionClosureCarriesEveryRequiredModule(t *testing.T) {
 		"internal/journal",      // durable receipts
 		"internal/modelgateway", // provider-neutral model gateway
 		"internal/modelgateway/postgres",
-		"internal/planning",  // attempt budgets
 		"internal/recovery",  // non-rollback recovery epoch
 		"internal/runs",      // run aggregate and transitions
 		"internal/scheduler", // fenced task dispatch
@@ -63,5 +62,14 @@ func TestProductionClosureCarriesEveryRequiredModule(t *testing.T) {
 	// The in-memory proof engine is test scaffolding and must never ship.
 	if strings.Contains(closure, "anvilkit-agent-service/internal/workflow/memory\n") {
 		t.Fatal("the in-memory workflow engine leaked into the production closure")
+	}
+	// The in-process runtime stand-in, and the planning engine only it
+	// reasons with, are test-profile material: a production binary that
+	// linked either would carry an execution path that never crosses the
+	// runtime boundary.
+	for _, excluded := range []string{"internal/runtimes/inprocess", "internal/planning"} {
+		if strings.Contains(closure, "anvilkit-agent-service/"+excluded+"\n") {
+			t.Fatalf("%s leaked into the production closure", excluded)
+		}
 	}
 }

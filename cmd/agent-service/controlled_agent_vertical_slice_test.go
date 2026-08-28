@@ -47,6 +47,9 @@ import (
 func TestControlledAgentVerticalSlice(t *testing.T) {
 	base := os.Getenv("POSTGRES_TEST_URL")
 	if base == "" {
+		if os.Getenv("ANVILKIT_REQUIRE_POSTGRES_PROOFS") != "" {
+			t.Fatal("POSTGRES_TEST_URL is not set but ANVILKIT_REQUIRE_POSTGRES_PROOFS requires these proofs; point POSTGRES_TEST_URL at a disposable PostgreSQL database")
+		}
 		t.Skip("POSTGRES_TEST_URL is not set")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -64,10 +67,11 @@ func TestControlledAgentVerticalSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The declared definition is the approved catalog manager; the run
+	// The declared definition is the approved page-change manager — the
+	// pagix-page definition that owns the page-change operation — and the run
 	// authority file pins the same reference, so creation, execution, and
 	// issuance all govern one identity.
-	managerID, managerDigest := managerReference(t)
+	managerID, managerDigest := pageChangeManagerReference(t)
 	authorityPath := writeRunAuthority(t, managerID, managerDigest)
 	trustPath, bearer, reviewerBearer := mintVerifiedBearer(t)
 
@@ -83,15 +87,22 @@ func TestControlledAgentVerticalSlice(t *testing.T) {
 		"ANVILKIT_TOOL_IMPLEMENTATION":             "controlled-fake",
 		"ANVILKIT_DOMAIN_IMPLEMENTATION":           "controlled-fake",
 		"ANVILKIT_CONTRACT_RUNTIME_IMPLEMENTATION": "controlled-fake",
-		"ANVILKIT_WORKER_IMPLEMENTATION":           "controlled-fake",
-		"ANVILKIT_CONTROLLED_MODEL_SCRIPT":         "need-input,tool-echo,final",
-		"ANVILKIT_SIGNING_KEY":                     "slice-signing-material-0123456789",
-		"ANVILKIT_ENCRYPTION_KEY":                  "slice-encryption-material-0123456789",
-		"ANVILKIT_RUN_AUTHORITY_FILE":              authorityPath,
-		"ANVILKIT_AUTH_TRUST_SNAPSHOT":             trustPath,
-		"ANVILKIT_STREAM_CURSOR_SPOOL":             filepath.Join(t.TempDir(), "stream-cursors"),
-		"ANVILKIT_AUTH_ISSUERS":                    "issuer",
-		"ANVILKIT_EXECUTOR_ID":                     "slice-executor-1",
+		// The runtime transport is selected explicitly, as every port is.
+		// These compositions run the turn on the in-process stand-in: the
+		// whole dispatch path is exercised — task, attempt, fence, signed
+		// result, fenced commit — without a released unit to deploy. Nothing
+		// here may be composed in production, and the configuration guard
+		// refuses it there by name.
+		"ANVILKIT_RUNTIME_DISPATCHER":      "controlled-fake",
+		"ANVILKIT_WORKER_IMPLEMENTATION":   "controlled-fake",
+		"ANVILKIT_CONTROLLED_MODEL_SCRIPT": "need-input,tool-echo,final-page",
+		"ANVILKIT_SIGNING_KEY":             "slice-signing-material-0123456789",
+		"ANVILKIT_ENCRYPTION_KEY":          "slice-encryption-material-0123456789",
+		"ANVILKIT_RUN_AUTHORITY_FILE":      authorityPath,
+		"ANVILKIT_AUTH_TRUST_SNAPSHOT":     trustPath,
+		"ANVILKIT_STREAM_CURSOR_SPOOL":     filepath.Join(t.TempDir(), "stream-cursors"),
+		"ANVILKIT_AUTH_ISSUERS":            "issuer",
+		"ANVILKIT_EXECUTOR_ID":             "slice-executor-1",
 	}
 	for name, value := range environment {
 		t.Setenv(name, value)
@@ -127,7 +138,7 @@ func TestControlledAgentVerticalSlice(t *testing.T) {
 	}
 	defer closeAudit()
 	handle := &runtimeHandle{}
-	core, err := buildRuntimeCore(ctx, cfg, pools, guard, receipts, clock, protectedAudit, handle)
+	core, err := buildRuntimeCore(ctx, cfg, pools, guard, receipts, clock, protectedAudit, handle, controlledStandIns(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -583,9 +594,21 @@ func isolatedSliceDatabase(t *testing.T, ctx context.Context, base string) strin
 	return parsed.String()
 }
 
+// pageChangeManagerReference reads the approved page-change manager — the
+// pagix-page definition run creation admits for the page-change operation.
+func pageChangeManagerReference(t *testing.T) (string, string) {
+	t.Helper()
+	return definitionReference(t, "../../internal/agent/definitions/definition.platform.page-change-manager.json")
+}
+
 func managerReference(t *testing.T) (string, string) {
 	t.Helper()
-	raw, err := os.ReadFile("../../internal/agent/definitions/definition.platform.manager.json")
+	return definitionReference(t, "../../internal/agent/definitions/definition.platform.manager.json")
+}
+
+func definitionReference(t *testing.T, path string) (string, string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}

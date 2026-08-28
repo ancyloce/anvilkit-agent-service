@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/url"
@@ -132,6 +133,10 @@ func TestCommitAuthorityFailsClosedWithoutSigningKeyOrDurableStores(t *testing.T
 // unattested or unresolvable policy reference looks like to selection.
 type missingModelPolicies struct{}
 
+func (missingModelPolicies) ResolveDelegate(string) (agent.Definition, error) {
+	return agent.Definition{}, fmt.Errorf("no approved definitions")
+}
+
 func (missingModelPolicies) ModelPolicy(string, string) (agent.ModelPolicy, bool) {
 	return agent.ModelPolicy{}, false
 }
@@ -151,27 +156,27 @@ func TestProductionConfigurationRejectsControlledImplementations(t *testing.T) {
 	}
 	base.ModelImplementation = execution.ControlledImplementation
 	err := base.Validate()
-	if err == nil || !strings.Contains(err.Error(), "forbidden in production") {
+	if err == nil || !strings.Contains(err.Error(), "admitted only under an explicit test profile") {
 		t.Fatalf("production must reject controlled model implementation, got %v", err)
 	}
 	base.ModelImplementation = ""
 	base.ToolImplementation = "fake-tools"
-	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "forbidden in production") {
+	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "admitted only under an explicit test profile") {
 		t.Fatalf("production must reject fake tool implementation, got %v", err)
 	}
 	base.ToolImplementation = ""
 	base.DomainImplementation = "mock-domain"
-	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "forbidden in production") {
+	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "admitted only under an explicit test profile") {
 		t.Fatalf("production must reject mock domain implementation, got %v", err)
 	}
 	base.DomainImplementation = ""
 	base.ContractRuntimeImplementation = execution.ControlledImplementation
-	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "forbidden in production") {
+	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "admitted only under an explicit test profile") {
 		t.Fatalf("production must reject the controlled contract runtime, got %v", err)
 	}
 	base.ContractRuntimeImplementation = ""
 	base.WorkerImplementation = execution.ControlledImplementation
-	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "forbidden in production") {
+	if err := base.Validate(); err == nil || !strings.Contains(err.Error(), "admitted only under an explicit test profile") {
 		t.Fatalf("production must reject the controlled worker fabric, got %v", err)
 	}
 }
@@ -241,32 +246,59 @@ func (stubProtectedAudit) ResumeMutation(context.Context, string, securityaudit.
 // holds because the implementation has to say what it is, and saying nothing
 // is a refusal.
 func TestProductionRefusesUndeclaredAndControlledImplementations(t *testing.T) {
+	production := config.Config{Environment: config.EnvironmentProduction, EnvironmentDeclared: true}
 	controlled := execution.NewControlledToolExecutor()
 	if got := execution.EligibilityOf(controlled); got != execution.ControlledOnly {
 		t.Fatalf("the controlled tool executor declares %v, want a controlled-only declaration", got)
 	}
-	if err := requireProductionEligible(config.EnvironmentProduction, "ANVILKIT_TOOL_IMPLEMENTATION", controlled); err == nil {
+	if err := requireEligible(production, "ANVILKIT_TOOL_IMPLEMENTATION", controlled); err == nil {
 		t.Fatal("production composed a controlled implementation")
 	}
 	// An implementation that declares nothing at all is refused too: the
 	// default is a refusal, so a port or an implementation added later fails
 	// closed without anyone remembering to list it.
-	if err := requireProductionEligible(config.EnvironmentProduction, "ANVILKIT_TOOL_IMPLEMENTATION", silentImplementation{}); err == nil {
+	if err := requireEligible(production, "ANVILKIT_TOOL_IMPLEMENTATION", silentImplementation{}); err == nil {
 		t.Fatal("production composed an implementation that declared nothing about itself")
 	}
-	if err := requireProductionEligible(config.EnvironmentProduction, "ANVILKIT_TOOL_IMPLEMENTATION", nil); err == nil {
+	if err := requireEligible(production, "ANVILKIT_TOOL_IMPLEMENTATION", nil); err == nil {
 		t.Fatal("production composed a missing implementation")
 	}
 	// Only a positive declaration passes.
-	if err := requireProductionEligible(config.EnvironmentProduction, "ANVILKIT_TOOL_IMPLEMENTATION", eligibleImplementation{}); err != nil {
+	if err := requireEligible(production, "ANVILKIT_TOOL_IMPLEMENTATION", eligibleImplementation{}); err != nil {
 		t.Fatalf("production refused an implementation that declared itself fit: %v", err)
 	}
-	// Outside production the declaration decides nothing: controlled
-	// implementations are exactly what those environments are for.
-	for _, environment := range []config.Environment{config.EnvironmentDevelopment, config.EnvironmentTest, config.EnvironmentStaging} {
-		if err := requireProductionEligible(environment, "ANVILKIT_TOOL_IMPLEMENTATION", controlled); err != nil {
-			t.Fatalf("%s refused a controlled implementation: %v", environment, err)
+	// Under an explicit test profile the declaration decides nothing:
+	// controlled implementations are exactly what that profile is for.
+	for _, environment := range []config.Environment{config.EnvironmentDevelopment, config.EnvironmentTest} {
+		if err := requireEligible(config.Config{Environment: environment, EnvironmentDeclared: true}, "ANVILKIT_TOOL_IMPLEMENTATION", controlled); err != nil {
+			t.Fatalf("the declared %s profile refused a controlled implementation: %v", environment, err)
 		}
+	}
+	// Staging is production-shaped and is held to production's rule, and an
+	// environment nobody declared is not a test profile because nobody said
+	// it was.
+	for name, cfg := range map[string]config.Config{
+		"staging":                   {Environment: config.EnvironmentStaging, EnvironmentDeclared: true},
+		"an undeclared environment": {Environment: config.EnvironmentDevelopment},
+	} {
+		if err := requireEligible(cfg, "ANVILKIT_TOOL_IMPLEMENTATION", controlled); err == nil {
+			t.Fatalf("%s composed a controlled implementation", name)
+		}
+	}
+}
+
+// The production binary carries no in-process runtime. The stand-in is
+// supplied through the composition seam by test code or not at all, so a
+// configuration that names it is refused as naming a transport this build does
+// not have — before any eligibility gate is even consulted.
+func TestTheProductionBinaryCarriesNoInProcessRuntime(t *testing.T) {
+	cfg := config.Config{Environment: config.EnvironmentDevelopment, EnvironmentDeclared: true, RuntimeDispatcher: execution.ControlledImplementation}
+	standIn, err := composeInProcessRuntime(cfg, runapp.SystemClock{}, executionStandIns{}, nil, nil, nil)
+	if err != nil || standIn != nil {
+		t.Fatalf("a composition with no stand-in supplied built one: %v %v", standIn, err)
+	}
+	if _, err := selectRuntimeDispatcher(cfg, runapp.SystemClock{}, nil); err == nil || !strings.Contains(err.Error(), "does not carry") {
+		t.Fatalf("the in-process dispatcher was selected without a stand-in: %v", err)
 	}
 }
 
@@ -285,7 +317,7 @@ func TestFencedDispatchInheritsTheEligibilityOfTheWorkerItDispatchesTo(t *testin
 	if got := execution.EligibilityOf(fenced); got != execution.ControlledOnly {
 		t.Fatalf("fenced dispatch over a controlled worker declares %v, want the worker's own declaration", got)
 	}
-	if err := requireProductionEligible(config.EnvironmentProduction, "ANVILKIT_WORKER_IMPLEMENTATION", fenced); err == nil {
+	if err := requireEligible(config.Config{Environment: config.EnvironmentProduction, EnvironmentDeclared: true}, "ANVILKIT_WORKER_IMPLEMENTATION", fenced); err == nil {
 		t.Fatal("production composed fenced dispatch over a controlled worker")
 	}
 }
@@ -361,6 +393,9 @@ func (stubUsageAcceptor) Accept(context.Context, usage.Observation) (bool, error
 func TestTheProtectedAuditRunsOnAnAppendOnlyRole(t *testing.T) {
 	base := os.Getenv("POSTGRES_TEST_URL")
 	if base == "" {
+		if os.Getenv("ANVILKIT_REQUIRE_POSTGRES_PROOFS") != "" {
+			t.Fatal("POSTGRES_TEST_URL is not set but ANVILKIT_REQUIRE_POSTGRES_PROOFS requires these proofs; point POSTGRES_TEST_URL at a disposable PostgreSQL database")
+		}
 		t.Skip("POSTGRES_TEST_URL is not set")
 	}
 	ctx := context.Background()

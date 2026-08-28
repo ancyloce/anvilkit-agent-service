@@ -92,15 +92,22 @@ func restartEnvironment(databaseURL, authorityPath, trustPath, cursorSpool, scri
 		"ANVILKIT_TOOL_IMPLEMENTATION":             "controlled-fake",
 		"ANVILKIT_DOMAIN_IMPLEMENTATION":           "controlled-fake",
 		"ANVILKIT_CONTRACT_RUNTIME_IMPLEMENTATION": "controlled-fake",
-		"ANVILKIT_WORKER_IMPLEMENTATION":           "controlled-fake",
-		"ANVILKIT_CONTROLLED_MODEL_SCRIPT":         script,
-		"ANVILKIT_SIGNING_KEY":                     "restart-signing-material-0123456789",
-		"ANVILKIT_ENCRYPTION_KEY":                  "restart-encryption-material-0123456789",
-		"ANVILKIT_RUN_AUTHORITY_FILE":              authorityPath,
-		"ANVILKIT_EXECUTOR_ID":                     "restart-executor-1",
-		"ANVILKIT_DOMAIN_RECONCILE_LIMIT":          "2",
-		"ANVILKIT_DOMAIN_RETRY_BASE":               "100ms",
-		"ANVILKIT_DOMAIN_RETRY_CAP":                "200ms",
+		// The runtime transport is selected explicitly, as every port is.
+		// These compositions run the turn on the in-process stand-in: the
+		// whole dispatch path is exercised — task, attempt, fence, signed
+		// result, fenced commit — without a released unit to deploy. Nothing
+		// here may be composed in production, and the configuration guard
+		// refuses it there by name.
+		"ANVILKIT_RUNTIME_DISPATCHER":      "controlled-fake",
+		"ANVILKIT_WORKER_IMPLEMENTATION":   "controlled-fake",
+		"ANVILKIT_CONTROLLED_MODEL_SCRIPT": script,
+		"ANVILKIT_SIGNING_KEY":             "restart-signing-material-0123456789",
+		"ANVILKIT_ENCRYPTION_KEY":          "restart-encryption-material-0123456789",
+		"ANVILKIT_RUN_AUTHORITY_FILE":      authorityPath,
+		"ANVILKIT_EXECUTOR_ID":             "restart-executor-1",
+		"ANVILKIT_DOMAIN_RECONCILE_LIMIT":  "2",
+		"ANVILKIT_DOMAIN_RETRY_BASE":       "100ms",
+		"ANVILKIT_DOMAIN_RETRY_CAP":        "200ms",
 	}
 }
 
@@ -142,7 +149,7 @@ func composeForRestart(ctx context.Context, t *testing.T, mutate func(*execution
 	}
 	defer closeAudit()
 	handle := &runtimeHandle{}
-	core, executionConfig, err := buildRuntimeDependencies(ctx, cfg, pools, guard, receipts, clock, protectedAudit, handle)
+	core, executionConfig, err := buildRuntimeDependencies(ctx, cfg, pools, guard, receipts, clock, protectedAudit, handle, controlledStandIns(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +319,7 @@ func TestRestartCrashWorkload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outcome, err := composition.runService(t).Create(ctx, runs.CreateInput{Scope: scope, Key: "restart-create-1", ClaimedDigest: digest, Traceparent: restartTrace, Raw: raw, Authority: current})
+	outcome, err := composition.runService(t).Create(ctx, runs.CreateInput{Scope: scope, Key: "restart-create-1", ClaimedDigest: digest, Traceparent: restartTrace, Raw: raw, Authority: current, RuntimeBinding: testRuntimeBinding(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,6 +343,9 @@ func TestRestartCrashWorkload(t *testing.T) {
 func TestRestartRecoveryAcrossProductionCheckpoints(t *testing.T) {
 	base := os.Getenv("POSTGRES_TEST_URL")
 	if base == "" {
+		if os.Getenv("ANVILKIT_REQUIRE_POSTGRES_PROOFS") != "" {
+			t.Fatal("POSTGRES_TEST_URL is not set but ANVILKIT_REQUIRE_POSTGRES_PROOFS requires these proofs; point POSTGRES_TEST_URL at a disposable PostgreSQL database")
+		}
 		t.Skip("POSTGRES_TEST_URL is not set")
 	}
 	for _, checkpoint := range restartCheckpoints() {
@@ -751,3 +761,27 @@ func resolveEscalationOverAPI(ctx context.Context, t *testing.T, composition *re
 // restartEvidenceBasis is the bounded evidence reference the restart proof's
 // operator recovery cites.
 const restartEvidenceBasis = "anvilkit://evidence/domain-owner-audit/restart-proof-no-record"
+
+// testRuntimeBinding is the server-owned runtime pin a create path copies from
+// the definition the registry resolved. Every run carries one: a run with no
+// pinned runtime release could be served by whatever runtime answered.
+//
+// It is read from the definition rather than written here. A hand-written
+// binding of synthetic digests was only ever viable while nothing verified where
+// a result came from — a run pinned to a release nobody approved is one whose
+// results cannot be attributed to anything, so the fixture pins a release that
+// actually exists, which is what production does.
+func testRuntimeBinding(t *testing.T) json.RawMessage {
+	t.Helper()
+	raw, err := os.ReadFile("../../internal/agent/definitions/definition.platform.manager.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		RuntimeBinding json.RawMessage `json:"runtimeBinding"`
+	}
+	if err := json.Unmarshal(raw, &document); err != nil || len(document.RuntimeBinding) == 0 {
+		t.Fatalf("manager definition carries no runtime binding: %v", err)
+	}
+	return document.RuntimeBinding
+}

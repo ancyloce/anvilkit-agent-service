@@ -53,6 +53,9 @@ func newCustodyStack(t *testing.T, ctx context.Context) *custodyStack {
 	t.Helper()
 	base := os.Getenv("POSTGRES_TEST_URL")
 	if base == "" {
+		if os.Getenv("ANVILKIT_REQUIRE_POSTGRES_PROOFS") != "" {
+			t.Fatal("POSTGRES_TEST_URL is not set but ANVILKIT_REQUIRE_POSTGRES_PROOFS requires these proofs; point POSTGRES_TEST_URL at a disposable PostgreSQL database")
+		}
 		t.Skip("POSTGRES_TEST_URL is not set")
 	}
 	databaseURL := isolatedSliceDatabase(t, ctx, base)
@@ -89,15 +92,22 @@ func newCustodyStack(t *testing.T, ctx context.Context) *custodyStack {
 		"ANVILKIT_TOOL_IMPLEMENTATION":             "controlled-fake",
 		"ANVILKIT_DOMAIN_IMPLEMENTATION":           "controlled-fake",
 		"ANVILKIT_CONTRACT_RUNTIME_IMPLEMENTATION": "controlled-fake",
-		"ANVILKIT_WORKER_IMPLEMENTATION":           "controlled-fake",
-		"ANVILKIT_CONTROLLED_MODEL_SCRIPT":         "final",
-		"ANVILKIT_SIGNING_KEY":                     "custody-signing-material-0123456789",
-		"ANVILKIT_ENCRYPTION_KEY":                  "custody-encryption-material-012345",
-		"ANVILKIT_RUN_AUTHORITY_FILE":              authorityPath,
-		"ANVILKIT_AUTH_TRUST_SNAPSHOT":             minted.trustPath,
-		"ANVILKIT_STREAM_CURSOR_SPOOL":             filepath.Join(t.TempDir(), "stream-cursors"),
-		"ANVILKIT_AUTH_ISSUERS":                    "issuer",
-		"ANVILKIT_EXECUTOR_ID":                     "custody-executor-1",
+		// The runtime transport is selected explicitly, as every port is.
+		// These compositions run the turn on the in-process stand-in: the
+		// whole dispatch path is exercised — task, attempt, fence, signed
+		// result, fenced commit — without a released unit to deploy. Nothing
+		// here may be composed in production, and the configuration guard
+		// refuses it there by name.
+		"ANVILKIT_RUNTIME_DISPATCHER":      "controlled-fake",
+		"ANVILKIT_WORKER_IMPLEMENTATION":   "controlled-fake",
+		"ANVILKIT_CONTROLLED_MODEL_SCRIPT": "final",
+		"ANVILKIT_SIGNING_KEY":             "custody-signing-material-0123456789",
+		"ANVILKIT_ENCRYPTION_KEY":          "custody-encryption-material-012345",
+		"ANVILKIT_RUN_AUTHORITY_FILE":      authorityPath,
+		"ANVILKIT_AUTH_TRUST_SNAPSHOT":     minted.trustPath,
+		"ANVILKIT_STREAM_CURSOR_SPOOL":     filepath.Join(t.TempDir(), "stream-cursors"),
+		"ANVILKIT_AUTH_ISSUERS":            "issuer",
+		"ANVILKIT_EXECUTOR_ID":             "custody-executor-1",
 	} {
 		t.Setenv(name, value)
 	}
@@ -128,7 +138,7 @@ func newCustodyStack(t *testing.T, ctx context.Context) *custodyStack {
 	}
 	t.Cleanup(closeAudit)
 	handle := &runtimeHandle{}
-	core, err := buildRuntimeCore(ctx, cfg, pools, guard, receipts, clock, protectedAudit, handle)
+	core, err := buildRuntimeCore(ctx, cfg, pools, guard, receipts, clock, protectedAudit, handle, controlledStandIns(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}

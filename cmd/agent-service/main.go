@@ -16,6 +16,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -42,6 +44,8 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/contractclient"
 	contractpg "github.com/ancyloce/anvilkit-agent-service/internal/contractclient/postgres"
 	contractguard "github.com/ancyloce/anvilkit-agent-service/internal/contracts"
+	"github.com/ancyloce/anvilkit-agent-service/internal/dispatch"
+	dispatchpg "github.com/ancyloce/anvilkit-agent-service/internal/dispatch/postgres"
 	domaincommitpg "github.com/ancyloce/anvilkit-agent-service/internal/domaincommit/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	eventpg "github.com/ancyloce/anvilkit-agent-service/internal/events/postgres"
@@ -65,6 +69,9 @@ import (
 	runapppg "github.com/ancyloce/anvilkit-agent-service/internal/runapp/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
 	runpg "github.com/ancyloce/anvilkit-agent-service/internal/runs/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/runtimeboundary"
+	boundarypg "github.com/ancyloce/anvilkit-agent-service/internal/runtimeboundary/postgres"
+	"github.com/ancyloce/anvilkit-agent-service/internal/runtimes"
 	"github.com/ancyloce/anvilkit-agent-service/internal/scheduler"
 	schedulerpg "github.com/ancyloce/anvilkit-agent-service/internal/scheduler/postgres"
 	"github.com/ancyloce/anvilkit-agent-service/internal/security"
@@ -189,7 +196,7 @@ func main() {
 	defer closeProtectedAudit()
 
 	handle := &runtimeHandle{}
-	core, err := buildRuntimeCore(ctx, cfg, pools, guard, journalStore, clock, protectedAudit, handle)
+	core, err := buildRuntimeCore(ctx, cfg, pools, guard, journalStore, clock, protectedAudit, handle, executionStandIns{}, observability)
 	if err != nil {
 		logger.Error("agent runtime pipeline initialization failed", "error", err)
 		os.Exit(1)
@@ -334,7 +341,19 @@ type runtimeCore struct {
 	eventBounds      events.Bounds
 	artifacts        *artifacts.Service
 	registry         *agent.Registry
-	deltas           *events.DeltaBroker
+	// releases is the Runtime Registry: the approved runtime releases a run's
+	// binding is selected from, and the material releaseTrust re-attests.
+	releases     *runtimes.Registry
+	releaseTrust *runtimes.CatalogTrust
+	// dispatcher reaches a selected release. It is composed here so the
+	// production profile can refuse an implementation that is not a separate
+	// process, and carried on the core for the dispatch work packages to use.
+	dispatcher runtimes.Dispatcher
+	// runtimeBoundary serves the internal runtime callback operations when the
+	// dispatcher crosses a process boundary; nil for the in-process stand-in,
+	// which exchanges context and candidates without a transport.
+	runtimeBoundary http.Handler
+	deltas          *events.DeltaBroker
 	// cancellationReconciler is the authoritative external-effect reader the
 	// cancellation recovery sweep asks before it concludes any accounting.
 	cancellationReconciler interrupts.CancellationReconciler
@@ -350,8 +369,8 @@ type runtimeCore struct {
 // buildRuntimeCore wires the real Agent execution pipeline. Every
 // implementation is explicitly selected; nothing falls back to a controlled
 // fake implicitly, and production configuration rejects controlled values.
-func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.Pools, guard *contractguard.Guard, receipts journal.Store, clock applicationTime, protectedAudit artifacts.ProtectedAudit, handle *runtimeHandle) (*runtimeCore, error) {
-	core, executionConfig, err := buildRuntimeDependencies(ctx, cfg, pools, guard, receipts, clock, protectedAudit, handle)
+func buildRuntimeCore(ctx context.Context, cfg config.Config, pools persistence.Pools, guard *contractguard.Guard, receipts journal.Store, clock applicationTime, protectedAudit artifacts.ProtectedAudit, handle *runtimeHandle, standIns executionStandIns, observer runner.DispatchObserver) (*runtimeCore, error) {
+	core, executionConfig, err := buildRuntimeDependencies(ctx, cfg, pools, guard, receipts, clock, protectedAudit, handle, standIns, observer)
 	if err != nil {
 		return nil, err
 	}
@@ -414,7 +433,8 @@ var _ interrupts.TerminalBudget = (*executorHandle)(nil)
 // directly, and the restart-verification harness constructs it after wrapping
 // exact ports with crash injection — so what restart proofs exercise is the
 // production composition itself, never a parallel wiring.
-func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools persistence.Pools, guard *contractguard.Guard, receipts journal.Store, clock applicationTime, protectedAudit artifacts.ProtectedAudit, handle *runtimeHandle) (*runtimeCore, execution.Config, error) {
+// observer receives the dispatch path's bounded facts; nil runs it unobserved.
+func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools persistence.Pools, guard *contractguard.Guard, receipts journal.Store, clock applicationTime, protectedAudit artifacts.ProtectedAudit, handle *runtimeHandle, standIns executionStandIns, observer runner.DispatchObserver) (*runtimeCore, execution.Config, error) {
 	idempotencyStore, err := idempotency.New(pools.Authority, idempotency.Config{Retention: 30 * 24 * time.Hour, MinimumLifetime: 30 * 24 * time.Hour})
 	if err != nil {
 		return nil, execution.Config{}, err
@@ -425,7 +445,7 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
-	if err := requireProductionEligible(cfg.Environment, "ANVILKIT_TOOL_IMPLEMENTATION", toolExecutor); err != nil {
+	if err := requireEligible(cfg, "ANVILKIT_TOOL_IMPLEMENTATION", toolExecutor); err != nil {
 		return nil, execution.Config{}, err
 	}
 	// One current-authority source serves the whole runtime: run creation,
@@ -457,15 +477,34 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
+	// The durable record of dispatched work. It is required, and it is
+	// PostgreSQL: a task handed to another process and remembered only in this
+	// one's memory is a task no restart can recover and no fence can protect.
+	if pools.Workflow == nil {
+		return nil, execution.Config{}, fmt.Errorf("the runtime dispatch record requires the workflow database")
+	}
+	dispatchRepository, err := dispatchpg.New(pools.Workflow)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	tasks, err := dispatch.New(dispatch.Config{
+		Repository: dispatchRepository,
+		Tokens:     dispatch.RandomTokens{},
+		Clock:      clockOf{clock},
+		Lease:      cfg.RuntimeDispatchTimeout,
+	})
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
 	// Cancellation is only safe once every external effect the run caused is
 	// known to be settled, so the reconciler reads the authoritative provider,
-	// worker, tool, artifact, and domain-effect records.
+	// runtime, worker, tool, artifact, and domain-effect records.
 	cancellationReconciler, err := cancellation.New(cancellation.Pools{Control: pools.Control, Workflow: pools.Workflow, Artifacts: pools.Artifacts, Events: pools.Events})
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
 	settlementHandle := &executorHandle{}
-	interruptService, err := interrupts.NewService(interruptStore, interrupts.BoundSchemaValidator{}, interruptAuthority, runtimeSignals{handle}, workflowLeaseRevoker{pools.Workflow}, cancellationReconciler, childBudget, settlementHandle, receipts, clock, runapp.RandomIDs{}, interrupts.Limits{ChildDepth: cfg.Limits.ChildDepth, ChildFanout: cfg.Limits.ChildFanout})
+	interruptService, err := interrupts.NewService(interruptStore, interrupts.BoundSchemaValidator{}, interruptAuthority, runtimeSignals{handle}, workflowLeaseRevoker{pool: pools.Workflow, tasks: tasks}, cancellationReconciler, childBudget, settlementHandle, receipts, clock, runapp.RandomIDs{}, interrupts.Limits{ChildDepth: cfg.Limits.ChildDepth, ChildFanout: cfg.Limits.ChildFanout})
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
@@ -515,23 +554,84 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 			return nil, execution.Config{}, err
 		}
 	}
+	// The Runtime Registry is built from the same verified contract identity as
+	// the definition catalog, and its selection policy pins the invocation
+	// protocol this service actually speaks — the canonical runtime boundary
+	// description the image carries — so a release built against another
+	// protocol cannot be selected.
+	releases, releaseTrust, err := buildRuntimeReleases(ctx, cfg, schemaValidator, pinnedIdentity, clock)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
 	pinnedValidator, err := execution.NewPinnedSchemaValidator(cfg.ContractRoot)
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
 
+	// The model path is the governed Model Gateway's, not the runner's: turns
+	// are executed by a runtime release, and a released unit reaches the
+	// gateway across the boundary. What this composes is the gateway's
+	// implementation, which the in-process runtime uses directly and which a
+	// production deployment still declares — the endpoint that serves it to a
+	// released unit is the runtime boundary's own work.
 	modelStack, err := selectModelImplementation(cfg, pools, clock, registry)
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
-	if err := requireProductionEligible(cfg.Environment, "ANVILKIT_MODEL_IMPLEMENTATION", modelStack); err != nil {
+	if err := requireEligible(cfg, "ANVILKIT_MODEL_IMPLEMENTATION", modelStack); err != nil {
+		return nil, execution.Config{}, err
+	}
+	// The two halves of the execution boundary's security are built before the
+	// transport that carries it: the key that mints a task credential and the
+	// trust that admits one back are what a dispatch is, and a transport
+	// composed without them would be a boundary nobody authenticates across.
+	credentials, err := taskCredentialIssuer(cfg, clock)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	credentialTrust, err := taskCredentialTrust(cfg, clock, credentials, releases)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	if err := requireEligible(cfg, "ANVILKIT_RUNTIME_CREDENTIAL_TRUST_ROOT", credentialTrust); err != nil {
+		return nil, execution.Config{}, err
+	}
+	// The runtime transport is selected after the model path because a test
+	// composition may stand a runtime in inside this process, and that
+	// stand-in reaches the model through the same governed gateway everything
+	// else does. Nothing outside an explicit test profile composes it, three
+	// times over: the configuration guard rejects the name, this binary
+	// carries no stand-in to compose (it is supplied through the seam below,
+	// by test code, or not at all), and the eligibility gate rejects the
+	// implementation.
+	standIn, err := composeInProcessRuntime(cfg, clock, standIns, registry, modelStack, credentialTrust)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	dispatcher, err := selectRuntimeDispatcher(cfg, clock, standIn)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	if err := requireEligible(cfg, "ANVILKIT_RUNTIME_DISPATCHER", dispatcher); err != nil {
+		return nil, execution.Config{}, err
+	}
+	// A returned result is attributed before it is fenced. The trust store that
+	// resolves a runtime's signing key is operator material in a deployed
+	// environment and synthesized from the stand-in's own key where the runtime
+	// is in-process — and the eligibility gate is what stops the second from
+	// reaching the first.
+	signatures, err := runtimeResultVerification(cfg, clock, releases, standIn)
+	if err != nil {
+		return nil, execution.Config{}, err
+	}
+	if err := requireEligible(cfg, "ANVILKIT_RUNTIME_SIGNING_TRUST", signatures); err != nil {
 		return nil, execution.Config{}, err
 	}
 	contractsValidator, err := selectContractRuntime(cfg, pinnedValidator, registry, digestOfBytes(lockBytes), pools, clock, bomAuthority)
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
-	if err := requireProductionEligible(cfg.Environment, "ANVILKIT_CONTRACT_RUNTIME_IMPLEMENTATION", contractsValidator); err != nil {
+	if err := requireEligible(cfg, "ANVILKIT_CONTRACT_RUNTIME_IMPLEMENTATION", contractsValidator); err != nil {
 		return nil, execution.Config{}, err
 	}
 	// The apply-authorization signing material also verifies tokens at the
@@ -548,7 +648,7 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
-	if err := requireProductionEligible(cfg.Environment, "ANVILKIT_DOMAIN_IMPLEMENTATION", domainPort); err != nil {
+	if err := requireEligible(cfg, "ANVILKIT_DOMAIN_IMPLEMENTATION", domainPort); err != nil {
 		return nil, execution.Config{}, err
 	}
 	artifactPort, artifactService, err := buildArtifactPort(cfg, pools, authoritySource, protectedAudit, clock)
@@ -598,7 +698,7 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 	// The fenced dispatch path inherits the eligibility of the worker it
 	// dispatches to, so production machinery wrapped around a controlled
 	// worker is refused here as the controlled worker it still is.
-	if err := requireProductionEligible(cfg.Environment, "ANVILKIT_WORKER_IMPLEMENTATION", fencedTools); err != nil {
+	if err := requireEligible(cfg, "ANVILKIT_WORKER_IMPLEMENTATION", fencedTools); err != nil {
 		return nil, execution.Config{}, err
 	}
 	// The guard's decisions and the pinned running tool profile are durable
@@ -622,22 +722,78 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 	if err != nil {
 		return nil, execution.Config{}, err
 	}
+	// A runtime that runs inside this process reads its task-scoped context
+	// and writes its candidates through in-process exchanges rather than
+	// across the boundary. Those two ports are composed only for such a
+	// runtime: a released unit is on the other side of a transport, and this
+	// service must not hold either end of its own boundary.
+	var disclosure runner.Disclosure
+	var candidates runner.Candidates
+	if standIn != nil {
+		disclosure, candidates = standIn, standIn
+	}
+	// A dispatcher that crosses a process boundary needs the boundary served:
+	// the released units call back for governed model invocations and to
+	// submit their candidates, and the disclosure/candidate exchange happens
+	// through the same durable store the boundary answers from.
+	var runtimeBoundaryHandler http.Handler
+	if _, crossesProcess := dispatcher.(*runtimes.HTTPDispatcher); crossesProcess {
+		if pools.Workflow == nil {
+			return nil, execution.Config{}, fmt.Errorf("the runtime boundary requires the workflow database for its durable callback records")
+		}
+		boundaryStore, storeErr := boundarypg.New(pools.Workflow)
+		if storeErr != nil {
+			return nil, execution.Config{}, storeErr
+		}
+		candidateSchemaDigest, pinned := pinnedIdentity.SchemaDigests["anvilkit.contract.schema.page-candidate"]
+		if !pinned {
+			return nil, execution.Config{}, fmt.Errorf("the runtime boundary requires the pinned page-candidate schema identity")
+		}
+		audiences := make([]string, 0, 4)
+		for _, release := range releases.Releases() {
+			audiences = append(audiences, release.Binding.RuntimeAudience)
+		}
+		boundary, boundaryErr := runtimeboundary.New(runtimeboundary.Config{
+			Credentials:     credentialTrust,
+			Audiences:       audiences,
+			Models:          modelStack,
+			Validator:       pinnedValidator,
+			CandidateSchema: agent.SchemaReference{ComponentName: "anvilkit.contract.schema.page-candidate", Digest: candidateSchemaDigest},
+			Register:        boundaryStore,
+			Attempts:        currentAttempts{repository: dispatchRepository},
+			Submissions:     boundaryStore,
+			Now:             clockOf{clock}.Now,
+		})
+		if boundaryErr != nil {
+			return nil, execution.Config{}, boundaryErr
+		}
+		disclosure = boundaryStore
+		candidates = boundaryStore
+		runtimeBoundaryHandler = boundary
+	}
 	agentRunner, err := runner.New(runner.Config{
-		Registry:  registry,
-		Compiler:  recordingCompiler{compiler: contextcompiler.New([]string{cfg.SigningKey.RedactionValue(), cfg.EncryptionKey.RedactionValue()}), recorder: contextRecorder},
-		Selector:  modelStack,
-		Invoker:   modelStack,
-		Guard:     toolGuard,
-		Validator: pinnedValidator,
-		Clock:     clockOf{clock},
+		Registry:    registry,
+		Compiler:    recordingCompiler{compiler: contextcompiler.New([]string{cfg.SigningKey.RedactionValue(), cfg.EncryptionKey.RedactionValue()}), recorder: contextRecorder},
+		Tasks:       tasks,
+		Dispatcher:  dispatcher,
+		Credentials: credentials,
+		Signatures:  signatures,
+		Disclosure:  disclosure,
+		Candidates:  candidates,
+		Guard:       toolGuard,
+		Validator:   pinnedValidator,
+		Clock:       clockOf{clock},
+		Observer:    observer,
 		Limits: runner.Limits{
 			MaximumOutputBytes:  cfg.Limits.EventBytes,
 			MaximumInputTokens:  int64(cfg.Limits.ContextTokens),
 			MaximumOutputTokens: int64(cfg.Limits.ContextTokens),
-			Timeout:             cfg.RunTimeout,
+			Timeout:             cfg.RuntimeDispatchTimeout,
 			MaximumAttempts:     cfg.Limits.RetryAttempts,
 			RetryBudget:         cfg.RunTimeout,
 			ContextTokens:       cfg.Limits.ContextTokens,
+			MemoryBytes:         cfg.RuntimeTaskMemoryBytes,
+			CPUMillis:           int64(cfg.RuntimeTaskCPUMillis),
 		},
 	})
 	if err != nil {
@@ -694,6 +850,8 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 		Deltas:           deltaBroker,
 		Decisions:        receipts,
 		Budget:           budgetController,
+		RuntimeLeases:    tasks,
+		Releases:         releases,
 		Memory:           memoryGuard,
 		Egress:           egressGuard,
 		ArtifactMetadata: artifactService,
@@ -718,7 +876,7 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 		DomainRetryBase:   cfg.DomainRetryBase,
 		DomainRetryCap:    cfg.DomainRetryCap,
 	}
-	return &runtimeCore{runStore: runStore, interruptStore: interruptStore, interruptService: interruptService, idempotency: idempotencyStore, authority: authoritySource, receipts: receipts, guard: guard, clock: clock, eventBounds: eventBounds, artifacts: artifactService, registry: registry, deltas: deltaBroker, trust: trust, cancellationReconciler: cancellationReconciler, executorHandle: settlementHandle}, executionConfig, nil
+	return &runtimeCore{releases: releases, releaseTrust: releaseTrust, dispatcher: dispatcher, runtimeBoundary: runtimeBoundaryHandler, runStore: runStore, interruptStore: interruptStore, interruptService: interruptService, idempotency: idempotencyStore, authority: authoritySource, receipts: receipts, guard: guard, clock: clock, eventBounds: eventBounds, artifacts: artifactService, registry: registry, deltas: deltaBroker, trust: trust, cancellationReconciler: cancellationReconciler, executorHandle: settlementHandle}, executionConfig, nil
 }
 
 // selectModelImplementation returns the explicitly configured model stack.
@@ -727,7 +885,15 @@ func buildRuntimeDependencies(ctx context.Context, cfg config.Config, pools pers
 // settled outcomes, script position, and usage evidence are all durable and
 // process-external, so a restart replays what happened instead of calling the
 // provider again.
-func selectModelImplementation(cfg config.Config, pools persistence.Pools, clock applicationTime, policies execution.ModelPolicySource) (*execution.ControlledModelStack, error) {
+// modelCatalog is what the model composition reads from the approved
+// definition catalog: the signed model policies, and the delegate definitions
+// the controlled script proposes delegations to.
+type modelCatalog interface {
+	execution.ModelPolicySource
+	ResolveDelegate(definitionID string) (agent.Definition, error)
+}
+
+func selectModelImplementation(cfg config.Config, pools persistence.Pools, clock applicationTime, policies modelCatalog) (*execution.ControlledModelStack, error) {
 	switch cfg.ModelImplementation {
 	case execution.ControlledImplementation:
 		if pools.Workflow == nil {
@@ -737,7 +903,7 @@ func selectModelImplementation(cfg config.Config, pools persistence.Pools, clock
 		if err != nil {
 			return nil, err
 		}
-		script, err := controlledModelScript(cfg.ControlledModelScript)
+		script, err := controlledModelScript(cfg.ControlledModelScript, policies)
 		if err != nil {
 			return nil, err
 		}
@@ -763,21 +929,151 @@ func selectModelImplementation(cfg config.Config, pools persistence.Pools, clock
 // controlledModelScript renders the configured deterministic script the
 // controlled adapter plays. Every step is a typed plan; the vocabulary is
 // closed so a script cannot smuggle an unattested action.
-func controlledModelScript(steps []string) ([][]byte, error) {
+func controlledModelScript(steps []string, registry modelCatalog) ([][]byte, error) {
 	script := make([][]byte, 0, len(steps))
 	for _, step := range steps {
 		switch step {
 		case "final":
 			script = append(script, execution.PlanStep("agent.final", map[string]json.RawMessage{"candidate": execution.ControlledCandidate(), "summary": json.RawMessage(`"controlled candidate"`)}))
+		case "final-page":
+			script = append(script, execution.PlanStep("agent.final", map[string]json.RawMessage{"candidate": execution.ControlledPageCandidate(), "summary": json.RawMessage(`"controlled page candidate"`)}))
 		case "need-input":
 			script = append(script, execution.PlanStep("agent.need-input", map[string]json.RawMessage{"question": json.RawMessage(`"controlled input request"`)}))
 		case "tool-echo":
 			script = append(script, execution.PlanStep("anvilkit.tool.context-echo", map[string]json.RawMessage{"query": json.RawMessage(`"controlled context"`)}))
+		// The runtime-facing vocabulary: these steps are governed OUTPUT
+		// documents — the bounded output map a released Manager or Specialist
+		// reads through the governed gateway — rather than the in-process
+		// stand-in's typed plans. A composition selects tokens that match its
+		// dispatcher; the two vocabularies never mix inside one turn.
+		case "plan-need-input":
+			rendered, err := runtimePlanOutput(`{"kind":"AgentPlan","steps":[{"action":"need_input","question":"controlled input request"}]}`)
+			if err != nil {
+				return nil, err
+			}
+			script = append(script, rendered)
+		case "delegate-page-specialist":
+			if registry == nil {
+				return nil, fmt.Errorf("controlled model script: the delegate step requires the approved definition catalog")
+			}
+			specialist, err := registry.ResolveDelegate("definition.platform.page-candidate-specialist")
+			if err != nil {
+				return nil, fmt.Errorf("controlled model script: resolve the page candidate specialist: %w", err)
+			}
+			rendered, err := delegatePagePlanOutput(specialist)
+			if err != nil {
+				return nil, err
+			}
+			script = append(script, rendered)
+		case "compose-page":
+			rendered, err := runtimeOutputDocument(map[string]string{"composition": controlledPageComposition})
+			if err != nil {
+				return nil, err
+			}
+			script = append(script, rendered)
 		default:
 			return nil, fmt.Errorf("controlled model script step %q is not available", step)
 		}
 	}
 	return script, nil
+}
+
+// The controlled page-generation material: one component vocabulary, its
+// defaults and constraints, and a composition inside them. The digests are the
+// controlled pins the candidate carries; the placeholders name the values the
+// governed boundary resolves from the dispatched task, which is how a static
+// script proposes a delegation for whatever run is actually executing.
+const (
+	controlledComponentSchema  = `{"components":[{"name":"Hero","properties":{"title":{"type":"string","maxLength":40,"required":true},"subtitle":{"type":"string","maxLength":80},"align":{"type":"enum","values":["left","center"]},"columns":{"type":"number","minimum":1,"maximum":4},"boxed":{"type":"boolean"}}},{"name":"Footer","properties":{"note":{"type":"string","maxLength":40}}}]}`
+	controlledPageDefaults     = `{"Hero":{"align":"center","columns":2}}`
+	controlledPageDefaultData  = `{"Hero":{"title":"Welcome","subtitle":"a default subtitle"}}`
+	controlledStyleRules       = `{"allowedThemes":["light","dark"],"theme":"light","allowedSpacing":["compact","regular"],"spacing":"regular","maximumSections":3}`
+	controlledAnimationRules   = `{"allowedEffects":["none","fade","slide"],"maximumDurationMilliseconds":600,"reducedMotion":false}`
+	controlledPageComposition  = `{"sections":[{"component":"Hero","properties":{"title":"Ship faster"},"animation":{"effect":"fade","durationMilliseconds":300}}],"summary":"refreshed the hero","assumptions":["the brand voice is unchanged"]}`
+	controlledPreviewSizeBytes = 2048
+)
+
+// runtimeOutputDocument renders one governed output map as script material.
+func runtimeOutputDocument(outputs map[string]string) ([]byte, error) {
+	rendered, err := json.Marshal(outputs)
+	if err != nil {
+		return nil, fmt.Errorf("controlled model script: render governed output: %w", err)
+	}
+	return rendered, nil
+}
+
+// runtimePlanOutput renders one governed plan as the output map the Manager
+// reads it from.
+func runtimePlanOutput(plan string) ([]byte, error) {
+	return runtimeOutputDocument(map[string]string{"plan": plan})
+}
+
+// delegatePagePlanOutput renders the Manager plan that delegates one page
+// candidate to the resolved specialist, carrying the controlled supplied
+// brief. Target identity travels as placeholders the governed boundary
+// substitutes from the dispatched task — the script is release material and
+// cannot know which run it will serve.
+func delegatePagePlanOutput(specialist agent.Definition) ([]byte, error) {
+	preview := map[string]string{
+		"candidate.baseRevision":                      "revision.controlled.0001",
+		"candidate.digests.target":                    "sha256:" + strings.Repeat("5", 64),
+		"candidate.digests.catalog":                   "sha256:" + strings.Repeat("6", 64),
+		"candidate.digests.policy":                    "sha256:" + strings.Repeat("7", 64),
+		"candidate.preview.taskId":                    "task.preview.controlled.0001",
+		"candidate.preview.resultArtifact.artifactId": "artifact.preview.controlled.0001",
+		"candidate.preview.resultArtifact.digest":     "sha256:" + strings.Repeat("a", 64),
+		"candidate.preview.resultArtifact.mediaType":  "application/json",
+		"candidate.preview.resultArtifact.sizeBytes":  strconv.Itoa(controlledPreviewSizeBytes),
+		"page.componentSchema":                        controlledComponentSchema,
+		"page.defaultProperties":                      controlledPageDefaults,
+		"page.defaultData":                            controlledPageDefaultData,
+		"page.styleConstraints":                       controlledStyleRules,
+		"page.animationConstraints":                   controlledAnimationRules,
+	}
+	brief, err := json.Marshal(preview)
+	if err != nil {
+		return nil, fmt.Errorf("controlled model script: render the delegation brief: %w", err)
+	}
+	request := map[string]any{
+		"kind": "CreateAgentRunRequest",
+		"definition": map[string]string{
+			"definitionId":     specialist.DefinitionID,
+			"definitionDigest": specialist.DefinitionDigest,
+		},
+		"operation": "page-change",
+		"target": map[string]string{
+			"targetType":  "{{targetType}}",
+			"targetId":    "{{targetId}}",
+			"workspaceId": "{{workspaceId}}",
+			"projectId":   "{{projectId}}",
+		},
+		"input": map[string]any{
+			"userInput": string(brief),
+			"artifactInputs": []map[string]any{{
+				"artifactId": "artifact.preview.controlled.0001",
+				"digest":     "sha256:" + strings.Repeat("a", 64),
+				"mediaType":  "application/json",
+				"sizeBytes":  controlledPreviewSizeBytes,
+			}},
+		},
+	}
+	input, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("controlled model script: render the delegation input: %w", err)
+	}
+	plan := map[string]any{
+		"kind": "AgentPlan",
+		"steps": []map[string]any{{
+			"action":   "delegate",
+			"delegate": specialist.DefinitionID,
+			"input":    json.RawMessage(input),
+		}},
+	}
+	rendered, err := json.Marshal(plan)
+	if err != nil {
+		return nil, fmt.Errorf("controlled model script: render the delegation plan: %w", err)
+	}
+	return runtimePlanOutput(string(rendered))
 }
 
 // selectToolImplementation returns the explicitly configured tool executor
@@ -1008,8 +1304,8 @@ func buildCommitAuthority(cfg config.Config, pools persistence.Pools, guard *con
 // material that expires or is revoked after startup stop new work.
 func definitionTrust(cfg config.Config, catalogDigest string) (*agent.CatalogTrust, error) {
 	if cfg.DefinitionTrustRoot == "" && cfg.DefinitionAttestation == "" {
-		if cfg.Environment == config.EnvironmentProduction {
-			return nil, fmt.Errorf("definition catalog attestation is required in production")
+		if cfg.Deployed() {
+			return nil, fmt.Errorf("definition catalog attestation is required in a deployed environment")
 		}
 		return nil, nil
 	}
@@ -1025,18 +1321,29 @@ func definitionTrust(cfg config.Config, catalogDigest string) (*agent.CatalogTru
 // signing key stops new work even though the process started while all three
 // were valid.
 type trustAdmission struct {
-	trust *agent.CatalogTrust
-	clock applicationTime
+	trust    *agent.CatalogTrust
+	releases *runtimes.CatalogTrust
+	clock    applicationTime
 }
 
 func (a trustAdmission) Admit(context.Context, runs.Scope) error {
-	if a.trust == nil {
-		return nil
+	if a.trust != nil {
+		if err := a.trust.Verify(a.clock.Now()); err != nil {
+			details := problem.New(problem.CodeAuthorityStale, "")
+			details.Detail = "the approved definition catalog is no longer attested by current trust material"
+			return details
+		}
 	}
-	if err := a.trust.Verify(a.clock.Now()); err != nil {
-		details := problem.New(problem.CodeAuthorityStale, "")
-		details.Detail = "the approved definition catalog is no longer attested by current trust material"
-		return details
+	// The runtime release catalog is re-attested the same way: a revoked
+	// signing key or a withdrawn statement stops new runs, not only new
+	// processes. Runs already executing keep their pins — rollback and
+	// emergency disable change selection, never history.
+	if a.releases != nil {
+		if err := a.releases.Verify(a.clock.Now()); err != nil {
+			details := problem.New(problem.CodeAuthorityStale, "")
+			details.Detail = "the approved runtime release catalog is no longer attested by current trust material"
+			return details
+		}
 	}
 	return nil
 }
@@ -1214,7 +1521,7 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	if err != nil {
 		return nil, err
 	}
-	runService := runs.NewService(core.runStore, runapp.NewRuntimeStarter(runtime), runapp.RandomIDs{}, core.clock, core.receipts, trustAdmission{trust: core.trust, clock: core.clock})
+	runService := runs.NewService(core.runStore, runapp.NewRuntimeStarter(runtime), runapp.RandomIDs{}, core.clock, core.receipts, trustAdmission{trust: core.trust, releases: core.releaseTrust, clock: core.clock})
 	reader, err := eventpg.NewRetainedReader(pools.Authority, core.guard, core.eventBounds, cfg.EventRetention, time.Now)
 	if err != nil {
 		return nil, err
@@ -1246,6 +1553,9 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 		slog.Error("stream cursor spool reconcile failed", "error", err)
 	})
 	application := runapp.New(validator, runService, reader, events.StreamConfig{Heartbeat: cfg.Limits.SSEHeartbeat, Revalidation: cfg.AuthRevalidation, ReplayLimit: 100, Bounds: core.eventBounds, Observer: observability, WriteTimeout: cfg.SSEWriteTimeout, Cursors: cursors, CursorSpool: cursorSpool, CursorFailures: observability, MaximumConnections: cfg.Limits.SSEConnections, Deltas: core.deltas}, core.authority, core.guard, core.registry)
+	// A run's runtime release is selected at creation from the verified
+	// registry, so the application cannot create runs without it.
+	application.WithRuntimeReleases(core.releases)
 	application.WithInterrupts(core.interruptService)
 	// The operator recovery and artifact custody paths are part of the
 	// production API: each is authenticated, scoped, role-gated against
@@ -1315,7 +1625,11 @@ func agentAPIOptions(ctx context.Context, cfg config.Config, pools persistence.P
 	// authentication, authorization, concurrency, idempotency, and canonical
 	// schema validation each fail closed on their own, so no feature gate
 	// stands in front of them.
-	return []api.Option{api.WithAgentCore(application, verifier)}, nil
+	options := []api.Option{api.WithAgentCore(application, verifier)}
+	if core.runtimeBoundary != nil {
+		options = append(options, api.WithRuntimeBoundary(core.runtimeBoundary))
+	}
+	return options, nil
 }
 
 // applicationTime is the clock the service runs on. It reports why it has no
@@ -1397,13 +1711,30 @@ func (r runtimeSignals) ResumeRun(ctx context.Context, scope runs.Scope, snapsho
 	})
 }
 
-type workflowLeaseRevoker struct{ pool *pgxpool.Pool }
+type workflowLeaseRevoker struct {
+	pool  *pgxpool.Pool
+	tasks *dispatch.Coordinator
+}
 
+// RevokeRun withdraws what a cancelled run still holds: the executor leases it
+// runs under, and the runtime leases it dispatched work against.
+//
+// Revoking the runtime lease is what makes cancellation stick. A runtime this
+// service cannot reach may still be executing an attempt, and the only thing
+// that stops its answer from changing state is the durable record saying the
+// work was cancelled — the commit predicate reads that record, so a late
+// result becomes evidence instead of an outcome.
 func (r workflowLeaseRevoker) RevokeRun(ctx context.Context, scope runs.Scope, id runs.ID) error {
 	if r.pool == nil {
 		return nil
 	}
-	_, err := r.pool.Exec(ctx, `DELETE FROM agent_workflow.executor_leases WHERE workspace_id=$1 AND project_id=$2 AND workflow_id LIKE $3`, scope.WorkspaceID, scope.ProjectID, string(id)+":g%")
+	if _, err := r.pool.Exec(ctx, `DELETE FROM agent_workflow.executor_leases WHERE workspace_id=$1 AND project_id=$2 AND workflow_id LIKE $3`, scope.WorkspaceID, scope.ProjectID, string(id)+":g%"); err != nil {
+		return err
+	}
+	if r.tasks == nil {
+		return nil
+	}
+	_, err := r.tasks.CancelRun(ctx, dispatch.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID}, string(id), dispatch.ReasonLeaseRevoked)
 	return err
 }
 
@@ -1531,12 +1862,17 @@ func loadAuthoritySeed(path string, guard *contractguard.Guard) (authoritySeed, 
 			}
 		}
 	}
-	probe := runs.Snapshot{Kind: "AgentRun", RunID: "run.authority-validation", RootRunID: "run.authority-validation", WorkspaceID: "workspace.authority-validation", ActorID: "actor.authority-validation", Domain: "platform-agent", Operation: "artifact-validation", Target: runs.Target{Type: "page", ID: "page.authority-validation", WorkspaceID: "workspace.authority-validation", ProjectID: "project.authority-validation"}, Definition: payload.Definition, ContractBOM: payload.ContractBOM, Policy: payload.Policy, Budget: payload.Budget, Idempotency: runs.IdempotencyProjection{Scope: "workspace.authority-validation:create-run", Key: "authority-validation", CanonicalRequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Status: runs.Created, Version: 1, ExecutionGeneration: 1, CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0)}
+	// The probe is synthetic validation material, not a run: it exists to prove
+	// the seeded authority material composes into a contract-valid AgentRun.
+	// The runtime binding is the shape the contract requires, standing in for
+	// the release a real run would pin from its resolved definition.
+	probeBinding := json.RawMessage(`{"runtimeUnitId":"runtime.authority-validation","runtimeManifestDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","runtimeImageDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","invocationProtocolDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","runtimeAudience":"urn:anvilkit:audience:agent-runtime"}`)
+	probe := runs.Snapshot{Kind: "AgentRun", RunID: "run.authority-validation", RootRunID: "run.authority-validation", WorkspaceID: "workspace.authority-validation", ActorID: "actor.authority-validation", Domain: "platform-agent", Operation: "artifact-validation", Target: runs.Target{Type: "page", ID: "page.authority-validation", WorkspaceID: "workspace.authority-validation", ProjectID: "project.authority-validation"}, Definition: payload.Definition, ContractBOM: payload.ContractBOM, Policy: payload.Policy, Budget: payload.Budget, Idempotency: runs.IdempotencyProjection{Scope: "workspace.authority-validation:create-run", Key: "authority-validation", CanonicalRequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, RuntimeBinding: probeBinding, Status: runs.Created, Version: 1, ExecutionGeneration: 1, CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0)}
 	probeBytes, err := json.Marshal(probe)
 	if err != nil {
 		return authoritySeed{}, fmt.Errorf("marshal run authority probe: %w", err)
 	}
-	findings := guard.Validate(context.Background(), contractguard.APIIn, "anvilkit://schema/agent-run?digest=sha256:e293860d680a93c9fa5d8c3907201ac3a6a54b7a81cbb81fd5bcb6f332497564", probeBytes)
+	findings := guard.Validate(context.Background(), contractguard.APIIn, "anvilkit://schema/agent-run?digest=sha256:6265dda23cd50d6b716d5ee15a5cd8d9f427b10cfff63a29e3ce2cd727d7d09d", probeBytes)
 	if len(findings) != 0 {
 		return authoritySeed{}, fmt.Errorf("run authority violates pinned AgentRun references: %v", findings)
 	}
@@ -1808,22 +2144,307 @@ func buildProtectedAudit(ctx context.Context, cfg config.Config, clock *security
 // decision takes a few of them and nothing else uses the endpoint.
 const protectedAuditPoolSize = 4
 
-// requireProductionEligible refuses any implementation that has not declared
-// itself fit for production. The check is a positive assertion by the
-// implementation rather than a test on its name: an implementation that says
-// nothing is refused, so a port added later, or a controlled fake named
-// without the word the old substring check looked for, fails closed instead of
-// passing by accident.
-func requireProductionEligible(environment config.Environment, port string, candidate any) error {
-	if environment != config.EnvironmentProduction {
+// requireEligible refuses, outside an explicit test profile, any
+// implementation that has not declared itself fit for a deployed environment.
+//
+// The check is a positive assertion by the implementation rather than a test
+// on its name: an implementation that says nothing is refused, so a port added
+// later, or a controlled fake named without the word the old substring check
+// looked for, fails closed instead of passing by accident. The profile that
+// admits controlled implementations is the explicit one the configuration
+// declares — a development or test environment the operator named — never a
+// deployed environment and never one assumed by default: staging is held to
+// production's rule because it is production-shaped, and a configuration that
+// declared nothing is not a test profile because nobody said it was.
+func requireEligible(cfg config.Config, port string, candidate any) error {
+	if cfg.ControlledProfile() {
 		return nil
 	}
 	switch execution.EligibilityOf(candidate) {
 	case execution.ProductionEligible:
 		return nil
 	case execution.ControlledOnly:
-		return fmt.Errorf("%s is a controlled implementation and production never composes one", port)
+		return fmt.Errorf("%s is a controlled implementation; outside an explicit test profile nothing composes one", port)
 	default:
-		return fmt.Errorf("%s does not declare itself fit for production; production composes only implementations that do", port)
+		return fmt.Errorf("%s does not declare itself fit for a deployed environment; outside an explicit test profile only implementations that do are composed", port)
 	}
+}
+
+// buildRuntimeReleases ingests and verifies the approved runtime release
+// catalog and the operator material that attests it.
+//
+// The selection policy pins the invocation protocol this service speaks, read
+// from the canonical runtime boundary description the image carries. Reading it
+// from contract material rather than from configuration is deliberate: a
+// protocol digest an operator typed in could be made to agree with any release.
+func buildRuntimeReleases(ctx context.Context, cfg config.Config, validator runtimes.SchemaValidator, identity contractguard.Identity, clock applicationTime) (*runtimes.Registry, *runtimes.CatalogTrust, error) {
+	manifestSchema, err := os.ReadFile(filepath.Join(cfg.ContractRoot, "contracts", "agent", "schemas", "agent-runtime-manifest.schema.json"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read pinned agent runtime manifest schema: %w", err)
+	}
+	description, err := os.ReadFile(filepath.Join(cfg.ContractRoot, "contracts", "agent", "openapi", "agent-runtime.openapi.json"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read pinned runtime boundary description: %w", err)
+	}
+	registry, err := runtimes.NewRegistry(ctx, runtimes.RegistryConfig{
+		Source:            runtimes.EmbeddedCatalog{},
+		Validator:         validator,
+		ManifestSchemaURI: runtimes.ManifestSchemaURI(manifestSchema),
+		Approval:          runtimes.Approval{ProfileDigest: identity.ProfileDigest, LockDigest: identity.LockDigest},
+		Policy:            runtimes.SelectionPolicy{InvocationProtocolDigest: runtimes.DocumentDigest(description)},
+		Now:               clockOf{clock}.Now,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	trust, err := releaseTrust(cfg, registry.CatalogDigest())
+	if err != nil {
+		return nil, nil, err
+	}
+	if trust != nil {
+		if err := trust.Verify(clock.Now()); err != nil {
+			return nil, nil, err
+		}
+	}
+	return registry, trust, nil
+}
+
+// releaseTrust builds the revalidating gate over the operator-distributed
+// material that authenticates the approved release catalog. Production
+// configuration requires both halves, so there is no environment in which an
+// unattested set of runtime releases is selected from in production.
+func releaseTrust(cfg config.Config, catalogDigest string) (*runtimes.CatalogTrust, error) {
+	if cfg.RuntimeTrustRoot == "" && cfg.RuntimeAttestation == "" {
+		if cfg.Deployed() {
+			return nil, fmt.Errorf("runtime release catalog attestation is required in a deployed environment")
+		}
+		return nil, nil
+	}
+	if cfg.RuntimeTrustRoot == "" || cfg.RuntimeAttestation == "" {
+		return nil, fmt.Errorf("runtime release catalog attestation requires both a trust root and a signature statement")
+	}
+	return runtimes.NewCatalogTrust(cfg.RuntimeTrustRoot, cfg.RuntimeAttestation, catalogDigest)
+}
+
+// currentAttempts answers the runtime boundary's attempt-currency check from
+// the durable dispatch record: an attempt is current only while it is the
+// task's accepted or running execution. A replaced or settled attempt that
+// calls back is refused at admission rather than served against work the
+// control plane has already moved past.
+type currentAttempts struct{ repository *dispatchpg.Repository }
+
+func (c currentAttempts) Current(ctx context.Context, workspaceID, projectID, taskID, physicalAttemptID string) (bool, error) {
+	_, attempts, known, err := c.repository.Load(ctx, dispatch.Scope{WorkspaceID: workspaceID, ProjectID: projectID}, taskID)
+	if err != nil || !known {
+		return false, err
+	}
+	for _, attempt := range attempts {
+		if attempt.PhysicalAttemptID == physicalAttemptID {
+			return attempt.Status == dispatch.Accepted || attempt.Status == dispatch.Running, nil
+		}
+	}
+	return false, nil
+}
+
+// configuredEndpoints resolves a runtime unit to the address its release
+// answers on. A unit with no configured address is an error rather than a
+// default: a dispatcher that guessed an address would be reaching whatever
+// answered there.
+type configuredEndpoints map[string]string
+
+func (c configuredEndpoints) Endpoint(runtimeUnitID string) (string, error) {
+	address, configured := c[runtimeUnitID]
+	if !configured || address == "" {
+		return "", fmt.Errorf("runtime unit %q has no configured endpoint", runtimeUnitID)
+	}
+	return strings.TrimSuffix(address, "/"), nil
+}
+
+// executionStandIns is what a composition may substitute for the part of the
+// execution plane that production reaches over a process boundary: the runtime
+// that executes a dispatched task.
+//
+// The production binary supplies none. The in-process runtime stand-in is not
+// linked into it at all — the module boundary check refuses its import outside
+// test code — so a configuration that names the stand-in is refused as
+// unavailable rather than composed. A test composition supplies the stand-in
+// through this seam, which is the only way one is ever built.
+type executionStandIns struct {
+	// Runtime builds the in-process runtime a controlled composition
+	// dispatches to, from the parts of this composition it reasons with.
+	Runtime func(inProcessRuntimeParts) (inProcessRuntime, error)
+}
+
+// inProcessRuntime is a runtime that runs inside this process: it is
+// dispatched to like a release, it is handed each attempt's compiled context
+// and answers candidate reads directly, and it attributes its own results
+// through trust synthesized from its own key. Every one of those is a boundary
+// production crosses over a transport, which is why the type is composed only
+// through executionStandIns.
+type inProcessRuntime interface {
+	runtimes.Dispatcher
+	runner.Disclosure
+	runner.Candidates
+	// SigningTrust is the trust store that attributes the stand-in's own
+	// results over the approved releases it stands in for.
+	SigningTrust(releases []runtimes.Release, now func() time.Time) (runtimes.SigningTrustSource, error)
+}
+
+// inProcessRuntimeParts is what a composition hands the stand-in: the approved
+// definitions it reasons under, the governed model path it reasons with, the
+// trust that admits its task credential, the deployment's signing material,
+// and the deployment's repair bound.
+type inProcessRuntimeParts struct {
+	Definitions     definitionResolver
+	Models          *execution.ControlledModelStack
+	Credentials     *runtimes.CredentialTrust
+	SigningMaterial string
+	Now             func() time.Time
+	Repairs         int
+}
+
+// composeInProcessRuntime builds the stand-in when, and only when, the
+// configuration names it and the composition supplies one. A configuration
+// that names it in a build that supplies none is answered by the dispatcher
+// selection, which is where the refusal names the transport that is available.
+func composeInProcessRuntime(cfg config.Config, clock applicationTime, standIns executionStandIns, registry *agent.Registry, models *execution.ControlledModelStack, credentialTrust *runtimes.CredentialTrust) (inProcessRuntime, error) {
+	if cfg.RuntimeDispatcher != execution.ControlledImplementation || standIns.Runtime == nil {
+		return nil, nil
+	}
+	if models == nil {
+		return nil, fmt.Errorf("the in-process runtime requires a model implementation to reason with")
+	}
+	if !cfg.SigningKey.Present() {
+		return nil, fmt.Errorf("the in-process runtime requires signing material: an unsigned result cannot be attributed to what produced it")
+	}
+	return standIns.Runtime(inProcessRuntimeParts{
+		Definitions:     definitionResolver{registry: registry},
+		Models:          models,
+		Credentials:     credentialTrust,
+		SigningMaterial: cfg.SigningKey.RedactionValue(),
+		Now:             clockOf{clock}.Now,
+		Repairs:         cfg.Limits.RepairAttempts,
+	})
+}
+
+// selectRuntimeDispatcher returns the explicitly configured dispatcher. Nothing
+// is selected implicitly. The in-process stand-in is returned only when a
+// composition supplied one: the production binary carries none, so the
+// configuration that names it is refused here as naming a transport this build
+// does not have.
+func selectRuntimeDispatcher(cfg config.Config, clock applicationTime, standIn inProcessRuntime) (runtimes.Dispatcher, error) {
+	switch cfg.RuntimeDispatcher {
+	case config.RuntimeDispatcherHTTP:
+		if len(cfg.RuntimeEndpoints) == 0 {
+			return nil, fmt.Errorf("ANVILKIT_RUNTIME_ENDPOINTS must name the address of every runtime unit this deployment dispatches to")
+		}
+		return runtimes.NewHTTPDispatcher(
+			configuredEndpoints(cfg.RuntimeEndpoints),
+			&http.Client{Timeout: cfg.RuntimeDispatchTimeout},
+			clockOf{clock}.Now,
+		)
+	case execution.ControlledImplementation:
+		if standIn == nil {
+			return nil, fmt.Errorf("ANVILKIT_RUNTIME_DISPATCHER names the in-process runtime stand-in, which this build does not carry: a runtime is reached only over the %s transport", config.RuntimeDispatcherHTTP)
+		}
+		return standIn, nil
+	case "":
+		return nil, fmt.Errorf("ANVILKIT_RUNTIME_DISPATCHER must be explicitly selected; no runtime transport is assumed")
+	default:
+		return nil, fmt.Errorf("runtime dispatcher %q is not available", cfg.RuntimeDispatcher)
+	}
+}
+
+// taskCredentialIssuer builds the key one physical attempt is dispatched under.
+//
+// A deployed environment mounts an Ed25519 key whose public half the operator
+// distributes to runtimes; a test profile without one derives a stable key from
+// its own signing material, so the credential is still signed and still
+// verified rather than the verification being skipped where there is no key to
+// mount.
+func taskCredentialIssuer(cfg config.Config, clock applicationTime) (*runtimes.TaskCredentials, error) {
+	if cfg.RuntimeCredentialKey.Present() {
+		keyID := cfg.RuntimeCredentialKeyID
+		if keyID == "" {
+			return nil, fmt.Errorf("ANVILKIT_RUNTIME_CREDENTIAL_KEY_ID must name the key a runtime resolves this issuer by")
+		}
+		return runtimes.NewTaskCredentials(cfg.RuntimeCredentialKey.RedactionValue(), keyID, cfg.RuntimeCredentialTTL, clockOf{clock}.Now)
+	}
+	if cfg.Deployed() {
+		return nil, fmt.Errorf("ANVILKIT_RUNTIME_CREDENTIAL_KEY is required in a deployed environment")
+	}
+	if !cfg.SigningKey.Present() {
+		return nil, fmt.Errorf("task-scoped credentials require signing material")
+	}
+	return runtimes.NewSeededTaskCredentials(cfg.SigningKey.RedactionValue(), controlledCredentialKeyID, cfg.RuntimeCredentialTTL, clockOf{clock}.Now)
+}
+
+// taskCredentialTrust builds what admits a credential back at the in-process
+// boundary. A deployed environment reads the operator's trust root — the same
+// document the released units read — so both sides of the boundary resolve the
+// issuing key from material neither of them wrote.
+func taskCredentialTrust(cfg config.Config, clock applicationTime, issuer *runtimes.TaskCredentials, releases *runtimes.Registry) (*runtimes.CredentialTrust, error) {
+	if cfg.RuntimeCredentialTrustRoot != "" {
+		source, err := runtimes.NewFileCredentialTrust(cfg.RuntimeCredentialTrustRoot)
+		if err != nil {
+			return nil, err
+		}
+		return runtimes.NewCredentialTrust(source)
+	}
+	if cfg.Deployed() {
+		return nil, fmt.Errorf("ANVILKIT_RUNTIME_CREDENTIAL_TRUST_ROOT is required in a deployed environment")
+	}
+	audiences := make([]string, 0)
+	for _, release := range releases.Releases() {
+		audiences = append(audiences, release.Binding.RuntimeAudience)
+	}
+	source, err := runtimes.NewControlledCredentialTrust(issuer.PublicKey(), issuer.KeyID(), audiences, clockOf{clock}.Now)
+	if err != nil {
+		return nil, err
+	}
+	return runtimes.NewCredentialTrust(source)
+}
+
+// runtimeResultVerification builds the trust that attributes a returned result
+// to the release a run pinned.
+//
+// It is never optional. Where the runtime is a separate process the operator
+// distributes the trust store; where it runs in this one the store is
+// synthesized from the stand-in's own key and declares itself controlled, so
+// the eligibility gate refuses it outside an explicit test profile rather than
+// letting a deployment certify its own results.
+func runtimeResultVerification(cfg config.Config, clock applicationTime, releases *runtimes.Registry, standIn inProcessRuntime) (*runtimes.ResultVerifier, error) {
+	if cfg.RuntimeSigningTrust != "" {
+		source, err := runtimes.NewFileSigningTrust(cfg.RuntimeSigningTrust)
+		if err != nil {
+			return nil, err
+		}
+		return runtimes.NewResultVerifier(source)
+	}
+	if cfg.Deployed() {
+		return nil, fmt.Errorf("ANVILKIT_RUNTIME_SIGNING_TRUST is required in a deployed environment")
+	}
+	if standIn == nil {
+		return nil, fmt.Errorf("ANVILKIT_RUNTIME_SIGNING_TRUST must name the trust store that attributes results from a separate runtime process")
+	}
+	source, err := standIn.SigningTrust(releases.Releases(), clockOf{clock}.Now)
+	if err != nil {
+		return nil, err
+	}
+	return runtimes.NewResultVerifier(source)
+}
+
+// controlledCredentialKeyID names the key a test profile without
+// operator-mounted credential material mints task credentials with. It is a
+// distinct identity from any result-signing key: one authorizes work into a
+// runtime and the other attributes work out of one, and a single identity for
+// both would make either half usable as the other.
+const controlledCredentialKeyID = "urn:anvilkit:key:in-process-task-credential"
+
+// definitionResolver adapts the approved definition registry to what a runtime
+// asks of it: the definition a task pins, by identity and digest.
+type definitionResolver struct{ registry *agent.Registry }
+
+func (d definitionResolver) Resolve(definitionID, definitionDigest string) (agent.Definition, error) {
+	return d.registry.Resolve(agent.DefinitionReference{DefinitionID: definitionID, DefinitionDigest: definitionDigest})
 }
