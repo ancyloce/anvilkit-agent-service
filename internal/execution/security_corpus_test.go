@@ -127,7 +127,7 @@ func TestTheCorpusCannotPassWithoutTheDecisionsItNames(t *testing.T) {
 // egress guards.
 func productionGuards(t *testing.T) security.Guards {
 	t.Helper()
-	return security.Guards{
+	guards := security.Guards{
 		"cross-tenant": security.GuardFunc(func(ctx context.Context, attack security.AttackCase) (bool, error) {
 			return foreignTenantIsRefusedAtPreparation(t, ctx, attack)
 		}),
@@ -169,6 +169,17 @@ func productionGuards(t *testing.T) security.Guards {
 		"exfiltration-proposal": hostileToolOutputNeverReachesRunMemory(t),
 		"ssrf-egress":           aForbiddenDestinationIsNeverDispatched(t),
 	}
+	// The execution boundary's own categories live beside the decisions that
+	// own them. They are merged here rather than declared here so that one set
+	// still answers the coverage check: a category bound in neither place fails
+	// the run.
+	for category, guard := range boundaryGuards(t) {
+		if _, duplicate := guards[category]; duplicate {
+			t.Fatalf("adversarial category %q is bound twice", category)
+		}
+		guards[category] = guard
+	}
+	return guards
 }
 
 // foreignTenantIsRefusedAtPreparation drives the executor's preparation

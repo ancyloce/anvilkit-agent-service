@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ancyloce/anvilkit-agent-service/contracts/generated/schema"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent"
 	"github.com/ancyloce/anvilkit-agent-service/internal/agent/runner"
 	"github.com/ancyloce/anvilkit-agent-service/internal/applyauth"
@@ -23,12 +24,14 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/budget"
 	"github.com/ancyloce/anvilkit-agent-service/internal/canonical"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contractclient"
+	"github.com/ancyloce/anvilkit-agent-service/internal/dispatch"
 	"github.com/ancyloce/anvilkit-agent-service/internal/domaincommit"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/interrupts"
 	"github.com/ancyloce/anvilkit-agent-service/internal/journal"
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
+	"github.com/ancyloce/anvilkit-agent-service/internal/runtimes"
 	"github.com/ancyloce/anvilkit-agent-service/internal/tools"
 	"github.com/ancyloce/anvilkit-agent-service/internal/workflow"
 )
@@ -301,6 +304,20 @@ type Config struct {
 	Deltas           DeltaPublisher
 	Decisions        journal.Store
 	Budget           BudgetController
+	// RuntimeLeases revokes the runtime leases a run's dispatched work still
+	// holds when the run reaches a terminal state. A run that failed while an
+	// attempt was executing would otherwise leave that attempt current until
+	// its lease ran out: the runtime boundary would keep serving its
+	// callbacks, and the durable record would report an active execution of
+	// work the control plane had already given up on.
+	RuntimeLeases RuntimeLeases
+	// Releases selects the approved, currently selectable runtime release a
+	// delegated Specialist executes on. A Specialist runs on its own release,
+	// and that release is the one the Runtime Registry selects and verifies —
+	// never the binding the Specialist's definition asserts on its own — so a
+	// revoked or emergency-disabled Specialist release accepts no new
+	// delegated work whatever the definition catalog still names.
+	Releases RuntimeSelector
 	// Memory admits untrusted content into the run's carried memory, and
 	// Egress admits the outbound destinations a tool call names. Both are
 	// required: an execution pipeline composed without them would carry
@@ -367,6 +384,12 @@ func New(cfg Config) (*Executor, error) {
 	}
 	if cfg.Memory == nil || cfg.Egress == nil {
 		return nil, fmt.Errorf("agent execution: the memory admission and egress guards are required")
+	}
+	if cfg.RuntimeLeases == nil {
+		return nil, fmt.Errorf("agent execution: the runtime lease revocation port is required")
+	}
+	if cfg.Releases == nil {
+		return nil, fmt.Errorf("agent execution: the runtime release selector is required")
 	}
 	if cfg.ArtifactMetadata == nil {
 		return nil, fmt.Errorf("agent execution: the governed artifact metadata surface is required")
@@ -699,7 +722,24 @@ func (e *Executor) ExecuteTurn(ctx context.Context, op workflow.OpID, input work
 	}
 	carry := input.Carry
 	carry.Version = snapshot.Version
-	// The model turn is an expensive dispatch: it runs only inside the budget
+	// A recorded delegation outcome is consumed by exactly this turn — the one
+	// that concludes on it — and cleared from the carry so no later turn can
+	// re-validate a settled fact.
+	delegation := delegationOutcomeOf(input.Carry.Delegation)
+	carry.Delegation = nil
+	// The release the turn is dispatched to, and the contract material it
+	// executes against, are the run's own pins. Reading them here rather than
+	// resolving them per turn is what keeps every attempt of a run on the
+	// release the run was admitted against.
+	binding, err := pinnedRuntime(snapshot)
+	if err != nil {
+		return workflow.TurnResult{}, err
+	}
+	bom, err := pinnedContractBOM(snapshot)
+	if err != nil {
+		return workflow.TurnResult{}, err
+	}
+	// The turn is an expensive dispatch: it runs only inside the budget
 	// controller's dispatch gate, which proves the run's standing reservation
 	// is current, unreleased, unexpired, and of the active generation at the
 	// moment of dispatch.
@@ -709,7 +749,9 @@ func (e *Executor) ExecuteTurn(ctx context.Context, op workflow.OpID, input work
 		var turnErr error
 		outcome, turnErr = e.cfg.Runner.Turn(ctx, runner.TurnRequest{
 			Definition:      definition,
-			Run:             runView(snapshot),
+			Run:             runView(snapshot, traceparentOf(input.Run)),
+			Runtime:         binding,
+			ContractBOM:     bom,
 			Phase:           phaseName(input.Phase),
 			Turn:            input.Turn,
 			Depth:           0,
@@ -720,6 +762,7 @@ func (e *Executor) ExecuteTurn(ctx context.Context, op workflow.OpID, input work
 			ReviewReason:    input.Carry.ReviewReason,
 			DelegationsUsed: input.Carry.Delegations,
 			Budget:          limits.remaining(input.Carry.Usage),
+			Delegation:      delegation,
 		})
 		return turnErr
 	})
@@ -835,7 +878,7 @@ func (e *Executor) ExecuteAction(ctx context.Context, op workflow.OpID, input wo
 	switch input.Decision.Kind {
 	case agent.DecisionToolCall:
 		proposal := *input.Decision.ToolCall
-		decision, err := e.cfg.Runner.GuardAction(ctx, definition, runView(snapshot), current, proposal)
+		decision, err := e.cfg.Runner.GuardAction(ctx, definition, runView(snapshot, traceparentOf(input.Run)), current, proposal)
 		if err != nil {
 			var details problem.Details
 			if errors.As(err, &details) && details.Code == string(problem.CodeToolDispatchDenied) {
@@ -983,13 +1026,21 @@ func (e *Executor) OpenDelegation(ctx context.Context, op workflow.OpID, input w
 	grant, denied := e.cfg.Runner.AuthorizeDelegation(ctx, runner.DelegationRequest{
 		Parent:          definition,
 		Decision:        *input.Decision.Delegate,
-		Run:             runView(snapshot),
+		Run:             runView(snapshot, traceparentOf(input.Run)),
 		Authority:       current,
 		Depth:           0,
 		DelegationsUsed: input.Carry.Delegations,
 	})
 	if denied != nil {
 		carry.Notes = boundNotes(append(carry.Notes, "delegation refused ("+denied.Code+"): "+denied.Detail))
+		return workflow.DelegationOpened{Refused: true, Carry: carry}, nil
+	}
+	// The delegation opens only onto a release the registry will select for
+	// the Specialist: a Specialist whose release has been revoked or disabled
+	// is refused here, where the refusal is a delegation outcome the run can
+	// act on, rather than discovered at the first delegated turn.
+	if _, err := e.cfg.Releases.Select(runtimes.Request{Definition: grant.Specialist, Capability: runtimes.TurnCapability}); err != nil {
+		carry.Notes = boundNotes(append(carry.Notes, "delegation refused ("+string(problem.CodePolicyDenied)+"): no approved runtime release can execute the delegate"))
 		return workflow.DelegationOpened{Refused: true, Carry: carry}, nil
 	}
 	turnLimit := grant.TurnLimit
@@ -1040,6 +1091,21 @@ func (e *Executor) ExecuteDelegateTurn(ctx context.Context, op workflow.OpID, in
 	}
 	carry := input.Carry
 	carry.Version = snapshot.Version
+	bom, err := pinnedContractBOM(snapshot)
+	if err != nil {
+		return workflow.DelegateTurnResult{}, err
+	}
+	// A Specialist runs on its own release, and the release is the one the
+	// Runtime Registry selects and verifies for the Specialist's definition —
+	// not the binding the definition asserts. Selection is what honours the
+	// release lifecycle: a revoked or emergency-disabled Specialist release
+	// accepts no new delegated work, whatever the definition still names.
+	release, err := e.cfg.Releases.Select(runtimes.Request{Definition: specialist, Capability: runtimes.TurnCapability})
+	if err != nil {
+		details := problem.New(problem.CodeTaskDispatchDenied, "")
+		details.Detail = "no approved runtime release can execute the delegated specialist"
+		return workflow.DelegateTurnResult{Done: true, Carry: carry, Halt: &workflow.Halt{Problem: details, Behavior: workflow.TerminalFailed}}, nil
+	}
 	// A Specialist turn shares the parent run's budget boundary: the same
 	// standing reservation gates its dispatch and accumulates its cost.
 	var outcome runner.DelegateTurnOutcome
@@ -1047,8 +1113,13 @@ func (e *Executor) ExecuteDelegateTurn(ctx context.Context, op workflow.OpID, in
 	dispatchErr := e.cfg.Budget.Dispatch(ctx, budgetScopeOf(snapshot), reservationID, budget.Generation(snapshot.ExecutionGeneration), func(ctx context.Context, _ budget.Reservation) error {
 		var turnErr error
 		outcome, turnErr = e.cfg.Runner.DelegateTurn(ctx, runner.DelegateTurnRequest{
-			Specialist:   specialist,
-			Run:          runView(snapshot),
+			Specialist: specialist,
+			Run:        runView(snapshot, traceparentOf(input.Run)),
+			// A Specialist runs on its own release. The parent run's pin is
+			// the Manager's, and dispatching a Specialist turn to it would
+			// send the work to a unit that does not serve that definition.
+			Runtime:      release.Binding,
+			ContractBOM:  bom,
 			Turn:         input.DelegateTurn,
 			Depth:        1,
 			Last:         input.Last,
@@ -1088,10 +1159,19 @@ func (e *Executor) ExecuteDelegateTurn(ctx context.Context, op workflow.OpID, in
 	}
 	if outcome.Refused != nil {
 		carry.Notes = boundNotes(append(carry.Notes, "delegation refused: "+outcome.Refused.Code))
+		carry.Delegation = &workflow.DelegationCarry{State: "refused", DelegateID: input.SpecialistID, ReasonCode: outcome.Refused.Code}
 		return workflow.DelegateTurnResult{Done: true, Carry: carry}, nil
 	}
 	if len(outcome.Candidate) > 0 {
 		carry.Notes = boundNotes(append(carry.Notes, "specialist candidate: "+truncate(string(outcome.Candidate), 4096)))
+		carry.Delegation = &workflow.DelegationCarry{
+			State:               "completed",
+			DelegateID:          input.SpecialistID,
+			CandidateArtifactID: string(outcome.CandidateReference.ArtifactId),
+			CandidateDigest:     string(outcome.CandidateReference.Digest),
+			CandidateMediaType:  outcome.CandidateReference.MediaType,
+			CandidateSizeBytes:  outcome.CandidateReference.SizeBytes,
+		}
 		return workflow.DelegateTurnResult{Done: true, Carry: carry}, nil
 	}
 	return workflow.DelegateTurnResult{Done: outcome.Done, Carry: carry}, nil
@@ -2519,6 +2599,12 @@ func (e *Executor) Terminalize(ctx context.Context, op workflow.OpID, input work
 		if err := e.settleRunBudget(ctx, snapshot, target == runs.Refused); err != nil {
 			return workflow.Ack{}, err
 		}
+		// A re-executed terminalization revokes again: the previous execution
+		// may have applied the transition and stopped before the leases were
+		// revoked, and revocation only ever touches work that is still open.
+		if err := e.revokeRuntimeLeases(ctx, scope, snapshot); err != nil {
+			return workflow.Ack{}, err
+		}
 		return workflow.Ack{Version: snapshot.Version}, nil
 	}
 	command := runs.Command{Kind: kind, Traceparent: traceparentOf(input.Run)}
@@ -2541,7 +2627,36 @@ func (e *Executor) Terminalize(ctx context.Context, op workflow.OpID, input work
 	if err := e.settleRunBudget(ctx, snapshot, target == runs.Refused); err != nil {
 		return workflow.Ack{}, err
 	}
+	// The run has its answer. Work still open on its behalf — an attempt a
+	// runtime is executing for a turn that already failed — can no longer
+	// change anything, so its lease is revoked here, the same way cancellation
+	// revokes it, rather than left to run out.
+	if err := e.revokeRuntimeLeases(ctx, scope, snapshot); err != nil {
+		return workflow.Ack{}, err
+	}
 	return workflow.Ack{Version: next.Version}, nil
+}
+
+// RuntimeSelector resolves the one approved runtime release a definition may
+// execute on right now. The Runtime Registry satisfies it.
+type RuntimeSelector interface {
+	Select(runtimes.Request) (runtimes.Release, error)
+}
+
+// RuntimeLeases is the durable dispatch record's revocation surface: it ends
+// every open task and attempt of one run, and reports how many were open.
+type RuntimeLeases interface {
+	CancelRun(ctx context.Context, scope dispatch.Scope, runID, reason string) (int, error)
+}
+
+// revokeRuntimeLeases ends whatever dispatched work a terminal run still has
+// open. Revocation is idempotent — it touches only open work — so it is safe
+// on every path that reaches a terminal state, including a re-executed one.
+func (e *Executor) revokeRuntimeLeases(ctx context.Context, scope runs.Scope, snapshot runs.Snapshot) error {
+	if _, err := e.cfg.RuntimeLeases.CancelRun(ctx, dispatch.Scope{WorkspaceID: scope.WorkspaceID, ProjectID: scope.ProjectID}, string(snapshot.RunID), dispatch.ReasonRunTerminal); err != nil {
+		return fmt.Errorf("revoke the runtime leases of the terminal run: %w", err)
+	}
+	return nil
 }
 
 // dispatch executes one guard-approved tool call inside the signed execution
@@ -3020,6 +3135,25 @@ func turnStateAllowed(state runs.State, phase workflow.Phase) bool {
 	return state == runs.Planning
 }
 
+// delegationOutcomeOf maps a recorded delegation outcome into the runner's
+// vocabulary; nil stays nil.
+func delegationOutcomeOf(carried *workflow.DelegationCarry) *runner.DelegationOutcome {
+	if carried == nil {
+		return nil
+	}
+	return &runner.DelegationOutcome{
+		State:      carried.State,
+		DelegateID: carried.DelegateID,
+		ReasonCode: carried.ReasonCode,
+		Candidate: schema.SharedPrimitivesArtifactReference{
+			ArtifactId: schema.SharedPrimitivesOpaqueId(carried.CandidateArtifactID),
+			Digest:     schema.SharedPrimitivesDigest(carried.CandidateDigest),
+			MediaType:  carried.CandidateMediaType,
+			SizeBytes:  carried.CandidateSizeBytes,
+		},
+	}
+}
+
 func phaseName(phase workflow.Phase) string {
 	if phase == workflow.PhaseRevise {
 		return runner.PhaseRevise
@@ -3035,17 +3169,48 @@ func refusalLegal(state runs.State) bool {
 	return state == runs.Preparing || state == runs.Planning || state == runs.Validating
 }
 
-func runView(snapshot runs.Snapshot) runner.RunView {
+// runView is the bounded run identity a turn may disclose. The generation and
+// the traceparent travel with it because a dispatched turn is fenced by the
+// first and correlated by the second: a task that carried neither could not be
+// told apart from one belonging to a superseded execution of the same run.
+func runView(snapshot runs.Snapshot, traceparent string) runner.RunView {
 	return runner.RunView{
-		RunID:       string(snapshot.RunID),
-		WorkspaceID: snapshot.WorkspaceID,
-		ProjectID:   snapshot.Target.ProjectID,
-		ActorID:     snapshot.ActorID,
-		Domain:      snapshot.Domain,
-		Operation:   snapshot.Operation,
-		TargetType:  snapshot.Target.Type,
-		TargetID:    snapshot.Target.ID,
+		RunID:               string(snapshot.RunID),
+		RootRunID:           string(snapshot.RootRunID),
+		WorkspaceID:         snapshot.WorkspaceID,
+		ProjectID:           snapshot.Target.ProjectID,
+		ActorID:             snapshot.ActorID,
+		Domain:              snapshot.Domain,
+		Operation:           snapshot.Operation,
+		TargetType:          snapshot.Target.Type,
+		TargetID:            snapshot.Target.ID,
+		ExecutionGeneration: snapshot.ExecutionGeneration,
+		Traceparent:         traceparent,
 	}
+}
+
+// pinnedRuntime reads the runtime release the run was created against. It is
+// never re-resolved from the registry: a registry change must not move a live
+// run onto a different release, and the pin is what makes that impossible.
+func pinnedRuntime(snapshot runs.Snapshot) (agent.RuntimeBinding, error) {
+	var binding agent.RuntimeBinding
+	if err := json.Unmarshal(snapshot.RuntimeBinding, &binding); err != nil {
+		return agent.RuntimeBinding{}, fmt.Errorf("decode the run's pinned runtime release: %w", err)
+	}
+	if binding.RuntimeUnitID == "" || binding.RuntimeManifestDigest == "" || binding.RuntimeImageDigest == "" || binding.InvocationProtocolDigest == "" || binding.RuntimeAudience == "" {
+		return agent.RuntimeBinding{}, fmt.Errorf("the run pins no complete runtime release")
+	}
+	return binding, nil
+}
+
+// pinnedContractBOM reads the contract bill of materials the run pinned, in
+// the canonical shape a dispatched task carries it in.
+func pinnedContractBOM(snapshot runs.Snapshot) (schema.SharedPrimitivesContractBomReference, error) {
+	var reference schema.SharedPrimitivesContractBomReference
+	if err := json.Unmarshal(snapshot.ContractBOM, &reference); err != nil {
+		return schema.SharedPrimitivesContractBomReference{}, fmt.Errorf("decode the run's pinned contract BOM reference: %w", err)
+	}
+	return reference, nil
 }
 
 func haltOf(halted runner.Halted) *workflow.Halt {

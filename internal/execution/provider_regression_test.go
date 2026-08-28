@@ -37,12 +37,13 @@ func TestProviderReplayUnderTheSameOperationKeyIsFree(t *testing.T) {
 	if replayed := billedOperations(t, h); replayed != billed {
 		t.Fatalf("a replayed operation key billed again: %d then %d", billed, replayed)
 	}
+	// The replay does not reach the provider at all. The logical task already
+	// committed an answer, so the re-executed step reads it rather than
+	// executing the work a second time; the provider ledger's own replay
+	// (proved directly in TestProviderReplayAfterANewAdapterInstanceNeverCalls	// TheProviderAgain) is the second line of defence behind it, not the first.
 	requests := h.adapter.Requests()
-	if len(requests) != 2 {
-		t.Fatalf("adapter calls = %d, want the original and its replay", len(requests))
-	}
-	if requests[0].IdempotencyKey != requests[1].IdempotencyKey || requests[0].InvocationID != requests[1].InvocationID {
-		t.Fatalf("replay used a different provider identity: %s / %s", requests[0].IdempotencyKey, requests[1].IdempotencyKey)
+	if len(requests) != 1 {
+		t.Fatalf("adapter calls = %d, want the original only", len(requests))
 	}
 	if first.Decision.Kind != second.Decision.Kind {
 		t.Fatalf("replay produced a different decision: %s then %s", first.Decision.Kind, second.Decision.Kind)

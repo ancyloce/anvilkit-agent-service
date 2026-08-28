@@ -23,6 +23,7 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/contextcompiler"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contractclient"
 	"github.com/ancyloce/anvilkit-agent-service/internal/contracts"
+	"github.com/ancyloce/anvilkit-agent-service/internal/dispatch"
 	"github.com/ancyloce/anvilkit-agent-service/internal/domaincommit"
 	"github.com/ancyloce/anvilkit-agent-service/internal/events"
 	"github.com/ancyloce/anvilkit-agent-service/internal/execution"
@@ -32,6 +33,8 @@ import (
 	"github.com/ancyloce/anvilkit-agent-service/internal/problem"
 	"github.com/ancyloce/anvilkit-agent-service/internal/recovery"
 	"github.com/ancyloce/anvilkit-agent-service/internal/runs"
+	"github.com/ancyloce/anvilkit-agent-service/internal/runtimes"
+	"github.com/ancyloce/anvilkit-agent-service/internal/runtimes/inprocess"
 	"github.com/ancyloce/anvilkit-agent-service/internal/scheduler"
 	"github.com/ancyloce/anvilkit-agent-service/internal/security"
 	"github.com/ancyloce/anvilkit-agent-service/internal/securityaudit"
@@ -383,6 +386,9 @@ type harnessOptions struct {
 	// evidence wraps the immutable evidence store, so a test can inject a
 	// crash between a durable decision and the audit record it must leave.
 	evidence func(execution.EvidenceRecorder) execution.EvidenceRecorder
+	// withdrawnReleases names definitions whose runtime release the harness
+	// registry reports revoked, so lifecycle-refused delegation is observable.
+	withdrawnReleases []string
 	// memoryAdmissionBytes, egressAllowedHosts, and egressResolver are the
 	// deployment policy the production guards are composed from.
 	memoryAdmissionBytes int
@@ -520,15 +526,54 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The turn is executed by a runtime, not by the runner. The harness
+	// composes the in-process stand-in so the whole dispatch path — task,
+	// attempt, fence, signed result, fenced commit — runs in these tests
+	// exactly as it does in a deployment that has a released unit on the other
+	// end of the transport.
+	resultSigner, err := inprocess.NewSeededSigner(harnessSigningMaterial, harnessResultKeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskCredentials, credentialTrust := harnessCredentialMaterial(t, registry, clock)
+	inProcessRuntime, err := inprocess.New(inprocess.Config{
+		Definitions: harnessDefinitions{registry: registry},
+		Credentials: credentialTrust,
+		Selector:    stack,
+		Invoker:     stack,
+		Signer:      resultSigner,
+		Now:         clock.Now,
+		Repairs:     3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatchTasks, err := dispatch.New(dispatch.Config{
+		Repository: dispatch.NewMemoryRepository(),
+		Tokens:     dispatch.RandomTokens{},
+		Clock:      clock,
+		Lease:      time.Minute,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	agentRunner, err := runner.New(runner.Config{
-		Registry:  registry,
-		Compiler:  contextcompiler.New(nil),
-		Selector:  stack,
-		Invoker:   stack,
-		Guard:     guard,
-		Validator: pinnedValidator,
-		Clock:     clock,
-		Limits:    runner.Limits{MaximumOutputBytes: 65536, MaximumInputTokens: 100000, MaximumOutputTokens: 100000, Timeout: 5 * time.Second, MaximumAttempts: options.providerAttempts, RetryBudget: time.Minute, ContextTokens: 4000},
+		Registry:    registry,
+		Compiler:    contextcompiler.New(nil),
+		Tasks:       dispatchTasks,
+		Dispatcher:  inProcessRuntime,
+		Credentials: taskCredentials,
+		Signatures:  harnessResultVerifier(t, registry, resultSigner, clock),
+		Disclosure:  inProcessRuntime,
+		Candidates:  inProcessRuntime,
+		Guard:       guard,
+		Validator:   pinnedValidator,
+		Clock:       clock,
+		Limits: runner.Limits{
+			MaximumOutputBytes: 65536, MaximumInputTokens: 100000, MaximumOutputTokens: 100000,
+			Timeout: 5 * time.Second, MaximumAttempts: options.providerAttempts, RetryBudget: time.Minute,
+			ContextTokens: 4000, MemoryBytes: 512 << 20, CPUMillis: 2000,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -714,6 +759,8 @@ func newHarness(t *testing.T, script [][]byte, mutate ...func(*harnessOptions)) 
 		Deltas:            deltaBroker,
 		Decisions:         h.journal,
 		Budget:            budgetAuthority,
+		RuntimeLeases:     dispatchTasks,
+		Releases:          harnessReleases{withdrawn: options.withdrawnReleases},
 		Memory:            h.memoryGuard,
 		Egress:            h.egressGuard,
 		ArtifactMetadata:  h.artifactService,
@@ -855,7 +902,12 @@ func (h *harness) seedSnapshot(operation string, material runs.Authority) workfl
 		Target:     runs.Target{Type: "page", ID: "page.home", WorkspaceID: testWorkspace, ProjectID: testProject},
 		Definition: material.Definition, ContractBOM: material.ContractBOM, Policy: material.Policy, Budget: material.Budget,
 		Idempotency: runs.IdempotencyProjection{Scope: testWorkspace + ":create-run", Key: "create-1", CanonicalRequestDigest: validDigest},
-		Status:      runs.Created, Version: 1, ExecutionGeneration: 1,
+		// The run pins the runtime release its turns are dispatched to, the
+		// way run creation pins what the registry selected. A run without one
+		// is a run nothing can execute, which is what the executor now
+		// enforces.
+		RuntimeBinding: h.runtimeBinding(),
+		Status:         runs.Created, Version: 1, ExecutionGeneration: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := h.repo.Seed(testScope(), snapshot); err != nil {
@@ -1029,6 +1081,33 @@ func TestRunExecutesGuardedToolAndDelegationBeforeCompleting(t *testing.T) {
 	}
 	if allowed != 1 {
 		t.Fatalf("guard must record exactly one allowed decision, got %d", allowed)
+	}
+}
+
+// A Specialist runs on the release the Runtime Registry selects for it, and a
+// release that has been revoked or emergency-disabled is not selected for new
+// work. The delegation is refused at the open, as a delegation outcome, and no
+// Specialist turn is ever dispatched onto the withdrawn release.
+func TestADelegationOntoAWithdrawnReleaseIsRefused(t *testing.T) {
+	h := newHarness(t, [][]byte{
+		delegatePlan(), // manager turn 0: delegate to the specialist
+		finalPlan(),    // manager turn 1: finalize after the refusal
+	}, func(options *harnessOptions) {
+		options.withdrawnReleases = []string{agent.SpecialistDefinitionID}
+	})
+	input := h.seedRun("artifact-validation")
+	outcome, err := h.engine.ExecuteRun(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.Terminal != workflow.TerminalCompleted {
+		t.Fatalf("outcome = %+v", outcome)
+	}
+	if h.ops.callsFor(":delegate-open-0000") != 1 {
+		t.Fatal("the delegation must be opened exactly once")
+	}
+	if h.ops.callsFor(":delegate-turn-0000-0000") != 0 {
+		t.Fatal("a specialist turn was dispatched onto a withdrawn release")
 	}
 }
 
@@ -1410,3 +1489,78 @@ var (
 	_ execution.ToolExecutor     = (*retrievingToolExecutor)(nil)
 	_ execution.RetrievalCapable = (*retrievingToolExecutor)(nil)
 )
+
+// harnessSigningMaterial is the key material the harness derives its
+// task-scoped credentials and its result signing key from.
+const harnessSigningMaterial = "execution-harness-signing-material-0123456789"
+
+const (
+	harnessResultKeyID     = "urn:anvilkit:key:execution-harness-result"
+	harnessCredentialKeyID = "urn:anvilkit:key:execution-harness-credential"
+)
+
+// harnessCredentialMaterial builds both halves of the task-credential boundary
+// from one key: the issuer the runner mints with, and the trust the in-process
+// runtime admits against.
+func harnessCredentialMaterial(t *testing.T, registry *agent.Registry, clock systemClock) (*runtimes.TaskCredentials, *runtimes.CredentialTrust) {
+	t.Helper()
+	issuer, err := runtimes.NewSeededTaskCredentials(harnessSigningMaterial, harnessCredentialKeyID, time.Minute, clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	audiences := make([]string, 0)
+	for _, definition := range registry.Definitions() {
+		audiences = append(audiences, definition.RuntimeBinding.RuntimeAudience)
+	}
+	source, err := runtimes.NewControlledCredentialTrust(issuer.PublicKey(), issuer.KeyID(), audiences, clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust, err := runtimes.NewCredentialTrust(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issuer, trust
+}
+
+// harnessResultVerifier trusts the harness signer for every release the
+// catalog binds, which is what an operator trust store does for a deployment.
+func harnessResultVerifier(t *testing.T, registry *agent.Registry, signer *inprocess.SeededSigner, clock systemClock) *runtimes.ResultVerifier {
+	t.Helper()
+	releases := make([]runtimes.Release, 0)
+	for _, definition := range registry.Definitions() {
+		releases = append(releases, runtimes.Release{
+			RuntimeUnitID:  definition.RuntimeBinding.RuntimeUnitID,
+			ManifestDigest: definition.RuntimeBinding.RuntimeManifestDigest,
+			Binding:        definition.RuntimeBinding,
+		})
+	}
+	source, err := runtimes.NewControlledSigningTrust(signer.PublicKey(), harnessResultKeyID, releases, clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := runtimes.NewResultVerifier(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return verifier
+}
+
+// harnessDefinitions is what a runtime asks of the approved catalog: the
+// definition a task pins, by identity and digest.
+type harnessDefinitions struct{ registry *agent.Registry }
+
+func (h harnessDefinitions) Resolve(definitionID, definitionDigest string) (agent.Definition, error) {
+	return h.registry.Resolve(agent.DefinitionReference{DefinitionID: definitionID, DefinitionDigest: definitionDigest})
+}
+
+// runtimeBinding is the release the seeded run pins: the one the manager
+// definition is bound to, which is what the registry selects for it.
+func (h *harness) runtimeBinding() json.RawMessage {
+	h.t.Helper()
+	encoded, err := json.Marshal(h.manager.RuntimeBinding)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return encoded
+}

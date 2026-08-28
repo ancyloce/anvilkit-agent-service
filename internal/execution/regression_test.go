@@ -118,15 +118,14 @@ func TestDuplicateTurnDeliveryReusesTheSameProviderIdentity(t *testing.T) {
 	if first.Decision.Kind != second.Decision.Kind {
 		t.Fatalf("duplicate delivery produced a different decision: %s vs %s", first.Decision.Kind, second.Decision.Kind)
 	}
+	// The duplicate delivery reaches no provider at all: the logical task the
+	// operation key names already committed an answer, and the re-executed
+	// step reads it. The identity assertion below is what makes that safe to
+	// rely on — every provider identity is derived from the durable operation,
+	// so a delivery that did reach the provider would be the same call.
 	requests := h.adapter.Requests()
-	if len(requests) != 2 {
-		t.Fatalf("adapter invocations = %d, want 2", len(requests))
-	}
-	if requests[0].IdempotencyKey == "" || requests[0].IdempotencyKey != requests[1].IdempotencyKey {
-		t.Fatalf("duplicate delivery changed the provider idempotency identity: %q vs %q", requests[0].IdempotencyKey, requests[1].IdempotencyKey)
-	}
-	if requests[0].InvocationID != requests[1].InvocationID {
-		t.Fatalf("duplicate delivery changed the invocation identity: %q vs %q", requests[0].InvocationID, requests[1].InvocationID)
+	if len(requests) != 1 {
+		t.Fatalf("adapter invocations = %d, want the original only", len(requests))
 	}
 	wanted := modelgateway.InvocationIdentity(op.Key() + ":plan-attempt-00")
 	if requests[0].InvocationID != wanted {
@@ -137,8 +136,8 @@ func TestDuplicateTurnDeliveryReusesTheSameProviderIdentity(t *testing.T) {
 	if _, err := h.ops.ExecuteTurn(context.Background(), other, workflow.TurnInput{Run: input, Turn: 1, Phase: workflow.PhasePlan, Carry: workflow.Carry{Version: prepared.Version}}); err != nil {
 		t.Fatal(err)
 	}
-	third := h.adapter.Requests()[2]
-	if third.InvocationID == requests[0].InvocationID {
+	nextOperation := h.adapter.Requests()[1]
+	if nextOperation.InvocationID == requests[0].InvocationID {
 		t.Fatal("distinct durable operations must not share a provider identity")
 	}
 }

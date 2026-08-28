@@ -147,6 +147,15 @@ func ControlledCandidate() json.RawMessage {
 	return json.RawMessage(`{"kind":"ComponentPackageSpec","packageIntent":{"name":"controlled-section","version":"1.0.0","componentType":"section"},"inputs":[{"artifactId":"artifact.controlled.001","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mediaType":"application/json","sizeBytes":128}],"outputs":[{"name":"bundle","schema":{"componentName":"anvilkit.contract.schema.example","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"maximumBytes":10485760}],"validationConstraints":[{"policyId":"policy.controlled","version":"v1","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"buildPolicy":{"policyId":"policy.controlled","version":"v1","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"certificationPolicy":{"policyId":"policy.controlled","version":"v1","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`)
 }
 
+// ControlledPageCandidate is the deterministic PageCandidate the controlled
+// adapter proposes as a final answer for a page operation. It is the canonical
+// minimum fixture from the pinned contract corpus, so its validity against the
+// page-candidate schema is proven by the same corpus every consumer validates
+// against rather than asserted here.
+func ControlledPageCandidate() json.RawMessage {
+	return json.RawMessage(`{"kind":"PageCandidate","target":{"targetType":"pagix-page","targetId":"page.synthetic.001","workspaceId":"workspace.synthetic.001","projectId":"project.synthetic.001"},"baseRevision":"revision.synthetic.001","pageData":{"artifactId":"artifact.pagedata.001","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mediaType":"application/json","sizeBytes":128},"digests":{"targetDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","catalogDigest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","contractBomDigest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","definitionDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","policyDigest":"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},"candidateDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","validationReceipts":[],"preview":{"taskId":"task.synthetic.001","resultArtifact":{"artifactId":"artifact.preview.001","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","mediaType":"application/json","sizeBytes":128}},"generation":{"summary":"synthetic candidate","assumptions":[]},"references":{"modelInvocations":[],"toolInvocations":[],"delegations":[],"evidence":[]},"warnings":[]}`)
+}
+
 // PlanStep renders one typed-plan document proposing a single step.
 func PlanStep(tool string, arguments map[string]json.RawMessage) []byte {
 	raw, err := json.Marshal(struct {
