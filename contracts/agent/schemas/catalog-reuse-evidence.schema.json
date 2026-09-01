@@ -1,0 +1,158 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/catalog-reuse-evidence.schema.json",
+  "title": "CatalogReuseEvidence contract",
+  "description": "Per-generation record of how the catalog was consulted (PRD-CAT-0001 §9.3, CAT-FR-021, CAT-FR-022). It names the Run-local catalog snapshot and revision, the fingerprint of the search request, the entries selected with their role (reuse, reference, or dependency), the entries considered with their scores, the entries rejected with a reason, and, when similarity and API overlap exceed the reviewed threshold, the likely duplicate for the review surface. It is evidence for review only and never rejects a component on its own; it is carried by ComponentIntent and resolvable after restart.",
+  "type": "object",
+  "minProperties": 7,
+  "maxProperties": 8,
+  "required": [
+    "kind",
+    "snapshotId",
+    "catalogRevision",
+    "fingerprint",
+    "selected",
+    "considered",
+    "rejected"
+  ],
+  "properties": {
+    "kind": {
+      "const": "CatalogReuseEvidence"
+    },
+    "snapshotId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "catalogRevision": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "fingerprint": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "selected": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "componentId",
+          "role"
+        ],
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+          },
+          "role": {
+            "enum": [
+              "reuse",
+              "reference",
+              "dependency"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "considered": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "componentId",
+          "score"
+        ],
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+          },
+          "score": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/DecimalString"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "rejected": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "componentId",
+          "reason"
+        ],
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "likelyDuplicate": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "componentId",
+        "similarity"
+      ],
+      "properties": {
+        "componentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+        },
+        "similarity": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/DecimalString"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "likelyDuplicate": "omitted when no catalog entry exceeds the reviewed duplicate threshold"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "CatalogReuseEvidence",
+    "componentName": "anvilkit.contract.schema.catalog-reuse-evidence",
+    "owner": "Platform Contracts owner",
+    "stability": "experimental",
+    "identityFields": [
+      "/snapshotId",
+      "/catalogRevision",
+      "/fingerprint",
+      "/selected",
+      "/considered",
+      "/rejected",
+      "/likelyDuplicate"
+    ],
+    "maximumSerializedBytes": 65536,
+    "descriptions": []
+  }
+}

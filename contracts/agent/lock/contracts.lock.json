@@ -3,7 +3,7 @@
   "description": "Canonical Agent contract lock (ADR-018). Regenerate with check-agent-profile.ts --update after a coordinated atomic refactor; CI verifies byte equality.",
   "profile": {
     "path": "contracts/agent/profile/p0-kernel-profile.json",
-    "sha256": "sha256:b19e0d190b55ad58f1359c334d2673df5d983afcd08a504d450ce8bc6573f7a0"
+    "sha256": "sha256:732db5da05d7822a8ea709fafbd1c09faeb890bf78f2f357e34fd7628f772a72"
   },
   "sources": {
     "contracts/agent/asyncapi/agent-events.asyncapi.json": "sha256:be4b6fe71d31ecdf98720bd488062e9d07ed1d43f76de3d3cc1498281d64d12d",
@@ -27,11 +27,20 @@
     "contracts/agent/fixtures/adversarial/apply-authorization.unknown-field.json": "sha256:e2a1fde8e5138f702e4e5c66221d0d6766eb9a7e0bb76e4972f6897ac680b467",
     "contracts/agent/fixtures/adversarial/approval-request.unknown-field.json": "sha256:2168ca371cc2d3a8bb77ad5e82c96d84ec9ac076a68e95e1ca63d44483bc9239",
     "contracts/agent/fixtures/adversarial/artifact-content-grant.unknown-field.json": "sha256:b7648477471ec30f30509d43093cd83ab5c6607d057f8e1c603f71f783dbb421",
+    "contracts/agent/fixtures/adversarial/catalog-reuse-evidence.unknown-field.json": "sha256:d9622f9cb58a56ac91e34f6547e41e9af0d7e86436c8ad79583c74e23d08b408",
+    "contracts/agent/fixtures/adversarial/catalog-search-request.unknown-field.json": "sha256:ebfaffa10b6e12f918bb2aefdc5b80bc5f0ca1267632818e975cdc38e3d13af9",
+    "contracts/agent/fixtures/adversarial/catalog-search-result.unknown-field.json": "sha256:dd4823490c475f4d1f2880c22ef9f67f07c5ee04e486d7712422ddca2da65d1b",
     "contracts/agent/fixtures/adversarial/catalog-snapshot.unknown-field.json": "sha256:9304ec4143b60bc76ea160b076d5bf3f1fbe43a671f83fb1a69de6ea71f8e73d",
     "contracts/agent/fixtures/adversarial/compiled-context.unknown-field.json": "sha256:295d24b2f4d46c301cb14344345dada94f2b860d82c50d98611155d74f49c18c",
+    "contracts/agent/fixtures/adversarial/component-catalog-artifact.agent-instructions.json": "sha256:bfe3f72bf6b751e66df39fbd4cd7459e6baed4ba9e13b00e8517729acba753c2",
+    "contracts/agent/fixtures/adversarial/component-catalog-artifact.unknown-field.json": "sha256:f1cb8e70b5646d9157f5649266cda88a02dc678fb38ec4a2891c573e00a49023",
     "contracts/agent/fixtures/adversarial/component-design-spec.publication-grant.json": "sha256:be542872f7b981bf5865c95a3d360f212f48b9f28c32ea4a4f9684843c0d0875",
     "contracts/agent/fixtures/adversarial/component-design-spec.source-bundle.json": "sha256:1c47cbf3cf51c9a1879918139a8c0e57c6a2b20e0fa6b941aadd180159137a0c",
+    "contracts/agent/fixtures/adversarial/component-intent.unknown-field.json": "sha256:91685cb61f1f565a27471fefdc7a05403b2de92375be04e4809ac55ff4b6f02f",
+    "contracts/agent/fixtures/adversarial/component-ir.executable-default.json": "sha256:ae6543c7fa29febdf4e0327f5f0fc0dede11325bce7588c2a516f0425d9bd38f",
+    "contracts/agent/fixtures/adversarial/component-ir.unknown-field.json": "sha256:054631091452317fe09e94ab9d32f033ea93c8f300a9db0a7500f27e857f905e",
     "contracts/agent/fixtures/adversarial/component-package-spec.unknown-field.json": "sha256:8a41dddab9bb693096b840c088b5d9ae52d36b37cf54d607f057cee08581a08b",
+    "contracts/agent/fixtures/adversarial/component-request.unknown-field.json": "sha256:e41a91cf4cea0f930bdea449b0373be0918482a3561a6413f1e07783983386b5",
     "contracts/agent/fixtures/adversarial/contract-bom.unknown-field.json": "sha256:d191847dc6a239bce2d563748014cd2bffc18f24a89d98b2cc3fc1cca15a209d",
     "contracts/agent/fixtures/adversarial/contract-revocation-snapshot.unknown-field.json": "sha256:6e017789efa49d5a9f17d1e2f5372f2423807e9dff0cf69e2380de73ed78e570",
     "contracts/agent/fixtures/adversarial/contract-runtime-request.unknown-field.json": "sha256:d1ccdbdd638b928453826cde5cc64b4c57aba2d8f29f1818f2a4ae0923023744",
@@ -62,6 +71,7 @@
     "contracts/agent/fixtures/adversarial/target-snapshot.unknown-field.json": "sha256:d729119e29c044ab125edee5e9135081e9f844a6c0562097e73248ee1db18489",
     "contracts/agent/fixtures/adversarial/tool-definition.unknown-field.json": "sha256:db0aa7e7614ee7a9c071544d3bfba2d5e592c5a6f57847ed364daa17845abfc3",
     "contracts/agent/fixtures/adversarial/usage-observation.unknown-field.json": "sha256:529c6cdafe0a7f091776afed41091b2dc46ab974a32342f7d07e4b4a8ce30f89",
+    "contracts/agent/fixtures/adversarial/validation-finding.unknown-field.json": "sha256:469b6e0bb45aa523c4633d17b04c7dedc6b39d50a566863b303f5d75631a0608",
     "contracts/agent/fixtures/adversarial/worker-lease.unknown-field.json": "sha256:2010dc6d914207897818ee56d1629ecfeb22c775e4c1cdebd85add1a2fd8d3e9",
     "contracts/agent/fixtures/adversarial/worker-result.stale-fence.json": "sha256:acf7671e2833b60b4d5daec23da7ec1209539975de92a2b953f79a50ec4f2d77",
     "contracts/agent/fixtures/adversarial/worker-result.unknown-field.json": "sha256:3b6cb85fd04ac3e36ff6e85b9ef6db89df7a21edff36020c8fdd380b00d926e4",
@@ -102,10 +112,20 @@
     "contracts/agent/fixtures/invalid/approval-request.missing-actionDigest.json": "sha256:a7e3c4d1b49bf33b05df0f785b7e69b5bbab2071f3e7d1981d04e7369c14ca08",
     "contracts/agent/fixtures/invalid/artifact-content-grant.missing-expiry.json": "sha256:603ac85d9d77f31b92451a80bc6c363d511a6c1b566a279925977ed3347056dc",
     "contracts/agent/fixtures/invalid/artifact-content-grant.ungoverned-purpose.json": "sha256:ecdaab5ab27ce92836db6e0775bf270b6a462e6c093827084a4cc8589b88a902",
+    "contracts/agent/fixtures/invalid/catalog-reuse-evidence.missing-snapshot-id.json": "sha256:9c7b19c9416b2d64551649eae15baa2dbdb79c82be41241333cc8c1ed734d126",
+    "contracts/agent/fixtures/invalid/catalog-search-request.limit-above-maximum.json": "sha256:0ae44b1ae03d4c54bb00a5155cb4a0a4054b0264560d63186f1e672ffc871e93",
+    "contracts/agent/fixtures/invalid/catalog-search-result.missing-fingerprint.json": "sha256:a69dd26f55254c8b4cbf75093c7c4a1e5d07d76f065dd14a5c9272e558b1400d",
     "contracts/agent/fixtures/invalid/catalog-snapshot.missing-puck-runtime.json": "sha256:eb98587a8e734794b328daa6a95d7855914b541905478929947d8b163770f5f1",
     "contracts/agent/fixtures/invalid/compiled-context.missing-orderedTrustLayers.json": "sha256:7dc723137d6ccb4ee3228a5edea7a2640426b409e66574673fd275a137e414e1",
+    "contracts/agent/fixtures/invalid/component-catalog-artifact.missing-signature.json": "sha256:5b90fc36e12194174d31e927bad0f099d1df86ebcbaba24d872236c4e1d9092e",
+    "contracts/agent/fixtures/invalid/component-catalog-artifact.wrong-signing-purpose.json": "sha256:1d4c273135ee96ef1f0121f799a13004d8a44b789322cff47dbbd58e0948db3a",
     "contracts/agent/fixtures/invalid/component-design-spec.missing-namespace.json": "sha256:59941fca7cf4cf5b960c6da941d9f76a156bc9e65a947b6f80d990c99851ba6a",
+    "contracts/agent/fixtures/invalid/component-intent.missing-catalog-evidence.json": "sha256:8428fd50cd83edec3c49851a978aa7a4e33857019562b4992af2a3ce442b4ea4",
+    "contracts/agent/fixtures/invalid/component-ir.non-serializable-prop.json": "sha256:e9fc516f748d4da2103295ab6f4f18674ec3a7d469877a57f93dc97ec046d224",
+    "contracts/agent/fixtures/invalid/component-ir.unapproved-dependency.json": "sha256:5b7227978cadb1de42fda71cc4e10ed791e3f9bded057b740238cec9880583d0",
+    "contracts/agent/fixtures/invalid/component-ir.unknown-schema-version.json": "sha256:bd932f89f1e1dda20fcb13a4f931dc824d8fc2587450d89ad2dfe6747200dc14",
     "contracts/agent/fixtures/invalid/component-package-spec.missing-certification-policy.json": "sha256:1baa1145897f855265cb15a05d70d7710c60e422ead62230872370de22fe680c",
+    "contracts/agent/fixtures/invalid/component-request.missing-idempotency-key.json": "sha256:3ca624b84b61f7af5dfaa0803c034b7222b52b85ab6decbf6c11eb6435858a75",
     "contracts/agent/fixtures/invalid/contract-bom.foreign-component-name.json": "sha256:fec5da9f3c28dcef15296855a064220b7b2823dba4d4cdc265b9fcc372742041",
     "contracts/agent/fixtures/invalid/contract-bom.missing-profile-digest.json": "sha256:aa726c426adaf02db04f30ad53b837594014900693cffee28e2af6dbda322fba",
     "contracts/agent/fixtures/invalid/contract-revocation-snapshot.missing-revoked-keys.json": "sha256:7de364dd371046f8b3cbfe9a54b3473793a00d51c13d1bc472b87c2fdf39ba90",
@@ -146,9 +166,10 @@
     "contracts/agent/fixtures/invalid/tool-definition.missing-capability.json": "sha256:c07e05b4a34ab4ac2e34031219f9b856e987a3530d4345f1ebd415ba769044fc",
     "contracts/agent/fixtures/invalid/usage-observation.missing-physicalAttemptId.json": "sha256:67e6ed3b37121c54abf7cc3cb49388681b4dc36beecc22cdaf617d4a0ebcb5aa",
     "contracts/agent/fixtures/invalid/usage-observation.unsafe-number.json": "sha256:aa9c4fee2ca1455abbd62e00f4ab26a72ba77e760afb09ef3a2ec2313a10b23a",
+    "contracts/agent/fixtures/invalid/validation-finding.ungoverned-severity.json": "sha256:0623803a235023112fcb6b37b6c09629c79af0f549ca60ad8e227da6109b8a76",
     "contracts/agent/fixtures/invalid/worker-lease.missing-leaseEpoch.json": "sha256:d36a4d22b2ebf7fc2486c3290b9dbb109366214ed5604fc30598d915ee4f9155",
     "contracts/agent/fixtures/invalid/worker-result.missing-leaseEpoch.json": "sha256:d71f088d7933c8ac47f8af6501f8490e0b80cf2a10a2047fabc6586cfd001939",
-    "contracts/agent/fixtures/manifest.json": "sha256:6225db6c72f81e73e0e82de407fe431f55b8c59f3a741a7d1839fca7092ca6ac",
+    "contracts/agent/fixtures/manifest.json": "sha256:3ade865fc9dfcdd769bd0a65b6324e4910fc667c2af7e6928b7be5532bc1f8fa",
     "contracts/agent/fixtures/manifest.schema.json": "sha256:0b6d424e1921b2a036ee0739d99bbaae6744bba6f069f116c8ef854e96d1fdf9",
     "contracts/agent/fixtures/signing/signature-cases.json": "sha256:864fdc7eb50c65685db38d135614a7634796c6e589c169b7c525b279a7607b71",
     "contracts/agent/fixtures/valid/agent-artifact.full.json": "sha256:b9d370fa6e8f963e0827bb180b14e66093bf319b7aca4697219272669e6283aa",
@@ -190,16 +211,31 @@
     "contracts/agent/fixtures/valid/artifact-content-grant.full.json": "sha256:814145977c9e1ac98d045da685e49247b63886a8a0062f9e606358d94e24dd6e",
     "contracts/agent/fixtures/valid/artifact-content-grant.maximum-bound.json": "sha256:64e5832971372ab8576010c48dde4ea5b8b5ed576482f2e18c260da1a49ddb73",
     "contracts/agent/fixtures/valid/artifact-content-grant.minimum.json": "sha256:d6ec6823aaad927b3c2d3ceab928f1d773bc16dad46b8bc32582344380ba39f4",
+    "contracts/agent/fixtures/valid/catalog-reuse-evidence.full.json": "sha256:1d81b55bc4a8b96c9307f5459ad1ec58ba7eca2d1134e9cccc91ae1004e5ab3b",
+    "contracts/agent/fixtures/valid/catalog-reuse-evidence.minimum.json": "sha256:cdc166ad295eb36295fdcaf804b26351167ddafc01e31fcf47b8b897e12791a2",
+    "contracts/agent/fixtures/valid/catalog-search-request.full.json": "sha256:68b2a8e3c34144ada4c2686af68d60dc0c8fc68485bb245fdcd1a48e57344b91",
+    "contracts/agent/fixtures/valid/catalog-search-request.minimum.json": "sha256:c532d07af4d00783bdf87266f66eba362945d4fd432c472f3e8f7b8166c552d4",
+    "contracts/agent/fixtures/valid/catalog-search-result.full.json": "sha256:aa45a669e8d505c34ffbc99151297a22cf576e3ee6148fde5454745ea61a1d8a",
+    "contracts/agent/fixtures/valid/catalog-search-result.minimum.json": "sha256:dcc1df94456f17ac6b7c263a99c9543be5455ffb044c04ce92d2c34f1fc20e9a",
     "contracts/agent/fixtures/valid/catalog-snapshot.full.json": "sha256:630ae204abb7d4ea164f849751070cb7b31c751cd0816f6abc050c9e28d5edcf",
     "contracts/agent/fixtures/valid/catalog-snapshot.maximum-bound.json": "sha256:68ebcef13796f99142a70e188e20bfe988ee018350f65fcd6907686caed05714",
     "contracts/agent/fixtures/valid/catalog-snapshot.minimum.json": "sha256:7938be22ca1f181b14b10a4e768a0190e6e31eb30f2c2444c55867edb2dd006c",
     "contracts/agent/fixtures/valid/compiled-context.full.json": "sha256:163ac8529845c59dee9b9a3716e2667a0ac253ce3582741e7dffd34ac74043ae",
     "contracts/agent/fixtures/valid/compiled-context.maximum-bound.json": "sha256:42b4bdf999ec1f6b5f66d0151bacc1a1f269389972856e58f85f50308576bb4d",
     "contracts/agent/fixtures/valid/compiled-context.minimum.json": "sha256:25fd5ced89e116d6d91eeb8af146c451f2f5418274b14def1392e6041d7b235a",
+    "contracts/agent/fixtures/valid/component-catalog-artifact.full.json": "sha256:e75ce077ba0153d9a5aca3b9ebc46ddbd53338a83eea8efe418d00ed5ea56470",
+    "contracts/agent/fixtures/valid/component-catalog-artifact.minimum.json": "sha256:57733be2ecc7b655969064ec2ccf8eee9fe49c6986b3800f6b04f75cce5c7319",
     "contracts/agent/fixtures/valid/component-design-spec.full.json": "sha256:3ab07e37878e1bda94d369f2e6f9cf81e38474af055ba1ab9fdad827e68edeb1",
     "contracts/agent/fixtures/valid/component-design-spec.maximum-bound.json": "sha256:bd7269e249bb59e82e5407ef93096cd46557e3bb6f6133727c328c765ce849c4",
     "contracts/agent/fixtures/valid/component-design-spec.minimum.json": "sha256:b0da0189ce548e23d0c6f94f8f53b55d95370f78f350fe27c503052f3f9bb2c1",
+    "contracts/agent/fixtures/valid/component-intent.full.json": "sha256:6a38a8db2a48eff7a143c3e692dc019a8ed354167f705ffbc71463aab1b8f0d0",
+    "contracts/agent/fixtures/valid/component-intent.minimum.json": "sha256:f90c362c70418f310c929371169db1ae084df00d9f813ccc97b04b0ac1175fa5",
+    "contracts/agent/fixtures/valid/component-ir.full.json": "sha256:093c14f4c3d85064b2bc34c009934711d1fc427cbc06b45fabdfe5e4b4f4819b",
+    "contracts/agent/fixtures/valid/component-ir.minimum.json": "sha256:25aaf629512a4e1c57307e91f8fca6d20e59118d57df3306a5b128687759d4ce",
+    "contracts/agent/fixtures/valid/component-ir.puck-props.json": "sha256:42a450a4e1b68f0e154680f213076b617393d220486123d6ce70afe39f08c03b",
     "contracts/agent/fixtures/valid/component-package-spec.minimum.json": "sha256:f38af87e6747870f9c21657a9b8da51391363dec35ce909da77583d76db6a5c4",
+    "contracts/agent/fixtures/valid/component-request.full.json": "sha256:a27d5d4f008f967c4ea9306ec8a8efdce5dc559ee7dd0e765baf97818405620b",
+    "contracts/agent/fixtures/valid/component-request.minimum.json": "sha256:f79c626001bbec07fd02bda52b72271e1ecb6803aff07033a34c68fd48e92bda",
     "contracts/agent/fixtures/valid/contract-bom.minimum.json": "sha256:dc02de12ddecd2e51350d47acea91634be7720cb57e1ecbb40d094ca8898c167",
     "contracts/agent/fixtures/valid/contract-revocation-snapshot.minimum.json": "sha256:0e2c0cc86e78a90c00e44fdb20445e9dbd088c5f1ad0e9b09dc19fc876bb7312",
     "contracts/agent/fixtures/valid/contract-runtime-request.full.json": "sha256:74aecf96e614ec108302ae09164ceabb325319256e1946cfe22a7670699403a7",
@@ -240,7 +276,7 @@
     "contracts/agent/fixtures/valid/provider-continuation.full.json": "sha256:b4b149b1e2aac9e96eb77dc941f3401cb6ac6b4576a1a319ba4d7e9f384b25cb",
     "contracts/agent/fixtures/valid/provider-continuation.maximum-bound.json": "sha256:6fa4bd4157a6b360d5ccad6009edc2ab1e7ff6b1a6bae1ab52f49e6c882620ad",
     "contracts/agent/fixtures/valid/provider-continuation.minimum.json": "sha256:822ca7bdfe00e4d49d3fb58422e80cff29c397462b58aef27821dd1622357d26",
-    "contracts/agent/fixtures/valid/registry-values.full.json": "sha256:5db5a00cd02a060ce06afd4aafa89e79500a5f5d077ff62e8cfd2f523b4f3038",
+    "contracts/agent/fixtures/valid/registry-values.full.json": "sha256:bd51e05789a23d5e46ca2e010df3f4f982e98975a77d74347c22674f81e9ad0a",
     "contracts/agent/fixtures/valid/resolve-domain-operation-request.minimum.json": "sha256:9c5e4beca7c0c690bcb8de3abd7f366dcd439b357572a42f41af3de4c3204070",
     "contracts/agent/fixtures/valid/submit-approval-decision-request.full.json": "sha256:e120c9a8a113c8fa6799da2dd8510e50f8e52a0ef74e9d56fb9bbeb5b946dcca",
     "contracts/agent/fixtures/valid/submit-approval-decision-request.minimum.json": "sha256:016971aa04503c245425717b3b836d05724d7a8eba0420786b6c1d217969cc21",
@@ -255,6 +291,8 @@
     "contracts/agent/fixtures/valid/usage-observation.losing-attempt.json": "sha256:12fc16f689cab773a61ac5f9ff85099845f591751389146f0742e70957034267",
     "contracts/agent/fixtures/valid/usage-observation.maximum-bound.json": "sha256:71a4f02fd3676ef7ba06ffd64dd3abb104a59db96d226ca2356c6de09fc45c5e",
     "contracts/agent/fixtures/valid/usage-observation.minimum.json": "sha256:19bdcbd1a4b3bdccf28cc6633006bb9b1046cfd98da29b4d6ef3efb4ea7e2a9e",
+    "contracts/agent/fixtures/valid/validation-finding.full.json": "sha256:95341144f4d4f3f9f306d8f5b44c63a3eae8f8f21165aa4cb9ed3564c5f36133",
+    "contracts/agent/fixtures/valid/validation-finding.minimum.json": "sha256:129490bbf860c596980c0b4d599646904b20bbf2eccdd77e4cc72bb62f1817c8",
     "contracts/agent/fixtures/valid/worker-lease.full.json": "sha256:d49f668de9f370e2e0bcfff137175a29f46d510e787fd73bbdd49bca4d663e11",
     "contracts/agent/fixtures/valid/worker-lease.maximum-bound.json": "sha256:1dd04347b037577d758f802fd7ef21a724751bc39bc735503d9dc8102e177cf7",
     "contracts/agent/fixtures/valid/worker-lease.minimum.json": "sha256:cffc63b0072364c5ad9f35eb0c37d070301e37e9d4aaa5cee7fe39e3095a781d",
@@ -264,8 +302,8 @@
     "contracts/agent/openapi/agent-runtime.openapi.json": "sha256:a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450",
     "contracts/agent/openapi/agent-service.openapi.json": "sha256:13c64266794947b2c55d1e75832ec9d974fc404fefc71533484fca4b7c041da5",
     "contracts/agent/openapi/pagix-agent-integration.openapi.json": "sha256:1176b1d382cc64c51cef747efec0a83025237ece6b422a443c0802afe451a4be",
-    "contracts/agent/registries/registry-set.json": "sha256:f1dcdfbd0f1a8473eb9abf440a7f6c349a3522d7c2822986aa079df820c7bccf",
-    "contracts/agent/registries/registry-set.schema.json": "sha256:dd3b6cc4952cd8df1ffb1bfd060765deed51f230674dc5e88581c29eebc09ab3",
+    "contracts/agent/registries/registry-set.json": "sha256:c995957fba218f6e5fab2280f01575645d5cb0eca0d60b0d9d015e69bfb2fb96",
+    "contracts/agent/registries/registry-set.schema.json": "sha256:ea0816547877f5b0c1959eae6e888b0835f41247b45eb6c10f1d353c4ec93e63",
     "contracts/agent/schemas/agent-artifact.schema.json": "sha256:0776014482233fa9db255075fd51ca229e421b2232c624213cb09d13795aac43",
     "contracts/agent/schemas/agent-budget.schema.json": "sha256:e2942efa249ebe3c79c105b3356d50a8cc3c99e8b544616a6ed10fb44a0b8467",
     "contracts/agent/schemas/agent-definition.schema.json": "sha256:09122ada3e6c0814476bb44d0d291560ef7d95baa14a79f1c8587b300ee515e4",
@@ -280,10 +318,17 @@
     "contracts/agent/schemas/apply-authorization.schema.json": "sha256:f9605d14fe8ea298ca523316c947202d5b3e43f87d6b31519cb36c1051ecd1f8",
     "contracts/agent/schemas/approval-request.schema.json": "sha256:0c12c96f59986ac18d9d689f0051aa6c74023ccf4ac7746436ffc90a3cdfeec8",
     "contracts/agent/schemas/artifact-content-grant.schema.json": "sha256:d4608f216d773faf2747d5350440deb844e17d93a7602e06397d0f18d1c81a3c",
+    "contracts/agent/schemas/catalog-reuse-evidence.schema.json": "sha256:0817469a38b0f31afdb9aea1cba618352fe42419f068eae54be4de7eb80f2cbe",
+    "contracts/agent/schemas/catalog-search-request.schema.json": "sha256:cefd0c391f54917042f6af0f99ad6ef2b809429f7978180d359f05c54996f487",
+    "contracts/agent/schemas/catalog-search-result.schema.json": "sha256:8bdd9bd16b68e325f3883a4165cbe0a31f173381dd21f522dd29d379fab634df",
     "contracts/agent/schemas/catalog-snapshot.schema.json": "sha256:b5eeea33cae5a3d543ecffaf9ce39cd0401d651468963174db6414b699a12573",
     "contracts/agent/schemas/compiled-context.schema.json": "sha256:e535dd923ac156840b06932f5a54aa7e70ea6dcc6f0bce8314a6e562ad784c33",
+    "contracts/agent/schemas/component-catalog-artifact.schema.json": "sha256:3f058a653af0b77d2bb17394820154ec05584f5b6d83180643af560a3be0ab7a",
     "contracts/agent/schemas/component-design-spec.schema.json": "sha256:6d27019db26929dca79a2d30871952e3e2c7b902ef4e67e30e2d6520d1702236",
+    "contracts/agent/schemas/component-intent.schema.json": "sha256:dc2c1f480c2205c525fda46d7d915ea74091e43e727c5bc8c520e9e454736313",
+    "contracts/agent/schemas/component-ir.schema.json": "sha256:da5017d65b60e12e75b46f72f877ea72126180f4fde9856f183c2711c01ed086",
     "contracts/agent/schemas/component-package-spec.schema.json": "sha256:d694500504b19346c06da12db9cfee37b0810f6e6bb6b07298e3b03c78518061",
+    "contracts/agent/schemas/component-request.schema.json": "sha256:cefe70d96dcf20889f65e7ef372a6910add8ef9f2ab83d438b449e1d94db76f6",
     "contracts/agent/schemas/contract-bom.schema.json": "sha256:ce7b739bd95967b541246f800ff5513ef24d299c42377a4e3467828edfb08c54",
     "contracts/agent/schemas/contract-revocation-snapshot.schema.json": "sha256:99aa7e7245994d5cca1fe781b70621f57f33cfc378f25a14dc0fb269554977fc",
     "contracts/agent/schemas/contract-runtime-request.schema.json": "sha256:0400c3b836ee560c5d21f82cd118e26aad404014f87b740ecf2b80d143708bff",
@@ -315,13 +360,14 @@
     "contracts/agent/schemas/target-snapshot.schema.json": "sha256:24d36aef73946c2618dec27104ddc58553c32eb6ba3933f8250459e7452970bc",
     "contracts/agent/schemas/tool-definition.schema.json": "sha256:61e67b664f0d67945f9c7ee33dc371dd11e78095576b7642d905c51558f7803e",
     "contracts/agent/schemas/usage-observation.schema.json": "sha256:c3beabfc7abfa5565a082806b356585bc64ce8b6dd46f26606feff87677b5eb8",
+    "contracts/agent/schemas/validation-finding.schema.json": "sha256:e5be31203f1bb3abf84370225b302c7853979c90fb6a0bddbc73a70f1b527ebe",
     "contracts/agent/schemas/worker-lease.schema.json": "sha256:969dbadb42316bc843b41538e260883572e5d73421f898ec94901d1a8b4cc107",
     "contracts/agent/schemas/worker-result.schema.json": "sha256:81fabb41058af81f39623846816223f3b30efd1372c40f545b825ee6fca1cd08"
   },
   "registrySnapshot": {
     "path": "contracts/agent/registries/registry-set.json",
-    "sourceSha256": "sha256:f1dcdfbd0f1a8473eb9abf440a7f6c349a3522d7c2822986aa079df820c7bccf",
-    "semanticSha256": "sha256:ec2c56b9fd55534a0a111fdab1b80650c3ad39f5b2a47856dd34fe7fdc45cbaa"
+    "sourceSha256": "sha256:c995957fba218f6e5fab2280f01575645d5cb0eca0d60b0d9d015e69bfb2fb96",
+    "semanticSha256": "sha256:64b1a15f8d351e7346affefbcdca6d706188a61963fb0f68069e96cafd723435"
   },
   "generators": {
     "path": "packages/contracts-codegen/agent-generators.lock.json",
@@ -330,23 +376,23 @@
   "generated": {
     "goTrace": {
       "path": "packages/contracts-go/generated/trace.json",
-      "sha256": "sha256:32f3d24568318759096a0f623a33256b02bfcd83c11a26bf4596a2bd65dbd726"
+      "sha256": "sha256:df4a36fdf4369c9b256dd02106ccd654499242b7cacfe406cd6b286de576926d"
     },
     "typescriptTrace": {
       "path": "packages/contracts-typescript/src/generated/trace.json",
-      "sha256": "sha256:28b033d3b7ef9aac47ce80be12ae1a4e46e2148fca971096429cd8674d3561f1"
+      "sha256": "sha256:1282bfe2d5995208b6e206d8072b020b3b2de1b6124f79c8d507a7c8eba67564"
     },
     "agentServiceIntakeTrace": {
       "path": "services/agent-service/contracts/generated/trace.json",
-      "sha256": "sha256:32f3d24568318759096a0f623a33256b02bfcd83c11a26bf4596a2bd65dbd726"
+      "sha256": "sha256:df4a36fdf4369c9b256dd02106ccd654499242b7cacfe406cd6b286de576926d"
     },
     "agentRuntimesBinding": {
       "path": "services/agent-runtimes/contracts/generated/schema/contracts.gen.go",
-      "sha256": "sha256:02be64ba1146b8f7a15dd3c915304aa3bb559968c0f33c4f8027b0d41d55f5ca"
+      "sha256": "sha256:129737987426a9b9bdfca3e27940530321ffc29e755fe409aacd82737051e8be"
     },
     "previewWorkerBinding": {
       "path": "services/preview-worker/contracts/generated/schema.ts",
-      "sha256": "sha256:d438ce856ab0e0e68e38b65c32dfb54858c6847bff810be9e80d68450021006a"
+      "sha256": "sha256:dd0d7b3fc3eebe97023245fdd686569aa4c5bed62b5e01b805032d19cc683e52"
     }
   },
   "legacyExportLock": {

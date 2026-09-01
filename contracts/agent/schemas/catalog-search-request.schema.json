@@ -1,0 +1,175 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/catalog-search-request.schema.json",
+  "title": "CatalogSearchRequest contract",
+  "description": "Catalog search command (PRD-CAT-0001 §9.3, CAT-FR-018, CAT-FR-019) issued by the workflow's anvilkit.tool.catalog-search context tool or by the Studio BFF through searchComponentCatalog. It names the workspace and project scope, optionally pins a catalog revision (the active revision otherwise), carries at least one query criterion (free text, exact identity, name prefix, tags, props, capabilities, or a runtime-compatibility filter), the visibilities the caller is authorized to see, a page limit of at most fifty, and an opaque cursor. Every result is additionally scoped server-side to the caller's authorization; the request never widens it.",
+  "type": "object",
+  "minProperties": 5,
+  "maxProperties": 7,
+  "required": [
+    "kind",
+    "scope",
+    "query",
+    "visibility",
+    "limit"
+  ],
+  "properties": {
+    "kind": {
+      "const": "CatalogSearchRequest"
+    },
+    "scope": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "workspaceId",
+        "projectId"
+      ],
+      "properties": {
+        "workspaceId": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/WorkspaceId"
+        },
+        "projectId": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ProjectId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "catalogRevision": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "query": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 7,
+      "required": [],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+        },
+        "namePrefix": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+        },
+        "tags": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          }
+        },
+        "props": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          }
+        },
+        "compatibility": {
+          "type": "object",
+          "minProperties": 2,
+          "maxProperties": 2,
+          "required": [
+            "puckRuntime",
+            "reactRuntime"
+          ],
+          "properties": {
+            "puckRuntime": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[\\x20-\\x7E]+$"
+            },
+            "reactRuntime": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[\\x20-\\x7E]+$"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false,
+      "x-anvilkit-omittedSemantics": {
+        "text": "omitted when no free-text criterion is given",
+        "identity": "omitted when the search is not an exact component identity lookup",
+        "namePrefix": "omitted when no name prefix criterion is given",
+        "tags": "omitted when no tag criterion is given",
+        "props": "omitted when no prop-name criterion is given",
+        "capabilities": "omitted when no capability criterion is given",
+        "compatibility": "omitted when no runtime-compatibility filter is applied"
+      }
+    },
+    "visibility": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {
+        "enum": [
+          "public",
+          "workspace",
+          "project"
+        ]
+      }
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50
+    },
+    "cursor": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Cursor"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "catalogRevision": "omitted to search the active catalog revision",
+    "cursor": "omitted for the first page"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "CatalogSearchRequest",
+    "componentName": "anvilkit.contract.schema.catalog-search-request",
+    "owner": "Platform Contracts owner",
+    "stability": "experimental",
+    "identityFields": [
+      "/scope",
+      "/catalogRevision",
+      "/query",
+      "/visibility",
+      "/limit",
+      "/cursor"
+    ],
+    "maximumSerializedBytes": 16384,
+    "descriptions": []
+  }
+}

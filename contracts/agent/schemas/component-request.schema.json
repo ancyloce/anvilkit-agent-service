@@ -1,0 +1,186 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/component-request.schema.json",
+  "title": "ComponentRequest contract",
+  "description": "Structured component request a Studio user submits to start a component-design or component-package run (PRD-CAT-0001 §9.5; master §8.1 / UX-FR-002). It carries the bounded prompt, naming and package-scope hints, the target project, preferred catalog components, brand and asset constraints, responsive, accessibility, and motion preferences, a recorded (never authorizing) distribution intent, and the caller's idempotency key. It is caller intent only: no run identity, workspace, actor, or authority is carried, and it is transported as CreateAgentRunRequest.input.componentRequest.",
+  "type": "object",
+  "minProperties": 4,
+  "maxProperties": 13,
+  "required": [
+    "kind",
+    "prompt",
+    "targetProjectId",
+    "idempotencyKey"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ComponentRequest"
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192
+    },
+    "nameHint": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+    },
+    "packageScope": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 64,
+      "pattern": "^@[a-z0-9][a-z0-9-]{0,63}$"
+    },
+    "targetProjectId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ProjectId"
+    },
+    "preferredComponents": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+      }
+    },
+    "brandId": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "assetConstraints": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "allowedAssetIds",
+        "disallowed"
+      ],
+      "properties": {
+        "allowedAssetIds": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+          }
+        },
+        "disallowed": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "responsive": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "required": [
+        "breakpoints"
+      ],
+      "properties": {
+        "breakpoints": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "accessibility": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "required": [
+        "level"
+      ],
+      "properties": {
+        "level": {
+          "enum": [
+            "A",
+            "AA",
+            "AAA"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "motion": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "allowed",
+        "reducedMotion"
+      ],
+      "properties": {
+        "allowed": {
+          "type": "boolean"
+        },
+        "reducedMotion": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "distributionIntent": {
+      "enum": [
+        "private",
+        "public"
+      ]
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "nameHint": "omitted when the caller leaves naming to the interpreted intent",
+    "packageScope": "omitted when the run resolves the package scope from the target project",
+    "preferredComponents": "omitted when the caller names no catalog components to prefer",
+    "brandId": "omitted when the target project's default brand applies",
+    "assetConstraints": "omitted when every approved asset of the target project may be used",
+    "responsive": "omitted when the brand's default breakpoints apply",
+    "accessibility": "omitted when the workspace's default conformance level applies",
+    "motion": "omitted when the brand's default motion policy applies",
+    "distributionIntent": "omitted when the caller records no distribution intent; private is assumed and nothing is authorized either way"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "ComponentRequest",
+    "componentName": "anvilkit.contract.schema.component-request",
+    "owner": "Platform Contracts owner",
+    "stability": "experimental",
+    "identityFields": [
+      "/prompt",
+      "/nameHint",
+      "/packageScope",
+      "/targetProjectId",
+      "/preferredComponents",
+      "/brandId",
+      "/assetConstraints",
+      "/responsive",
+      "/accessibility",
+      "/motion",
+      "/distributionIntent",
+      "/idempotencyKey"
+    ],
+    "maximumSerializedBytes": 32768,
+    "descriptions": []
+  }
+}

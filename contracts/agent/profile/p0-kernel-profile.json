@@ -47,11 +47,11 @@
     },
     "registrySet": {
       "path": "contracts/agent/registries/registry-set.json",
-      "digest": "sha256:f1dcdfbd0f1a8473eb9abf440a7f6c349a3522d7c2822986aa079df820c7bccf"
+      "digest": "sha256:c995957fba218f6e5fab2280f01575645d5cb0eca0d60b0d9d015e69bfb2fb96"
     },
     "registrySetSchema": {
       "path": "contracts/agent/registries/registry-set.schema.json",
-      "digest": "sha256:dd3b6cc4952cd8df1ffb1bfd060765deed51f230674dc5e88581c29eebc09ab3"
+      "digest": "sha256:ea0816547877f5b0c1959eae6e888b0835f41247b45eb6c10f1d353c4ec93e63"
     },
     "openapi": [
       {
@@ -79,7 +79,7 @@
     ],
     "fixtureManifest": {
       "path": "contracts/agent/fixtures/manifest.json",
-      "digest": "sha256:6225db6c72f81e73e0e82de407fe431f55b8c59f3a741a7d1839fca7092ca6ac"
+      "digest": "sha256:3ade865fc9dfcdd769bd0a65b6324e4910fc667c2af7e6928b7be5532bc1f8fa"
     },
     "fixtureManifestSchema": {
       "path": "contracts/agent/fixtures/manifest.schema.json",
@@ -945,6 +945,121 @@
       "descriptions": [
         "contracts/agent/asyncapi/agent-events.asyncapi.json"
       ]
+    },
+    {
+      "logicalId": "CatalogReuseEvidence",
+      "componentName": "anvilkit.contract.schema.catalog-reuse-evidence",
+      "schemaPath": "contracts/agent/schemas/catalog-reuse-evidence.schema.json",
+      "digest": "sha256:0817469a38b0f31afdb9aea1cba618352fe42419f068eae54be4de7eb80f2cbe",
+      "owner": "Platform Contracts owner",
+      "stability": "experimental",
+      "fixtureCoverage": [
+        "minimum",
+        "invalid",
+        "adversarial"
+      ],
+      "descriptions": []
+    },
+    {
+      "logicalId": "CatalogSearchRequest",
+      "componentName": "anvilkit.contract.schema.catalog-search-request",
+      "schemaPath": "contracts/agent/schemas/catalog-search-request.schema.json",
+      "digest": "sha256:cefd0c391f54917042f6af0f99ad6ef2b809429f7978180d359f05c54996f487",
+      "owner": "Platform Contracts owner",
+      "stability": "experimental",
+      "fixtureCoverage": [
+        "minimum",
+        "invalid",
+        "adversarial"
+      ],
+      "descriptions": []
+    },
+    {
+      "logicalId": "CatalogSearchResult",
+      "componentName": "anvilkit.contract.schema.catalog-search-result",
+      "schemaPath": "contracts/agent/schemas/catalog-search-result.schema.json",
+      "digest": "sha256:8bdd9bd16b68e325f3883a4165cbe0a31f173381dd21f522dd29d379fab634df",
+      "owner": "Platform Contracts owner",
+      "stability": "experimental",
+      "fixtureCoverage": [
+        "minimum",
+        "invalid",
+        "adversarial"
+      ],
+      "descriptions": []
+    },
+    {
+      "logicalId": "ComponentCatalogArtifact",
+      "componentName": "anvilkit.contract.schema.component-catalog-artifact",
+      "schemaPath": "contracts/agent/schemas/component-catalog-artifact.schema.json",
+      "digest": "sha256:3f058a653af0b77d2bb17394820154ec05584f5b6d83180643af560a3be0ab7a",
+      "owner": "Platform Contracts owner",
+      "stability": "experimental",
+      "fixtureCoverage": [
+        "minimum",
+        "full",
+        "invalid",
+        "adversarial"
+      ],
+      "descriptions": []
+    },
+    {
+      "logicalId": "ComponentIntent",
+      "componentName": "anvilkit.contract.schema.component-intent",
+      "schemaPath": "contracts/agent/schemas/component-intent.schema.json",
+      "digest": "sha256:dc2c1f480c2205c525fda46d7d915ea74091e43e727c5bc8c520e9e454736313",
+      "owner": "Platform Contracts owner",
+      "stability": "experimental",
+      "fixtureCoverage": [
+        "minimum",
+        "full",
+        "invalid",
+        "adversarial"
+      ],
+      "descriptions": []
+    },
+    {
+      "logicalId": "ComponentIr",
+      "componentName": "anvilkit.contract.schema.component-ir",
+      "schemaPath": "contracts/agent/schemas/component-ir.schema.json",
+      "digest": "sha256:da5017d65b60e12e75b46f72f877ea72126180f4fde9856f183c2711c01ed086",
+      "owner": "Platform Contracts owner",
+      "stability": "experimental",
+      "fixtureCoverage": [
+        "minimum",
+        "full",
+        "invalid",
+        "adversarial"
+      ],
+      "descriptions": []
+    },
+    {
+      "logicalId": "ComponentRequest",
+      "componentName": "anvilkit.contract.schema.component-request",
+      "schemaPath": "contracts/agent/schemas/component-request.schema.json",
+      "digest": "sha256:cefe70d96dcf20889f65e7ef372a6910add8ef9f2ab83d438b449e1d94db76f6",
+      "owner": "Platform Contracts owner",
+      "stability": "experimental",
+      "fixtureCoverage": [
+        "minimum",
+        "invalid",
+        "adversarial"
+      ],
+      "descriptions": []
+    },
+    {
+      "logicalId": "ValidationFinding",
+      "componentName": "anvilkit.contract.schema.validation-finding",
+      "schemaPath": "contracts/agent/schemas/validation-finding.schema.json",
+      "digest": "sha256:e5be31203f1bb3abf84370225b302c7853979c90fb6a0bddbc73a70f1b527ebe",
+      "owner": "Platform Contracts owner",
+      "stability": "experimental",
+      "fixtureCoverage": [
+        "minimum",
+        "invalid",
+        "adversarial"
+      ],
+      "descriptions": []
     }
   ],
   "generated": {

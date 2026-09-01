@@ -1,0 +1,698 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/component-ir.schema.json",
+  "title": "ComponentIR contract",
+  "description": "Canonical editable component model on the package path (PRD-CAT-0001 §9.5, CAT-FR-007, CAT-FR-008; artifact kind component-ir). It is a superset of the ComponentDesignSpec design (identity, props with their Puck field types and JSON-encoded serializable defaults, slots, a flat parent-linked composition tree of catalog components and primitives, variants, states, responsive overrides, accessibility semantics) plus its realization: design-token references by stable id from the Brand Context snapshot, approved asset references, the motion policy, the allowlisted dependency set, catalog lineage, locale content, the file plan naming which files the model writes and which the scaffold derives, and the generation binding (generator version and the Contract BOM, catalog, brand snapshot, and policy digests). schemaVersion is the IR content version: a document carrying an unknown version or field fails closed with COMPONENT_IR_INVALID. version is the monotonic edit counter advanced by each accepted patch. Studio, the generator, the Worker, and Pagix consume this one schema.",
+  "type": "object",
+  "minProperties": 19,
+  "maxProperties": 19,
+  "required": [
+    "kind",
+    "schemaVersion",
+    "identity",
+    "props",
+    "slots",
+    "composition",
+    "variants",
+    "states",
+    "responsive",
+    "tokens",
+    "assets",
+    "motion",
+    "accessibility",
+    "dependencies",
+    "catalogLineage",
+    "content",
+    "filePlan",
+    "generation",
+    "version"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ComponentIR"
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "identity": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "required": [
+        "componentName",
+        "componentSlug",
+        "packageName",
+        "packageVersion"
+      ],
+      "properties": {
+        "componentName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Z][A-Za-z0-9]{0,63}$"
+        },
+        "componentSlug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "packageName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 214,
+          "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$"
+        },
+        "packageVersion": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 64,
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "props": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "minProperties": 7,
+        "maxProperties": 7,
+        "required": [
+          "name",
+          "puckField",
+          "type",
+          "default",
+          "required",
+          "control",
+          "description"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "puckField": {
+            "enum": [
+              "text",
+              "textarea",
+              "number",
+              "select",
+              "radio",
+              "array",
+              "object",
+              "external",
+              "custom",
+              "slot"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "default": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 1024
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "control": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "slots": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "name",
+          "allowedComponents",
+          "maxDepth"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "allowedComponents": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 64,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "pattern": "^[@A-Za-z0-9*][A-Za-z0-9._/@-]*$"
+            }
+          },
+          "maxDepth": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "composition": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "minProperties": 5,
+        "maxProperties": 5,
+        "required": [
+          "nodeId",
+          "parentNodeId",
+          "slot",
+          "source",
+          "ref"
+        ],
+        "properties": {
+          "nodeId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "parentNodeId": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 64,
+            "pattern": "^([A-Za-z][A-Za-z0-9_-]{0,63})?$"
+          },
+          "slot": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 64,
+            "pattern": "^([A-Za-z][A-Za-z0-9_-]{0,63})?$"
+          },
+          "source": {
+            "enum": [
+              "catalog",
+              "primitive"
+            ]
+          },
+          "ref": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "variants": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "name",
+          "propOverrides"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "propOverrides": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "states": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "state",
+          "trigger",
+          "description"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "trigger": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "responsive": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "breakpoint",
+          "overrides"
+        ],
+        "properties": {
+          "breakpoint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          },
+          "overrides": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "tokens": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "path",
+          "tokenRef"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"
+          },
+          "tokenRef": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z][a-z0-9.-]{0,127}$"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "slot",
+          "assetRef"
+        ],
+        "properties": {
+          "slot": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "assetRef": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "motion": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "presets",
+        "reducedMotion"
+      ],
+      "properties": {
+        "presets": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "minProperties": 3,
+            "maxProperties": 3,
+            "required": [
+              "target",
+              "preset",
+              "params"
+            ],
+            "properties": {
+              "target": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+              },
+              "preset": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              },
+              "params": {
+                "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "reducedMotion": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "accessibility": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "required": [
+        "role",
+        "aria",
+        "keyboard",
+        "contrastPolicy"
+      ],
+      "properties": {
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z-]{0,63}$"
+        },
+        "aria": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "minProperties": 2,
+            "maxProperties": 2,
+            "required": [
+              "attribute",
+              "value"
+            ],
+            "properties": {
+              "attribute": {
+                "type": "string",
+                "minLength": 6,
+                "maxLength": 64,
+                "pattern": "^aria-[a-z]+$"
+              },
+              "value": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "keyboard": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "minProperties": 2,
+            "maxProperties": 2,
+            "required": [
+              "key",
+              "action"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "action": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "contrastPolicy": {
+          "enum": [
+            "wcag-aa",
+            "wcag-aaa"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "dependencies": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "packageName",
+          "versionRange",
+          "source"
+        ],
+        "properties": {
+          "packageName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 214,
+            "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$"
+          },
+          "versionRange": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[\\x20-\\x7E]+$"
+          },
+          "source": {
+            "const": "allowlist"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "catalogLineage": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "componentId",
+          "role"
+        ],
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+          },
+          "role": {
+            "enum": [
+              "reuse",
+              "reference",
+              "dependency"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "content": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "key",
+          "locale",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "locale": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 12,
+            "pattern": "^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$"
+          },
+          "value": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 4096
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "filePlan": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "path",
+          "generator"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9._-][A-Za-z0-9._/-]*$"
+          },
+          "generator": {
+            "enum": [
+              "model",
+              "scaffold"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "generation": {
+      "type": "object",
+      "minProperties": 5,
+      "maxProperties": 5,
+      "required": [
+        "generatorVersion",
+        "contractBomDigest",
+        "catalogDigest",
+        "brandSnapshotDigest",
+        "policyDigest"
+      ],
+      "properties": {
+        "generatorVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"
+        },
+        "contractBomDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "catalogDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "brandSnapshotDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        },
+        "policyDigest": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+        }
+      },
+      "additionalProperties": false
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ComponentIr",
+    "componentName": "anvilkit.contract.schema.component-ir",
+    "owner": "Platform Contracts owner",
+    "stability": "experimental",
+    "identityFields": [
+      "/schemaVersion",
+      "/identity",
+      "/props",
+      "/slots",
+      "/composition",
+      "/variants",
+      "/states",
+      "/responsive",
+      "/tokens",
+      "/assets",
+      "/motion",
+      "/accessibility",
+      "/dependencies",
+      "/catalogLineage",
+      "/content",
+      "/filePlan",
+      "/generation",
+      "/version"
+    ],
+    "maximumSerializedBytes": 262144,
+    "descriptions": []
+  }
+}

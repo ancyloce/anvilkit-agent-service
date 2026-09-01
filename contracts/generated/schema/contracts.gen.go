@@ -4652,6 +4652,884 @@ func (j *ArtifactContentGrant) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Per-generation record of how the catalog was consulted (PRD-CAT-0001 §9.3,
+// CAT-FR-021, CAT-FR-022). It names the Run-local catalog snapshot and revision,
+// the fingerprint of the search request, the entries selected with their role
+// (reuse, reference, or dependency), the entries considered with their scores, the
+// entries rejected with a reason, and, when similarity and API overlap exceed the
+// reviewed threshold, the likely duplicate for the review surface. It is evidence
+// for review only and never rejects a component on its own; it is carried by
+// ComponentIntent and resolvable after restart.
+type CatalogReuseEvidence struct {
+	// CatalogRevision corresponds to the JSON schema field "catalogRevision".
+	CatalogRevision SharedPrimitivesOpaqueId `json:"catalogRevision" yaml:"catalogRevision" mapstructure:"catalogRevision"`
+
+	// Considered corresponds to the JSON schema field "considered".
+	Considered []CatalogReuseEvidenceConsideredElem `json:"considered" yaml:"considered" mapstructure:"considered"`
+
+	// Fingerprint corresponds to the JSON schema field "fingerprint".
+	Fingerprint SharedPrimitivesDigest `json:"fingerprint" yaml:"fingerprint" mapstructure:"fingerprint"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// LikelyDuplicate corresponds to the JSON schema field "likelyDuplicate".
+	LikelyDuplicate *CatalogReuseEvidenceLikelyDuplicate `json:"likelyDuplicate,omitempty,omitzero" yaml:"likelyDuplicate,omitempty" mapstructure:"likelyDuplicate,omitempty"`
+
+	// Rejected corresponds to the JSON schema field "rejected".
+	Rejected []CatalogReuseEvidenceRejectedElem `json:"rejected" yaml:"rejected" mapstructure:"rejected"`
+
+	// Selected corresponds to the JSON schema field "selected".
+	Selected []CatalogReuseEvidenceSelectedElem `json:"selected" yaml:"selected" mapstructure:"selected"`
+
+	// SnapshotId corresponds to the JSON schema field "snapshotId".
+	SnapshotId SharedPrimitivesOpaqueId `json:"snapshotId" yaml:"snapshotId" mapstructure:"snapshotId"`
+}
+
+type CatalogReuseEvidenceConsideredElem struct {
+	// ComponentId corresponds to the JSON schema field "componentId".
+	ComponentId string `json:"componentId" yaml:"componentId" mapstructure:"componentId"`
+
+	// Score corresponds to the JSON schema field "score".
+	Score SharedPrimitivesDecimalString `json:"score" yaml:"score" mapstructure:"score"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogReuseEvidenceConsideredElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["componentId"]; raw != nil && !ok {
+		return fmt.Errorf("field componentId in CatalogReuseEvidenceConsideredElem: required")
+	}
+	if _, ok := raw["score"]; raw != nil && !ok {
+		return fmt.Errorf("field score in CatalogReuseEvidenceConsideredElem: required")
+	}
+	type Plain CatalogReuseEvidenceConsideredElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`, string(plain.ComponentId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentId", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentId", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentId", 256)
+	}
+	*j = CatalogReuseEvidenceConsideredElem(plain)
+	return nil
+}
+
+type CatalogReuseEvidenceLikelyDuplicate struct {
+	// ComponentId corresponds to the JSON schema field "componentId".
+	ComponentId string `json:"componentId" yaml:"componentId" mapstructure:"componentId"`
+
+	// Similarity corresponds to the JSON schema field "similarity".
+	Similarity SharedPrimitivesDecimalString `json:"similarity" yaml:"similarity" mapstructure:"similarity"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogReuseEvidenceLikelyDuplicate) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["componentId"]; raw != nil && !ok {
+		return fmt.Errorf("field componentId in CatalogReuseEvidenceLikelyDuplicate: required")
+	}
+	if _, ok := raw["similarity"]; raw != nil && !ok {
+		return fmt.Errorf("field similarity in CatalogReuseEvidenceLikelyDuplicate: required")
+	}
+	type Plain CatalogReuseEvidenceLikelyDuplicate
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`, string(plain.ComponentId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentId", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentId", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentId", 256)
+	}
+	*j = CatalogReuseEvidenceLikelyDuplicate(plain)
+	return nil
+}
+
+type CatalogReuseEvidenceRejectedElem struct {
+	// ComponentId corresponds to the JSON schema field "componentId".
+	ComponentId string `json:"componentId" yaml:"componentId" mapstructure:"componentId"`
+
+	// Reason corresponds to the JSON schema field "reason".
+	Reason string `json:"reason" yaml:"reason" mapstructure:"reason"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogReuseEvidenceRejectedElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["componentId"]; raw != nil && !ok {
+		return fmt.Errorf("field componentId in CatalogReuseEvidenceRejectedElem: required")
+	}
+	if _, ok := raw["reason"]; raw != nil && !ok {
+		return fmt.Errorf("field reason in CatalogReuseEvidenceRejectedElem: required")
+	}
+	type Plain CatalogReuseEvidenceRejectedElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`, string(plain.ComponentId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentId", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentId", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentId", 256)
+	}
+	if utf8.RuneCountInString(string(plain.Reason)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "reason", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Reason)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "reason", 512)
+	}
+	*j = CatalogReuseEvidenceRejectedElem(plain)
+	return nil
+}
+
+type CatalogReuseEvidenceSelectedElem struct {
+	// ComponentId corresponds to the JSON schema field "componentId".
+	ComponentId string `json:"componentId" yaml:"componentId" mapstructure:"componentId"`
+
+	// Role corresponds to the JSON schema field "role".
+	Role CatalogReuseEvidenceSelectedElemRole `json:"role" yaml:"role" mapstructure:"role"`
+}
+
+type CatalogReuseEvidenceSelectedElemRole string
+
+const CatalogReuseEvidenceSelectedElemRoleDependency CatalogReuseEvidenceSelectedElemRole = "dependency"
+const CatalogReuseEvidenceSelectedElemRoleReference CatalogReuseEvidenceSelectedElemRole = "reference"
+const CatalogReuseEvidenceSelectedElemRoleReuse CatalogReuseEvidenceSelectedElemRole = "reuse"
+
+var enumValues_CatalogReuseEvidenceSelectedElemRole = []interface{}{
+	"reuse",
+	"reference",
+	"dependency",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogReuseEvidenceSelectedElemRole) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CatalogReuseEvidenceSelectedElemRole {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CatalogReuseEvidenceSelectedElemRole, v)
+	}
+	*j = CatalogReuseEvidenceSelectedElemRole(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogReuseEvidenceSelectedElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["componentId"]; raw != nil && !ok {
+		return fmt.Errorf("field componentId in CatalogReuseEvidenceSelectedElem: required")
+	}
+	if _, ok := raw["role"]; raw != nil && !ok {
+		return fmt.Errorf("field role in CatalogReuseEvidenceSelectedElem: required")
+	}
+	type Plain CatalogReuseEvidenceSelectedElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`, string(plain.ComponentId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentId", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentId", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentId", 256)
+	}
+	*j = CatalogReuseEvidenceSelectedElem(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogReuseEvidence) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["catalogRevision"]; raw != nil && !ok {
+		return fmt.Errorf("field catalogRevision in CatalogReuseEvidence: required")
+	}
+	if _, ok := raw["considered"]; raw != nil && !ok {
+		return fmt.Errorf("field considered in CatalogReuseEvidence: required")
+	}
+	if _, ok := raw["fingerprint"]; raw != nil && !ok {
+		return fmt.Errorf("field fingerprint in CatalogReuseEvidence: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in CatalogReuseEvidence: required")
+	}
+	if _, ok := raw["rejected"]; raw != nil && !ok {
+		return fmt.Errorf("field rejected in CatalogReuseEvidence: required")
+	}
+	if _, ok := raw["selected"]; raw != nil && !ok {
+		return fmt.Errorf("field selected in CatalogReuseEvidence: required")
+	}
+	if _, ok := raw["snapshotId"]; raw != nil && !ok {
+		return fmt.Errorf("field snapshotId in CatalogReuseEvidence: required")
+	}
+	type Plain CatalogReuseEvidence
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.Considered) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "considered", 256)
+	}
+	if len(plain.Rejected) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "rejected", 256)
+	}
+	if len(plain.Selected) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "selected", 64)
+	}
+	*j = CatalogReuseEvidence(plain)
+	return nil
+}
+
+// Catalog search command (PRD-CAT-0001 §9.3, CAT-FR-018, CAT-FR-019) issued by the
+// workflow's anvilkit.tool.catalog-search context tool or by the Studio BFF
+// through searchComponentCatalog. It names the workspace and project scope,
+// optionally pins a catalog revision (the active revision otherwise), carries at
+// least one query criterion (free text, exact identity, name prefix, tags, props,
+// capabilities, or a runtime-compatibility filter), the visibilities the caller is
+// authorized to see, a page limit of at most fifty, and an opaque cursor. Every
+// result is additionally scoped server-side to the caller's authorization; the
+// request never widens it.
+type CatalogSearchRequest struct {
+	// CatalogRevision corresponds to the JSON schema field "catalogRevision".
+	CatalogRevision *SharedPrimitivesOpaqueId `json:"catalogRevision,omitempty,omitzero" yaml:"catalogRevision,omitempty" mapstructure:"catalogRevision,omitempty"`
+
+	// Cursor corresponds to the JSON schema field "cursor".
+	Cursor *SharedPrimitivesCursor `json:"cursor,omitempty,omitzero" yaml:"cursor,omitempty" mapstructure:"cursor,omitempty"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Limit corresponds to the JSON schema field "limit".
+	Limit int `json:"limit" yaml:"limit" mapstructure:"limit"`
+
+	// Query corresponds to the JSON schema field "query".
+	Query CatalogSearchRequestQuery `json:"query" yaml:"query" mapstructure:"query"`
+
+	// Scope corresponds to the JSON schema field "scope".
+	Scope CatalogSearchRequestScope `json:"scope" yaml:"scope" mapstructure:"scope"`
+
+	// Visibility corresponds to the JSON schema field "visibility".
+	Visibility []CatalogSearchRequestVisibilityElem `json:"visibility" yaml:"visibility" mapstructure:"visibility"`
+}
+
+type CatalogSearchRequestQuery struct {
+	// Capabilities corresponds to the JSON schema field "capabilities".
+	Capabilities []string `json:"capabilities,omitempty,omitzero" yaml:"capabilities,omitempty" mapstructure:"capabilities,omitempty"`
+
+	// Compatibility corresponds to the JSON schema field "compatibility".
+	Compatibility *CatalogSearchRequestQueryCompatibility `json:"compatibility,omitempty,omitzero" yaml:"compatibility,omitempty" mapstructure:"compatibility,omitempty"`
+
+	// Identity corresponds to the JSON schema field "identity".
+	Identity *string `json:"identity,omitempty,omitzero" yaml:"identity,omitempty" mapstructure:"identity,omitempty"`
+
+	// NamePrefix corresponds to the JSON schema field "namePrefix".
+	NamePrefix *string `json:"namePrefix,omitempty,omitzero" yaml:"namePrefix,omitempty" mapstructure:"namePrefix,omitempty"`
+
+	// Props corresponds to the JSON schema field "props".
+	Props []string `json:"props,omitempty,omitzero" yaml:"props,omitempty" mapstructure:"props,omitempty"`
+
+	// Tags corresponds to the JSON schema field "tags".
+	Tags []string `json:"tags,omitempty,omitzero" yaml:"tags,omitempty" mapstructure:"tags,omitempty"`
+
+	// Text corresponds to the JSON schema field "text".
+	Text *string `json:"text,omitempty,omitzero" yaml:"text,omitempty" mapstructure:"text,omitempty"`
+}
+
+type CatalogSearchRequestQueryCompatibility struct {
+	// PuckRuntime corresponds to the JSON schema field "puckRuntime".
+	PuckRuntime string `json:"puckRuntime" yaml:"puckRuntime" mapstructure:"puckRuntime"`
+
+	// ReactRuntime corresponds to the JSON schema field "reactRuntime".
+	ReactRuntime string `json:"reactRuntime" yaml:"reactRuntime" mapstructure:"reactRuntime"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogSearchRequestQueryCompatibility) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["puckRuntime"]; raw != nil && !ok {
+		return fmt.Errorf("field puckRuntime in CatalogSearchRequestQueryCompatibility: required")
+	}
+	if _, ok := raw["reactRuntime"]; raw != nil && !ok {
+		return fmt.Errorf("field reactRuntime in CatalogSearchRequestQueryCompatibility: required")
+	}
+	type Plain CatalogSearchRequestQueryCompatibility
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[\x20-\x7E]+$`, string(plain.PuckRuntime)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "PuckRuntime", `^[\x20-\x7E]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.PuckRuntime)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "puckRuntime", 1)
+	}
+	if utf8.RuneCountInString(string(plain.PuckRuntime)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "puckRuntime", 64)
+	}
+	if matched, _ := regexp.MatchString(`^[\x20-\x7E]+$`, string(plain.ReactRuntime)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ReactRuntime", `^[\x20-\x7E]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.ReactRuntime)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "reactRuntime", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ReactRuntime)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "reactRuntime", 64)
+	}
+	*j = CatalogSearchRequestQueryCompatibility(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogSearchRequestQuery) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	type Plain CatalogSearchRequestQuery
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.Capabilities != nil && len(plain.Capabilities) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "capabilities", 1)
+	}
+	if len(plain.Capabilities) > 16 {
+		return fmt.Errorf("field %s length: must be <= %d", "capabilities", 16)
+	}
+	if plain.Identity != nil {
+		if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`, string(*plain.Identity)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "Identity", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+		}
+	}
+	if plain.Identity != nil && utf8.RuneCountInString(string(*plain.Identity)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "identity", 1)
+	}
+	if plain.Identity != nil && utf8.RuneCountInString(string(*plain.Identity)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "identity", 256)
+	}
+	if plain.NamePrefix != nil {
+		if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(*plain.NamePrefix)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "NamePrefix", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+		}
+	}
+	if plain.NamePrefix != nil && utf8.RuneCountInString(string(*plain.NamePrefix)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "namePrefix", 1)
+	}
+	if plain.NamePrefix != nil && utf8.RuneCountInString(string(*plain.NamePrefix)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "namePrefix", 64)
+	}
+	if plain.Props != nil && len(plain.Props) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "props", 1)
+	}
+	if len(plain.Props) > 16 {
+		return fmt.Errorf("field %s length: must be <= %d", "props", 16)
+	}
+	if plain.Tags != nil && len(plain.Tags) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "tags", 1)
+	}
+	if len(plain.Tags) > 16 {
+		return fmt.Errorf("field %s length: must be <= %d", "tags", 16)
+	}
+	if plain.Text != nil && utf8.RuneCountInString(string(*plain.Text)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "text", 1)
+	}
+	if plain.Text != nil && utf8.RuneCountInString(string(*plain.Text)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "text", 512)
+	}
+	*j = CatalogSearchRequestQuery(plain)
+	return nil
+}
+
+type CatalogSearchRequestScope struct {
+	// ProjectId corresponds to the JSON schema field "projectId".
+	ProjectId SharedPrimitivesOpaqueId `json:"projectId" yaml:"projectId" mapstructure:"projectId"`
+
+	// WorkspaceId corresponds to the JSON schema field "workspaceId".
+	WorkspaceId SharedPrimitivesOpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogSearchRequestScope) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["projectId"]; raw != nil && !ok {
+		return fmt.Errorf("field projectId in CatalogSearchRequestScope: required")
+	}
+	if _, ok := raw["workspaceId"]; raw != nil && !ok {
+		return fmt.Errorf("field workspaceId in CatalogSearchRequestScope: required")
+	}
+	type Plain CatalogSearchRequestScope
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = CatalogSearchRequestScope(plain)
+	return nil
+}
+
+type CatalogSearchRequestVisibilityElem string
+
+const CatalogSearchRequestVisibilityElemProject CatalogSearchRequestVisibilityElem = "project"
+const CatalogSearchRequestVisibilityElemPublic CatalogSearchRequestVisibilityElem = "public"
+const CatalogSearchRequestVisibilityElemWorkspace CatalogSearchRequestVisibilityElem = "workspace"
+
+var enumValues_CatalogSearchRequestVisibilityElem = []interface{}{
+	"public",
+	"workspace",
+	"project",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogSearchRequestVisibilityElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CatalogSearchRequestVisibilityElem {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CatalogSearchRequestVisibilityElem, v)
+	}
+	*j = CatalogSearchRequestVisibilityElem(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogSearchRequest) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in CatalogSearchRequest: required")
+	}
+	if _, ok := raw["limit"]; raw != nil && !ok {
+		return fmt.Errorf("field limit in CatalogSearchRequest: required")
+	}
+	if _, ok := raw["query"]; raw != nil && !ok {
+		return fmt.Errorf("field query in CatalogSearchRequest: required")
+	}
+	if _, ok := raw["scope"]; raw != nil && !ok {
+		return fmt.Errorf("field scope in CatalogSearchRequest: required")
+	}
+	if _, ok := raw["visibility"]; raw != nil && !ok {
+		return fmt.Errorf("field visibility in CatalogSearchRequest: required")
+	}
+	type Plain CatalogSearchRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if 50 < plain.Limit {
+		return fmt.Errorf("field %s: must be <= %v", "limit", 50)
+	}
+	if 1 > plain.Limit {
+		return fmt.Errorf("field %s: must be >= %v", "limit", 1)
+	}
+	if plain.Visibility != nil && len(plain.Visibility) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "visibility", 1)
+	}
+	if len(plain.Visibility) > 3 {
+		return fmt.Errorf("field %s length: must be <= %d", "visibility", 3)
+	}
+	*j = CatalogSearchRequest(plain)
+	return nil
+}
+
+// Ranked, scoped catalog search page (PRD-CAT-0001 §9.3, CAT-FR-018 to
+// CAT-FR-020). It binds the page to the catalog revision and digest it was
+// answered from and to the fingerprint (digest of the canonical request) that
+// identifies the query, and lists the authorized entries with their identity,
+// package, name, description, tags, decimal score, the fields that matched,
+// visibility, status, and exemplar flag, followed by the page information. A
+// cached page must be byte-identical to the authoritative page for the same
+// revision, scope, query, filters, and policy.
+type CatalogSearchResult struct {
+	// CatalogDigest corresponds to the JSON schema field "catalogDigest".
+	CatalogDigest SharedPrimitivesDigest `json:"catalogDigest" yaml:"catalogDigest" mapstructure:"catalogDigest"`
+
+	// CatalogRevision corresponds to the JSON schema field "catalogRevision".
+	CatalogRevision SharedPrimitivesOpaqueId `json:"catalogRevision" yaml:"catalogRevision" mapstructure:"catalogRevision"`
+
+	// Entries corresponds to the JSON schema field "entries".
+	Entries []CatalogSearchResultEntriesElem `json:"entries" yaml:"entries" mapstructure:"entries"`
+
+	// Fingerprint corresponds to the JSON schema field "fingerprint".
+	Fingerprint SharedPrimitivesDigest `json:"fingerprint" yaml:"fingerprint" mapstructure:"fingerprint"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// PageInfo corresponds to the JSON schema field "pageInfo".
+	PageInfo SharedPrimitivesPageInfo `json:"pageInfo" yaml:"pageInfo" mapstructure:"pageInfo"`
+}
+
+type CatalogSearchResultEntriesElem struct {
+	// ComponentId corresponds to the JSON schema field "componentId".
+	ComponentId string `json:"componentId" yaml:"componentId" mapstructure:"componentId"`
+
+	// ComponentName corresponds to the JSON schema field "componentName".
+	ComponentName string `json:"componentName" yaml:"componentName" mapstructure:"componentName"`
+
+	// Description corresponds to the JSON schema field "description".
+	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
+	// Exemplar corresponds to the JSON schema field "exemplar".
+	Exemplar bool `json:"exemplar" yaml:"exemplar" mapstructure:"exemplar"`
+
+	// MatchedFields corresponds to the JSON schema field "matchedFields".
+	MatchedFields []CatalogSearchResultEntriesElemMatchedFieldsElem `json:"matchedFields" yaml:"matchedFields" mapstructure:"matchedFields"`
+
+	// PackageName corresponds to the JSON schema field "packageName".
+	PackageName string `json:"packageName" yaml:"packageName" mapstructure:"packageName"`
+
+	// PackageVersion corresponds to the JSON schema field "packageVersion".
+	PackageVersion string `json:"packageVersion" yaml:"packageVersion" mapstructure:"packageVersion"`
+
+	// Score corresponds to the JSON schema field "score".
+	Score SharedPrimitivesDecimalString `json:"score" yaml:"score" mapstructure:"score"`
+
+	// Status corresponds to the JSON schema field "status".
+	Status CatalogSearchResultEntriesElemStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// Tags corresponds to the JSON schema field "tags".
+	Tags []string `json:"tags" yaml:"tags" mapstructure:"tags"`
+
+	// Visibility corresponds to the JSON schema field "visibility".
+	Visibility CatalogSearchResultEntriesElemVisibility `json:"visibility" yaml:"visibility" mapstructure:"visibility"`
+}
+
+type CatalogSearchResultEntriesElemMatchedFieldsElem string
+
+const CatalogSearchResultEntriesElemMatchedFieldsElemCapabilities CatalogSearchResultEntriesElemMatchedFieldsElem = "capabilities"
+const CatalogSearchResultEntriesElemMatchedFieldsElemCompatibility CatalogSearchResultEntriesElemMatchedFieldsElem = "compatibility"
+const CatalogSearchResultEntriesElemMatchedFieldsElemDescription CatalogSearchResultEntriesElemMatchedFieldsElem = "description"
+const CatalogSearchResultEntriesElemMatchedFieldsElemIdentity CatalogSearchResultEntriesElemMatchedFieldsElem = "identity"
+const CatalogSearchResultEntriesElemMatchedFieldsElemName CatalogSearchResultEntriesElemMatchedFieldsElem = "name"
+const CatalogSearchResultEntriesElemMatchedFieldsElemProps CatalogSearchResultEntriesElemMatchedFieldsElem = "props"
+const CatalogSearchResultEntriesElemMatchedFieldsElemTags CatalogSearchResultEntriesElemMatchedFieldsElem = "tags"
+
+var enumValues_CatalogSearchResultEntriesElemMatchedFieldsElem = []interface{}{
+	"identity",
+	"name",
+	"description",
+	"tags",
+	"props",
+	"capabilities",
+	"compatibility",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogSearchResultEntriesElemMatchedFieldsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CatalogSearchResultEntriesElemMatchedFieldsElem {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CatalogSearchResultEntriesElemMatchedFieldsElem, v)
+	}
+	*j = CatalogSearchResultEntriesElemMatchedFieldsElem(v)
+	return nil
+}
+
+type CatalogSearchResultEntriesElemStatus string
+
+const CatalogSearchResultEntriesElemStatusApproved CatalogSearchResultEntriesElemStatus = "approved"
+const CatalogSearchResultEntriesElemStatusDeprecated CatalogSearchResultEntriesElemStatus = "deprecated"
+const CatalogSearchResultEntriesElemStatusWithdrawn CatalogSearchResultEntriesElemStatus = "withdrawn"
+
+var enumValues_CatalogSearchResultEntriesElemStatus = []interface{}{
+	"approved",
+	"deprecated",
+	"withdrawn",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogSearchResultEntriesElemStatus) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CatalogSearchResultEntriesElemStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CatalogSearchResultEntriesElemStatus, v)
+	}
+	*j = CatalogSearchResultEntriesElemStatus(v)
+	return nil
+}
+
+type CatalogSearchResultEntriesElemVisibility string
+
+const CatalogSearchResultEntriesElemVisibilityProject CatalogSearchResultEntriesElemVisibility = "project"
+const CatalogSearchResultEntriesElemVisibilityPublic CatalogSearchResultEntriesElemVisibility = "public"
+const CatalogSearchResultEntriesElemVisibilityWorkspace CatalogSearchResultEntriesElemVisibility = "workspace"
+
+var enumValues_CatalogSearchResultEntriesElemVisibility = []interface{}{
+	"public",
+	"workspace",
+	"project",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogSearchResultEntriesElemVisibility) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_CatalogSearchResultEntriesElemVisibility {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_CatalogSearchResultEntriesElemVisibility, v)
+	}
+	*j = CatalogSearchResultEntriesElemVisibility(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogSearchResultEntriesElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["componentId"]; raw != nil && !ok {
+		return fmt.Errorf("field componentId in CatalogSearchResultEntriesElem: required")
+	}
+	if _, ok := raw["componentName"]; raw != nil && !ok {
+		return fmt.Errorf("field componentName in CatalogSearchResultEntriesElem: required")
+	}
+	if _, ok := raw["description"]; raw != nil && !ok {
+		return fmt.Errorf("field description in CatalogSearchResultEntriesElem: required")
+	}
+	if _, ok := raw["exemplar"]; raw != nil && !ok {
+		return fmt.Errorf("field exemplar in CatalogSearchResultEntriesElem: required")
+	}
+	if _, ok := raw["matchedFields"]; raw != nil && !ok {
+		return fmt.Errorf("field matchedFields in CatalogSearchResultEntriesElem: required")
+	}
+	if _, ok := raw["packageName"]; raw != nil && !ok {
+		return fmt.Errorf("field packageName in CatalogSearchResultEntriesElem: required")
+	}
+	if _, ok := raw["packageVersion"]; raw != nil && !ok {
+		return fmt.Errorf("field packageVersion in CatalogSearchResultEntriesElem: required")
+	}
+	if _, ok := raw["score"]; raw != nil && !ok {
+		return fmt.Errorf("field score in CatalogSearchResultEntriesElem: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in CatalogSearchResultEntriesElem: required")
+	}
+	if _, ok := raw["tags"]; raw != nil && !ok {
+		return fmt.Errorf("field tags in CatalogSearchResultEntriesElem: required")
+	}
+	if _, ok := raw["visibility"]; raw != nil && !ok {
+		return fmt.Errorf("field visibility in CatalogSearchResultEntriesElem: required")
+	}
+	type Plain CatalogSearchResultEntriesElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`, string(plain.ComponentId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentId", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentId", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentId", 256)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Z][A-Za-z0-9]{0,63}$`, string(plain.ComponentName)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentName", `^[A-Z][A-Za-z0-9]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentName)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentName", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentName)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentName", 64)
+	}
+	if utf8.RuneCountInString(string(plain.Description)) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "description", 1024)
+	}
+	if plain.MatchedFields != nil && len(plain.MatchedFields) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "matchedFields", 1)
+	}
+	if len(plain.MatchedFields) > 7 {
+		return fmt.Errorf("field %s length: must be <= %d", "matchedFields", 7)
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`, string(plain.PackageName)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "PackageName", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.PackageName)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "packageName", 1)
+	}
+	if utf8.RuneCountInString(string(plain.PackageName)) > 214 {
+		return fmt.Errorf("field %s length: must be <= %d", "packageName", 214)
+	}
+	if matched, _ := regexp.MatchString(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`, string(plain.PackageVersion)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "PackageVersion", `^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+	}
+	if utf8.RuneCountInString(string(plain.PackageVersion)) < 5 {
+		return fmt.Errorf("field %s length: must be >= %d", "packageVersion", 5)
+	}
+	if utf8.RuneCountInString(string(plain.PackageVersion)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "packageVersion", 64)
+	}
+	if len(plain.Tags) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "tags", 32)
+	}
+	*j = CatalogSearchResultEntriesElem(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *CatalogSearchResult) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["catalogDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field catalogDigest in CatalogSearchResult: required")
+	}
+	if _, ok := raw["catalogRevision"]; raw != nil && !ok {
+		return fmt.Errorf("field catalogRevision in CatalogSearchResult: required")
+	}
+	if _, ok := raw["entries"]; raw != nil && !ok {
+		return fmt.Errorf("field entries in CatalogSearchResult: required")
+	}
+	if _, ok := raw["fingerprint"]; raw != nil && !ok {
+		return fmt.Errorf("field fingerprint in CatalogSearchResult: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in CatalogSearchResult: required")
+	}
+	if _, ok := raw["pageInfo"]; raw != nil && !ok {
+		return fmt.Errorf("field pageInfo in CatalogSearchResult: required")
+	}
+	type Plain CatalogSearchResult
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.Entries) > 50 {
+		return fmt.Errorf("field %s length: must be <= %d", "entries", 50)
+	}
+	*j = CatalogSearchResult(plain)
+	return nil
+}
+
 // Immutable snapshot of the component catalog a page-generation run is permitted
 // to compose from. It freezes the catalog revision and digest, the exact Puck
 // schema and runtime revisions, every allowed component with its package revision,
@@ -5392,6 +6270,1082 @@ func (j *CompiledContext) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Producer-side signed component catalog bundle (PRD-CAT-0001 §9.1, §9.4;
+// CAT-FR-011, CAT-FR-012, CAT-FR-016). Components CI exports the unsigned catalog
+// and exemplar sources with provenance for one qualified commit; the catalog
+// authority (ADR-026 §D11, the Pagix Component Registry) merges its scoped private
+// components and signs the result with the catalog-release key registered in the
+// platform contract trust root. It carries the catalog revision, the source
+// repository, commit, and workflow run, the Contract BOM digest, the Puck and
+// React runtime ranges, one closed entry per component with identity, package,
+// description, tags, props, slots, variants, capabilities, style targets, i18n
+// keys, peer dependencies, exports, visibility, status, preview reference, source
+// evidence, and exemplar flag, the component-by-runtime compatibility matrix, the
+// carried files by path, digest, size, and role, and the signature block.
+// Descriptions and every other text field are data: nothing in this artifact
+// instructs an agent. Agent Service verifies the signature, digest, Contract BOM
+// compatibility, and schema before activation (CAT-FR-013); CatalogSnapshot
+// remains the Run-local pinned view derived from one activated revision.
+type ComponentCatalogArtifact struct {
+	// CatalogRevision corresponds to the JSON schema field "catalogRevision".
+	CatalogRevision SharedPrimitivesOpaqueId `json:"catalogRevision" yaml:"catalogRevision" mapstructure:"catalogRevision"`
+
+	// CompatibilityMatrix corresponds to the JSON schema field "compatibilityMatrix".
+	CompatibilityMatrix []ComponentCatalogArtifactCompatibilityMatrixElem `json:"compatibilityMatrix" yaml:"compatibilityMatrix" mapstructure:"compatibilityMatrix"`
+
+	// Components corresponds to the JSON schema field "components".
+	Components []ComponentCatalogArtifactEntry `json:"components" yaml:"components" mapstructure:"components"`
+
+	// ContractBomDigest corresponds to the JSON schema field "contractBomDigest".
+	ContractBomDigest SharedPrimitivesDigest `json:"contractBomDigest" yaml:"contractBomDigest" mapstructure:"contractBomDigest"`
+
+	// CreatedAt corresponds to the JSON schema field "createdAt".
+	CreatedAt SharedPrimitivesTimestamp `json:"createdAt" yaml:"createdAt" mapstructure:"createdAt"`
+
+	// Files corresponds to the JSON schema field "files".
+	Files []ComponentCatalogArtifactFilesElem `json:"files" yaml:"files" mapstructure:"files"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// PuckRuntime corresponds to the JSON schema field "puckRuntime".
+	PuckRuntime string `json:"puckRuntime" yaml:"puckRuntime" mapstructure:"puckRuntime"`
+
+	// ReactRuntime corresponds to the JSON schema field "reactRuntime".
+	ReactRuntime string `json:"reactRuntime" yaml:"reactRuntime" mapstructure:"reactRuntime"`
+
+	// SchemaVersion corresponds to the JSON schema field "schemaVersion".
+	SchemaVersion int `json:"schemaVersion" yaml:"schemaVersion" mapstructure:"schemaVersion"`
+
+	// Signature corresponds to the JSON schema field "signature".
+	Signature string `json:"signature" yaml:"signature" mapstructure:"signature"`
+
+	// SignatureAlgorithm corresponds to the JSON schema field "signatureAlgorithm".
+	SignatureAlgorithm ComponentCatalogArtifactSignatureAlgorithm `json:"signatureAlgorithm" yaml:"signatureAlgorithm" mapstructure:"signatureAlgorithm"`
+
+	// SigningKeyId corresponds to the JSON schema field "signingKeyId".
+	SigningKeyId string `json:"signingKeyId" yaml:"signingKeyId" mapstructure:"signingKeyId"`
+
+	// SigningPurpose corresponds to the JSON schema field "signingPurpose".
+	SigningPurpose interface{} `json:"signingPurpose" yaml:"signingPurpose" mapstructure:"signingPurpose"`
+
+	// SourceCommit corresponds to the JSON schema field "sourceCommit".
+	SourceCommit string `json:"sourceCommit" yaml:"sourceCommit" mapstructure:"sourceCommit"`
+
+	// SourceRepository corresponds to the JSON schema field "sourceRepository".
+	SourceRepository string `json:"sourceRepository" yaml:"sourceRepository" mapstructure:"sourceRepository"`
+
+	// SourceWorkflowRun corresponds to the JSON schema field "sourceWorkflowRun".
+	SourceWorkflowRun string `json:"sourceWorkflowRun" yaml:"sourceWorkflowRun" mapstructure:"sourceWorkflowRun"`
+}
+
+type ComponentCatalogArtifactCompatibilityMatrixElem struct {
+	// Compatible corresponds to the JSON schema field "compatible".
+	Compatible bool `json:"compatible" yaml:"compatible" mapstructure:"compatible"`
+
+	// ComponentId corresponds to the JSON schema field "componentId".
+	ComponentId string `json:"componentId" yaml:"componentId" mapstructure:"componentId"`
+
+	// PuckRuntime corresponds to the JSON schema field "puckRuntime".
+	PuckRuntime string `json:"puckRuntime" yaml:"puckRuntime" mapstructure:"puckRuntime"`
+
+	// ReactRuntime corresponds to the JSON schema field "reactRuntime".
+	ReactRuntime string `json:"reactRuntime" yaml:"reactRuntime" mapstructure:"reactRuntime"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactCompatibilityMatrixElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["compatible"]; raw != nil && !ok {
+		return fmt.Errorf("field compatible in ComponentCatalogArtifactCompatibilityMatrixElem: required")
+	}
+	if _, ok := raw["componentId"]; raw != nil && !ok {
+		return fmt.Errorf("field componentId in ComponentCatalogArtifactCompatibilityMatrixElem: required")
+	}
+	if _, ok := raw["puckRuntime"]; raw != nil && !ok {
+		return fmt.Errorf("field puckRuntime in ComponentCatalogArtifactCompatibilityMatrixElem: required")
+	}
+	if _, ok := raw["reactRuntime"]; raw != nil && !ok {
+		return fmt.Errorf("field reactRuntime in ComponentCatalogArtifactCompatibilityMatrixElem: required")
+	}
+	type Plain ComponentCatalogArtifactCompatibilityMatrixElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`, string(plain.ComponentId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentId", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentId", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentId", 256)
+	}
+	if matched, _ := regexp.MatchString(`^[\x20-\x7E]+$`, string(plain.PuckRuntime)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "PuckRuntime", `^[\x20-\x7E]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.PuckRuntime)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "puckRuntime", 1)
+	}
+	if utf8.RuneCountInString(string(plain.PuckRuntime)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "puckRuntime", 64)
+	}
+	if matched, _ := regexp.MatchString(`^[\x20-\x7E]+$`, string(plain.ReactRuntime)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ReactRuntime", `^[\x20-\x7E]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.ReactRuntime)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "reactRuntime", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ReactRuntime)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "reactRuntime", 64)
+	}
+	*j = ComponentCatalogArtifactCompatibilityMatrixElem(plain)
+	return nil
+}
+
+type ComponentCatalogArtifactEntry struct {
+	// Capabilities corresponds to the JSON schema field "capabilities".
+	Capabilities []string `json:"capabilities" yaml:"capabilities" mapstructure:"capabilities"`
+
+	// Category corresponds to the JSON schema field "category".
+	Category string `json:"category" yaml:"category" mapstructure:"category"`
+
+	// ComponentId corresponds to the JSON schema field "componentId".
+	ComponentId string `json:"componentId" yaml:"componentId" mapstructure:"componentId"`
+
+	// ComponentName corresponds to the JSON schema field "componentName".
+	ComponentName string `json:"componentName" yaml:"componentName" mapstructure:"componentName"`
+
+	// ComponentSlug corresponds to the JSON schema field "componentSlug".
+	ComponentSlug string `json:"componentSlug" yaml:"componentSlug" mapstructure:"componentSlug"`
+
+	// Description corresponds to the JSON schema field "description".
+	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
+	// Exemplar corresponds to the JSON schema field "exemplar".
+	Exemplar bool `json:"exemplar" yaml:"exemplar" mapstructure:"exemplar"`
+
+	// Exports corresponds to the JSON schema field "exports".
+	Exports []ComponentCatalogArtifactEntryExportsElem `json:"exports" yaml:"exports" mapstructure:"exports"`
+
+	// I18NKeys corresponds to the JSON schema field "i18nKeys".
+	I18NKeys []string `json:"i18nKeys" yaml:"i18nKeys" mapstructure:"i18nKeys"`
+
+	// PackageName corresponds to the JSON schema field "packageName".
+	PackageName string `json:"packageName" yaml:"packageName" mapstructure:"packageName"`
+
+	// PackageVersion corresponds to the JSON schema field "packageVersion".
+	PackageVersion string `json:"packageVersion" yaml:"packageVersion" mapstructure:"packageVersion"`
+
+	// PeerDependencies corresponds to the JSON schema field "peerDependencies".
+	PeerDependencies SharedPrimitivesBoundedStringMap `json:"peerDependencies" yaml:"peerDependencies" mapstructure:"peerDependencies"`
+
+	// PreviewRef corresponds to the JSON schema field "previewRef".
+	PreviewRef string `json:"previewRef" yaml:"previewRef" mapstructure:"previewRef"`
+
+	// Props corresponds to the JSON schema field "props".
+	Props []ComponentCatalogArtifactEntryPropsElem `json:"props" yaml:"props" mapstructure:"props"`
+
+	// ScaffoldType corresponds to the JSON schema field "scaffoldType".
+	ScaffoldType string `json:"scaffoldType" yaml:"scaffoldType" mapstructure:"scaffoldType"`
+
+	// Slots corresponds to the JSON schema field "slots".
+	Slots []ComponentCatalogArtifactEntrySlotsElem `json:"slots" yaml:"slots" mapstructure:"slots"`
+
+	// SourceEvidence corresponds to the JSON schema field "sourceEvidence".
+	SourceEvidence ComponentCatalogArtifactEntrySourceEvidence `json:"sourceEvidence" yaml:"sourceEvidence" mapstructure:"sourceEvidence"`
+
+	// Status corresponds to the JSON schema field "status".
+	Status ComponentCatalogArtifactEntryStatus `json:"status" yaml:"status" mapstructure:"status"`
+
+	// StyleTargets corresponds to the JSON schema field "styleTargets".
+	StyleTargets []string `json:"styleTargets" yaml:"styleTargets" mapstructure:"styleTargets"`
+
+	// Tags corresponds to the JSON schema field "tags".
+	Tags []string `json:"tags" yaml:"tags" mapstructure:"tags"`
+
+	// Variants corresponds to the JSON schema field "variants".
+	Variants []string `json:"variants" yaml:"variants" mapstructure:"variants"`
+
+	// Visibility corresponds to the JSON schema field "visibility".
+	Visibility ComponentCatalogArtifactEntryVisibility `json:"visibility" yaml:"visibility" mapstructure:"visibility"`
+}
+
+type ComponentCatalogArtifactEntryExportsElem struct {
+	// Cjs corresponds to the JSON schema field "cjs".
+	Cjs string `json:"cjs" yaml:"cjs" mapstructure:"cjs"`
+
+	// Esm corresponds to the JSON schema field "esm".
+	Esm string `json:"esm" yaml:"esm" mapstructure:"esm"`
+
+	// Subpath corresponds to the JSON schema field "subpath".
+	Subpath string `json:"subpath" yaml:"subpath" mapstructure:"subpath"`
+
+	// Types corresponds to the JSON schema field "types".
+	Types string `json:"types" yaml:"types" mapstructure:"types"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactEntryExportsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["cjs"]; raw != nil && !ok {
+		return fmt.Errorf("field cjs in ComponentCatalogArtifactEntryExportsElem: required")
+	}
+	if _, ok := raw["esm"]; raw != nil && !ok {
+		return fmt.Errorf("field esm in ComponentCatalogArtifactEntryExportsElem: required")
+	}
+	if _, ok := raw["subpath"]; raw != nil && !ok {
+		return fmt.Errorf("field subpath in ComponentCatalogArtifactEntryExportsElem: required")
+	}
+	if _, ok := raw["types"]; raw != nil && !ok {
+		return fmt.Errorf("field types in ComponentCatalogArtifactEntryExportsElem: required")
+	}
+	type Plain ComponentCatalogArtifactEntryExportsElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^\./[A-Za-z0-9._/-]+$`, string(plain.Cjs)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Cjs", `^\./[A-Za-z0-9._/-]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.Cjs)) < 3 {
+		return fmt.Errorf("field %s length: must be >= %d", "cjs", 3)
+	}
+	if utf8.RuneCountInString(string(plain.Cjs)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "cjs", 256)
+	}
+	if matched, _ := regexp.MatchString(`^\./[A-Za-z0-9._/-]+$`, string(plain.Esm)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Esm", `^\./[A-Za-z0-9._/-]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.Esm)) < 3 {
+		return fmt.Errorf("field %s length: must be >= %d", "esm", 3)
+	}
+	if utf8.RuneCountInString(string(plain.Esm)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "esm", 256)
+	}
+	if matched, _ := regexp.MatchString(`^\.(/[A-Za-z0-9._/-]+)?$`, string(plain.Subpath)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Subpath", `^\.(/[A-Za-z0-9._/-]+)?$`)
+	}
+	if utf8.RuneCountInString(string(plain.Subpath)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "subpath", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Subpath)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "subpath", 256)
+	}
+	if matched, _ := regexp.MatchString(`^\./[A-Za-z0-9._/-]+$`, string(plain.Types)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Types", `^\./[A-Za-z0-9._/-]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.Types)) < 3 {
+		return fmt.Errorf("field %s length: must be >= %d", "types", 3)
+	}
+	if utf8.RuneCountInString(string(plain.Types)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "types", 256)
+	}
+	*j = ComponentCatalogArtifactEntryExportsElem(plain)
+	return nil
+}
+
+type ComponentCatalogArtifactEntryPropsElem struct {
+	// Default corresponds to the JSON schema field "default".
+	Default string `json:"default" yaml:"default" mapstructure:"default"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// PuckField corresponds to the JSON schema field "puckField".
+	PuckField ComponentCatalogArtifactEntryPropsElemPuckField `json:"puckField" yaml:"puckField" mapstructure:"puckField"`
+
+	// Required corresponds to the JSON schema field "required".
+	Required bool `json:"required" yaml:"required" mapstructure:"required"`
+}
+
+type ComponentCatalogArtifactEntryPropsElemPuckField string
+
+const ComponentCatalogArtifactEntryPropsElemPuckFieldArray ComponentCatalogArtifactEntryPropsElemPuckField = "array"
+const ComponentCatalogArtifactEntryPropsElemPuckFieldCustom ComponentCatalogArtifactEntryPropsElemPuckField = "custom"
+const ComponentCatalogArtifactEntryPropsElemPuckFieldExternal ComponentCatalogArtifactEntryPropsElemPuckField = "external"
+const ComponentCatalogArtifactEntryPropsElemPuckFieldNumber ComponentCatalogArtifactEntryPropsElemPuckField = "number"
+const ComponentCatalogArtifactEntryPropsElemPuckFieldObject ComponentCatalogArtifactEntryPropsElemPuckField = "object"
+const ComponentCatalogArtifactEntryPropsElemPuckFieldRadio ComponentCatalogArtifactEntryPropsElemPuckField = "radio"
+const ComponentCatalogArtifactEntryPropsElemPuckFieldSelect ComponentCatalogArtifactEntryPropsElemPuckField = "select"
+const ComponentCatalogArtifactEntryPropsElemPuckFieldSlot ComponentCatalogArtifactEntryPropsElemPuckField = "slot"
+const ComponentCatalogArtifactEntryPropsElemPuckFieldText ComponentCatalogArtifactEntryPropsElemPuckField = "text"
+const ComponentCatalogArtifactEntryPropsElemPuckFieldTextarea ComponentCatalogArtifactEntryPropsElemPuckField = "textarea"
+
+var enumValues_ComponentCatalogArtifactEntryPropsElemPuckField = []interface{}{
+	"text",
+	"textarea",
+	"number",
+	"select",
+	"radio",
+	"array",
+	"object",
+	"external",
+	"custom",
+	"slot",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactEntryPropsElemPuckField) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentCatalogArtifactEntryPropsElemPuckField {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentCatalogArtifactEntryPropsElemPuckField, v)
+	}
+	*j = ComponentCatalogArtifactEntryPropsElemPuckField(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactEntryPropsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["default"]; raw != nil && !ok {
+		return fmt.Errorf("field default in ComponentCatalogArtifactEntryPropsElem: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ComponentCatalogArtifactEntryPropsElem: required")
+	}
+	if _, ok := raw["puckField"]; raw != nil && !ok {
+		return fmt.Errorf("field puckField in ComponentCatalogArtifactEntryPropsElem: required")
+	}
+	if _, ok := raw["required"]; raw != nil && !ok {
+		return fmt.Errorf("field required in ComponentCatalogArtifactEntryPropsElem: required")
+	}
+	type Plain ComponentCatalogArtifactEntryPropsElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Default)) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "default", 1024)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.Name)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Name", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "name", 64)
+	}
+	*j = ComponentCatalogArtifactEntryPropsElem(plain)
+	return nil
+}
+
+type ComponentCatalogArtifactEntrySlotsElem struct {
+	// AllowedComponents corresponds to the JSON schema field "allowedComponents".
+	AllowedComponents []string `json:"allowedComponents" yaml:"allowedComponents" mapstructure:"allowedComponents"`
+
+	// MaxDepth corresponds to the JSON schema field "maxDepth".
+	MaxDepth int `json:"maxDepth" yaml:"maxDepth" mapstructure:"maxDepth"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactEntrySlotsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["allowedComponents"]; raw != nil && !ok {
+		return fmt.Errorf("field allowedComponents in ComponentCatalogArtifactEntrySlotsElem: required")
+	}
+	if _, ok := raw["maxDepth"]; raw != nil && !ok {
+		return fmt.Errorf("field maxDepth in ComponentCatalogArtifactEntrySlotsElem: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ComponentCatalogArtifactEntrySlotsElem: required")
+	}
+	type Plain ComponentCatalogArtifactEntrySlotsElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.AllowedComponents) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "allowedComponents", 256)
+	}
+	if 32 < plain.MaxDepth {
+		return fmt.Errorf("field %s: must be <= %v", "maxDepth", 32)
+	}
+	if 0 > plain.MaxDepth {
+		return fmt.Errorf("field %s: must be >= %v", "maxDepth", 0)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.Name)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Name", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "name", 64)
+	}
+	*j = ComponentCatalogArtifactEntrySlotsElem(plain)
+	return nil
+}
+
+type ComponentCatalogArtifactEntrySourceEvidence struct {
+	// Commit corresponds to the JSON schema field "commit".
+	Commit string `json:"commit" yaml:"commit" mapstructure:"commit"`
+
+	// Files corresponds to the JSON schema field "files".
+	Files []ComponentCatalogArtifactEntrySourceEvidenceFilesElem `json:"files" yaml:"files" mapstructure:"files"`
+
+	// Path corresponds to the JSON schema field "path".
+	Path string `json:"path" yaml:"path" mapstructure:"path"`
+}
+
+type ComponentCatalogArtifactEntrySourceEvidenceFilesElem struct {
+	// Digest corresponds to the JSON schema field "digest".
+	Digest SharedPrimitivesDigest `json:"digest" yaml:"digest" mapstructure:"digest"`
+
+	// Path corresponds to the JSON schema field "path".
+	Path string `json:"path" yaml:"path" mapstructure:"path"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactEntrySourceEvidenceFilesElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["digest"]; raw != nil && !ok {
+		return fmt.Errorf("field digest in ComponentCatalogArtifactEntrySourceEvidenceFilesElem: required")
+	}
+	if _, ok := raw["path"]; raw != nil && !ok {
+		return fmt.Errorf("field path in ComponentCatalogArtifactEntrySourceEvidenceFilesElem: required")
+	}
+	type Plain ComponentCatalogArtifactEntrySourceEvidenceFilesElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`, string(plain.Path)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Path", `^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.Path)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "path", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Path)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "path", 512)
+	}
+	*j = ComponentCatalogArtifactEntrySourceEvidenceFilesElem(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactEntrySourceEvidence) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["commit"]; raw != nil && !ok {
+		return fmt.Errorf("field commit in ComponentCatalogArtifactEntrySourceEvidence: required")
+	}
+	if _, ok := raw["files"]; raw != nil && !ok {
+		return fmt.Errorf("field files in ComponentCatalogArtifactEntrySourceEvidence: required")
+	}
+	if _, ok := raw["path"]; raw != nil && !ok {
+		return fmt.Errorf("field path in ComponentCatalogArtifactEntrySourceEvidence: required")
+	}
+	type Plain ComponentCatalogArtifactEntrySourceEvidence
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[0-9a-f]{40}$`, string(plain.Commit)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Commit", `^[0-9a-f]{40}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Commit)) < 40 {
+		return fmt.Errorf("field %s length: must be >= %d", "commit", 40)
+	}
+	if utf8.RuneCountInString(string(plain.Commit)) > 40 {
+		return fmt.Errorf("field %s length: must be <= %d", "commit", 40)
+	}
+	if len(plain.Files) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "files", 512)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`, string(plain.Path)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Path", `^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.Path)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "path", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Path)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "path", 512)
+	}
+	*j = ComponentCatalogArtifactEntrySourceEvidence(plain)
+	return nil
+}
+
+type ComponentCatalogArtifactEntryStatus string
+
+const ComponentCatalogArtifactEntryStatusApproved ComponentCatalogArtifactEntryStatus = "approved"
+const ComponentCatalogArtifactEntryStatusDeprecated ComponentCatalogArtifactEntryStatus = "deprecated"
+const ComponentCatalogArtifactEntryStatusWithdrawn ComponentCatalogArtifactEntryStatus = "withdrawn"
+
+var enumValues_ComponentCatalogArtifactEntryStatus = []interface{}{
+	"approved",
+	"deprecated",
+	"withdrawn",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactEntryStatus) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentCatalogArtifactEntryStatus {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentCatalogArtifactEntryStatus, v)
+	}
+	*j = ComponentCatalogArtifactEntryStatus(v)
+	return nil
+}
+
+type ComponentCatalogArtifactEntryVisibility string
+
+const ComponentCatalogArtifactEntryVisibilityProject ComponentCatalogArtifactEntryVisibility = "project"
+const ComponentCatalogArtifactEntryVisibilityPublic ComponentCatalogArtifactEntryVisibility = "public"
+const ComponentCatalogArtifactEntryVisibilityWorkspace ComponentCatalogArtifactEntryVisibility = "workspace"
+
+var enumValues_ComponentCatalogArtifactEntryVisibility = []interface{}{
+	"public",
+	"workspace",
+	"project",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactEntryVisibility) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentCatalogArtifactEntryVisibility {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentCatalogArtifactEntryVisibility, v)
+	}
+	*j = ComponentCatalogArtifactEntryVisibility(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactEntry) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["capabilities"]; raw != nil && !ok {
+		return fmt.Errorf("field capabilities in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["category"]; raw != nil && !ok {
+		return fmt.Errorf("field category in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["componentId"]; raw != nil && !ok {
+		return fmt.Errorf("field componentId in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["componentName"]; raw != nil && !ok {
+		return fmt.Errorf("field componentName in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["componentSlug"]; raw != nil && !ok {
+		return fmt.Errorf("field componentSlug in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["description"]; raw != nil && !ok {
+		return fmt.Errorf("field description in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["exemplar"]; raw != nil && !ok {
+		return fmt.Errorf("field exemplar in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["exports"]; raw != nil && !ok {
+		return fmt.Errorf("field exports in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["i18nKeys"]; raw != nil && !ok {
+		return fmt.Errorf("field i18nKeys in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["packageName"]; raw != nil && !ok {
+		return fmt.Errorf("field packageName in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["packageVersion"]; raw != nil && !ok {
+		return fmt.Errorf("field packageVersion in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["peerDependencies"]; raw != nil && !ok {
+		return fmt.Errorf("field peerDependencies in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["previewRef"]; raw != nil && !ok {
+		return fmt.Errorf("field previewRef in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["props"]; raw != nil && !ok {
+		return fmt.Errorf("field props in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["scaffoldType"]; raw != nil && !ok {
+		return fmt.Errorf("field scaffoldType in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["slots"]; raw != nil && !ok {
+		return fmt.Errorf("field slots in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["sourceEvidence"]; raw != nil && !ok {
+		return fmt.Errorf("field sourceEvidence in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["status"]; raw != nil && !ok {
+		return fmt.Errorf("field status in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["styleTargets"]; raw != nil && !ok {
+		return fmt.Errorf("field styleTargets in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["tags"]; raw != nil && !ok {
+		return fmt.Errorf("field tags in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["variants"]; raw != nil && !ok {
+		return fmt.Errorf("field variants in ComponentCatalogArtifactEntry: required")
+	}
+	if _, ok := raw["visibility"]; raw != nil && !ok {
+		return fmt.Errorf("field visibility in ComponentCatalogArtifactEntry: required")
+	}
+	type Plain ComponentCatalogArtifactEntry
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.Capabilities) > 16 {
+		return fmt.Errorf("field %s length: must be <= %d", "capabilities", 16)
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z0-9-]{0,63}$`, string(plain.Category)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Category", `^[a-z][a-z0-9-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Category)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "category", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Category)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "category", 64)
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`, string(plain.ComponentId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentId", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentId", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentId", 256)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Z][A-Za-z0-9]{0,63}$`, string(plain.ComponentName)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentName", `^[A-Z][A-Za-z0-9]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentName)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentName", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentName)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentName", 64)
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z0-9-]{0,63}$`, string(plain.ComponentSlug)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentSlug", `^[a-z][a-z0-9-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentSlug)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentSlug", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentSlug)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentSlug", 64)
+	}
+	if utf8.RuneCountInString(string(plain.Description)) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "description", 1024)
+	}
+	if len(plain.Exports) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "exports", 32)
+	}
+	if len(plain.I18NKeys) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "i18nKeys", 512)
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`, string(plain.PackageName)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "PackageName", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.PackageName)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "packageName", 1)
+	}
+	if utf8.RuneCountInString(string(plain.PackageName)) > 214 {
+		return fmt.Errorf("field %s length: must be <= %d", "packageName", 214)
+	}
+	if matched, _ := regexp.MatchString(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`, string(plain.PackageVersion)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "PackageVersion", `^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+	}
+	if utf8.RuneCountInString(string(plain.PackageVersion)) < 5 {
+		return fmt.Errorf("field %s length: must be >= %d", "packageVersion", 5)
+	}
+	if utf8.RuneCountInString(string(plain.PackageVersion)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "packageVersion", 64)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`, string(plain.PreviewRef)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "PreviewRef", `^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.PreviewRef)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "previewRef", 1)
+	}
+	if utf8.RuneCountInString(string(plain.PreviewRef)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "previewRef", 512)
+	}
+	if len(plain.Props) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "props", 64)
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z0-9-]{0,63}$`, string(plain.ScaffoldType)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ScaffoldType", `^[a-z][a-z0-9-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.ScaffoldType)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "scaffoldType", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ScaffoldType)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "scaffoldType", 64)
+	}
+	if len(plain.Slots) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "slots", 32)
+	}
+	if len(plain.StyleTargets) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "styleTargets", 64)
+	}
+	if len(plain.Tags) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "tags", 32)
+	}
+	if len(plain.Variants) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "variants", 32)
+	}
+	*j = ComponentCatalogArtifactEntry(plain)
+	return nil
+}
+
+type ComponentCatalogArtifactFilesElem struct {
+	// Digest corresponds to the JSON schema field "digest".
+	Digest SharedPrimitivesDigest `json:"digest" yaml:"digest" mapstructure:"digest"`
+
+	// Path corresponds to the JSON schema field "path".
+	Path string `json:"path" yaml:"path" mapstructure:"path"`
+
+	// Role corresponds to the JSON schema field "role".
+	Role ComponentCatalogArtifactFilesElemRole `json:"role" yaml:"role" mapstructure:"role"`
+
+	// Size corresponds to the JSON schema field "size".
+	Size int `json:"size" yaml:"size" mapstructure:"size"`
+}
+
+type ComponentCatalogArtifactFilesElemRole string
+
+const ComponentCatalogArtifactFilesElemRoleExemplarSource ComponentCatalogArtifactFilesElemRole = "exemplar-source"
+const ComponentCatalogArtifactFilesElemRoleMetadata ComponentCatalogArtifactFilesElemRole = "metadata"
+const ComponentCatalogArtifactFilesElemRolePreview ComponentCatalogArtifactFilesElemRole = "preview"
+
+var enumValues_ComponentCatalogArtifactFilesElemRole = []interface{}{
+	"metadata",
+	"exemplar-source",
+	"preview",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactFilesElemRole) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentCatalogArtifactFilesElemRole {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentCatalogArtifactFilesElemRole, v)
+	}
+	*j = ComponentCatalogArtifactFilesElemRole(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactFilesElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["digest"]; raw != nil && !ok {
+		return fmt.Errorf("field digest in ComponentCatalogArtifactFilesElem: required")
+	}
+	if _, ok := raw["path"]; raw != nil && !ok {
+		return fmt.Errorf("field path in ComponentCatalogArtifactFilesElem: required")
+	}
+	if _, ok := raw["role"]; raw != nil && !ok {
+		return fmt.Errorf("field role in ComponentCatalogArtifactFilesElem: required")
+	}
+	if _, ok := raw["size"]; raw != nil && !ok {
+		return fmt.Errorf("field size in ComponentCatalogArtifactFilesElem: required")
+	}
+	type Plain ComponentCatalogArtifactFilesElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`, string(plain.Path)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Path", `^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.Path)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "path", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Path)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "path", 512)
+	}
+	if 1073741824 < plain.Size {
+		return fmt.Errorf("field %s: must be <= %v", "size", 1073741824)
+	}
+	if 0 > plain.Size {
+		return fmt.Errorf("field %s: must be >= %v", "size", 0)
+	}
+	*j = ComponentCatalogArtifactFilesElem(plain)
+	return nil
+}
+
+type ComponentCatalogArtifactSignatureAlgorithm string
+
+const ComponentCatalogArtifactSignatureAlgorithmDsseEd25519V1 ComponentCatalogArtifactSignatureAlgorithm = "dsse-ed25519-v1"
+const ComponentCatalogArtifactSignatureAlgorithmJwsEddsaV1 ComponentCatalogArtifactSignatureAlgorithm = "jws-eddsa-v1"
+
+var enumValues_ComponentCatalogArtifactSignatureAlgorithm = []interface{}{
+	"dsse-ed25519-v1",
+	"jws-eddsa-v1",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifactSignatureAlgorithm) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentCatalogArtifactSignatureAlgorithm {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentCatalogArtifactSignatureAlgorithm, v)
+	}
+	*j = ComponentCatalogArtifactSignatureAlgorithm(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentCatalogArtifact) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["catalogRevision"]; raw != nil && !ok {
+		return fmt.Errorf("field catalogRevision in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["compatibilityMatrix"]; raw != nil && !ok {
+		return fmt.Errorf("field compatibilityMatrix in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["components"]; raw != nil && !ok {
+		return fmt.Errorf("field components in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["contractBomDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field contractBomDigest in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["createdAt"]; raw != nil && !ok {
+		return fmt.Errorf("field createdAt in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["files"]; raw != nil && !ok {
+		return fmt.Errorf("field files in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["puckRuntime"]; raw != nil && !ok {
+		return fmt.Errorf("field puckRuntime in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["reactRuntime"]; raw != nil && !ok {
+		return fmt.Errorf("field reactRuntime in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["schemaVersion"]; raw != nil && !ok {
+		return fmt.Errorf("field schemaVersion in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["signature"]; raw != nil && !ok {
+		return fmt.Errorf("field signature in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["signatureAlgorithm"]; raw != nil && !ok {
+		return fmt.Errorf("field signatureAlgorithm in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["signingKeyId"]; raw != nil && !ok {
+		return fmt.Errorf("field signingKeyId in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["signingPurpose"]; raw != nil && !ok {
+		return fmt.Errorf("field signingPurpose in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["sourceCommit"]; raw != nil && !ok {
+		return fmt.Errorf("field sourceCommit in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["sourceRepository"]; raw != nil && !ok {
+		return fmt.Errorf("field sourceRepository in ComponentCatalogArtifact: required")
+	}
+	if _, ok := raw["sourceWorkflowRun"]; raw != nil && !ok {
+		return fmt.Errorf("field sourceWorkflowRun in ComponentCatalogArtifact: required")
+	}
+	type Plain ComponentCatalogArtifact
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.CompatibilityMatrix) > 4096 {
+		return fmt.Errorf("field %s length: must be <= %d", "compatibilityMatrix", 4096)
+	}
+	if len(plain.Components) > 2048 {
+		return fmt.Errorf("field %s length: must be <= %d", "components", 2048)
+	}
+	if len(plain.Files) > 8192 {
+		return fmt.Errorf("field %s length: must be <= %d", "files", 8192)
+	}
+	if matched, _ := regexp.MatchString(`^[\x20-\x7E]+$`, string(plain.PuckRuntime)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "PuckRuntime", `^[\x20-\x7E]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.PuckRuntime)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "puckRuntime", 1)
+	}
+	if utf8.RuneCountInString(string(plain.PuckRuntime)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "puckRuntime", 64)
+	}
+	if matched, _ := regexp.MatchString(`^[\x20-\x7E]+$`, string(plain.ReactRuntime)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ReactRuntime", `^[\x20-\x7E]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.ReactRuntime)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "reactRuntime", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ReactRuntime)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "reactRuntime", 64)
+	}
+	if 1 < plain.SchemaVersion {
+		return fmt.Errorf("field %s: must be <= %v", "schemaVersion", 1)
+	}
+	if 1 > plain.SchemaVersion {
+		return fmt.Errorf("field %s: must be >= %v", "schemaVersion", 1)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9_-]+$`, string(plain.Signature)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Signature", `^[A-Za-z0-9_-]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.Signature)) < 86 {
+		return fmt.Errorf("field %s length: must be >= %d", "signature", 86)
+	}
+	if utf8.RuneCountInString(string(plain.Signature)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "signature", 512)
+	}
+	if matched, _ := regexp.MatchString(`^urn:anvilkit:key:[a-z0-9][a-z0-9:-]{14,255}$`, string(plain.SigningKeyId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "SigningKeyId", `^urn:anvilkit:key:[a-z0-9][a-z0-9:-]{14,255}$`)
+	}
+	if utf8.RuneCountInString(string(plain.SigningKeyId)) < 20 {
+		return fmt.Errorf("field %s length: must be >= %d", "signingKeyId", 20)
+	}
+	if utf8.RuneCountInString(string(plain.SigningKeyId)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "signingKeyId", 256)
+	}
+	if matched, _ := regexp.MatchString(`^[0-9a-f]{40}$`, string(plain.SourceCommit)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "SourceCommit", `^[0-9a-f]{40}$`)
+	}
+	if utf8.RuneCountInString(string(plain.SourceCommit)) < 40 {
+		return fmt.Errorf("field %s length: must be >= %d", "sourceCommit", 40)
+	}
+	if utf8.RuneCountInString(string(plain.SourceCommit)) > 40 {
+		return fmt.Errorf("field %s length: must be <= %d", "sourceCommit", 40)
+	}
+	if matched, _ := regexp.MatchString(`^[a-z0-9][a-z0-9._/-]*$`, string(plain.SourceRepository)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "SourceRepository", `^[a-z0-9][a-z0-9._/-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.SourceRepository)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "sourceRepository", 1)
+	}
+	if utf8.RuneCountInString(string(plain.SourceRepository)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "sourceRepository", 256)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`, string(plain.SourceWorkflowRun)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "SourceWorkflowRun", `^[A-Za-z0-9][A-Za-z0-9._:/-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.SourceWorkflowRun)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "sourceWorkflowRun", 1)
+	}
+	if utf8.RuneCountInString(string(plain.SourceWorkflowRun)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "sourceWorkflowRun", 256)
+	}
+	*j = ComponentCatalogArtifact(plain)
+	return nil
+}
+
 // Reviewable design-only proposal for a new component. It states the intent and
 // rationale, the namespace and component name, the props with kinds and defaults,
 // the variants and state model, the slot and composition rules, the design tokens
@@ -6122,6 +8076,2335 @@ func (j *ComponentDesignSpec) UnmarshalJSON(value []byte) error {
 	return nil
 }
 
+// Interpreted component request (PRD-CAT-0001 §9.5, CAT-FR-006; artifact kind
+// component-intent). It records the purpose (extending the intent member of
+// ComponentDesignSpec with summary and rationale), the resolved naming, the public
+// API of props, slots, and events, the variants, states, interactions,
+// responsiveness, accessibility, and content model, the assumptions made and the
+// questions still unresolved for a human, the target scope with the recorded
+// distribution intent, the catalog reuse evidence the interpretation rests on, and
+// the Brand Context snapshot it was interpreted against. It is a reviewable
+// interpretation only and authorizes no generation, build, or publication.
+type ComponentIntent struct {
+	// Accessibility corresponds to the JSON schema field "accessibility".
+	Accessibility ComponentIntentAccessibility `json:"accessibility" yaml:"accessibility" mapstructure:"accessibility"`
+
+	// Assumptions corresponds to the JSON schema field "assumptions".
+	Assumptions []string `json:"assumptions" yaml:"assumptions" mapstructure:"assumptions"`
+
+	// BrandSnapshotRef corresponds to the JSON schema field "brandSnapshotRef".
+	BrandSnapshotRef SharedPrimitivesArtifactReference `json:"brandSnapshotRef" yaml:"brandSnapshotRef" mapstructure:"brandSnapshotRef"`
+
+	// CatalogEvidence corresponds to the JSON schema field "catalogEvidence".
+	CatalogEvidence CatalogReuseEvidence `json:"catalogEvidence" yaml:"catalogEvidence" mapstructure:"catalogEvidence"`
+
+	// ContentModel corresponds to the JSON schema field "contentModel".
+	ContentModel []ComponentIntentContentModelElem `json:"contentModel" yaml:"contentModel" mapstructure:"contentModel"`
+
+	// Interactions corresponds to the JSON schema field "interactions".
+	Interactions []ComponentIntentInteractionsElem `json:"interactions" yaml:"interactions" mapstructure:"interactions"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name ComponentIntentName `json:"name" yaml:"name" mapstructure:"name"`
+
+	// PublicApi corresponds to the JSON schema field "publicApi".
+	PublicApi ComponentIntentPublicApi `json:"publicApi" yaml:"publicApi" mapstructure:"publicApi"`
+
+	// Purpose corresponds to the JSON schema field "purpose".
+	Purpose ComponentIntentPurpose `json:"purpose" yaml:"purpose" mapstructure:"purpose"`
+
+	// Responsiveness corresponds to the JSON schema field "responsiveness".
+	Responsiveness ComponentIntentResponsiveness `json:"responsiveness" yaml:"responsiveness" mapstructure:"responsiveness"`
+
+	// States corresponds to the JSON schema field "states".
+	States []ComponentIntentStatesElem `json:"states" yaml:"states" mapstructure:"states"`
+
+	// TargetScope corresponds to the JSON schema field "targetScope".
+	TargetScope ComponentIntentTargetScope `json:"targetScope" yaml:"targetScope" mapstructure:"targetScope"`
+
+	// Unresolved corresponds to the JSON schema field "unresolved".
+	Unresolved []ComponentIntentUnresolvedElem `json:"unresolved" yaml:"unresolved" mapstructure:"unresolved"`
+
+	// Variants corresponds to the JSON schema field "variants".
+	Variants []ComponentIntentVariantsElem `json:"variants" yaml:"variants" mapstructure:"variants"`
+}
+
+type ComponentIntentAccessibility struct {
+	// Keyboard corresponds to the JSON schema field "keyboard".
+	Keyboard []ComponentIntentAccessibilityKeyboardElem `json:"keyboard" yaml:"keyboard" mapstructure:"keyboard"`
+
+	// Labels corresponds to the JSON schema field "labels".
+	Labels []string `json:"labels" yaml:"labels" mapstructure:"labels"`
+
+	// ReducedMotion corresponds to the JSON schema field "reducedMotion".
+	ReducedMotion bool `json:"reducedMotion" yaml:"reducedMotion" mapstructure:"reducedMotion"`
+
+	// Role corresponds to the JSON schema field "role".
+	Role string `json:"role" yaml:"role" mapstructure:"role"`
+}
+
+type ComponentIntentAccessibilityKeyboardElem struct {
+	// Action corresponds to the JSON schema field "action".
+	Action string `json:"action" yaml:"action" mapstructure:"action"`
+
+	// Key corresponds to the JSON schema field "key".
+	Key string `json:"key" yaml:"key" mapstructure:"key"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentAccessibilityKeyboardElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["action"]; raw != nil && !ok {
+		return fmt.Errorf("field action in ComponentIntentAccessibilityKeyboardElem: required")
+	}
+	if _, ok := raw["key"]; raw != nil && !ok {
+		return fmt.Errorf("field key in ComponentIntentAccessibilityKeyboardElem: required")
+	}
+	type Plain ComponentIntentAccessibilityKeyboardElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Action)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "action", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Action)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "action", 256)
+	}
+	if utf8.RuneCountInString(string(plain.Key)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "key", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Key)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "key", 64)
+	}
+	*j = ComponentIntentAccessibilityKeyboardElem(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentAccessibility) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["keyboard"]; raw != nil && !ok {
+		return fmt.Errorf("field keyboard in ComponentIntentAccessibility: required")
+	}
+	if _, ok := raw["labels"]; raw != nil && !ok {
+		return fmt.Errorf("field labels in ComponentIntentAccessibility: required")
+	}
+	if _, ok := raw["reducedMotion"]; raw != nil && !ok {
+		return fmt.Errorf("field reducedMotion in ComponentIntentAccessibility: required")
+	}
+	if _, ok := raw["role"]; raw != nil && !ok {
+		return fmt.Errorf("field role in ComponentIntentAccessibility: required")
+	}
+	type Plain ComponentIntentAccessibility
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.Keyboard) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "keyboard", 32)
+	}
+	if len(plain.Labels) > 16 {
+		return fmt.Errorf("field %s length: must be <= %d", "labels", 16)
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z-]{0,63}$`, string(plain.Role)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Role", `^[a-z][a-z-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Role)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "role", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Role)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "role", 64)
+	}
+	*j = ComponentIntentAccessibility(plain)
+	return nil
+}
+
+type ComponentIntentContentModelElem struct {
+	// Description corresponds to the JSON schema field "description".
+	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
+	// Key corresponds to the JSON schema field "key".
+	Key string `json:"key" yaml:"key" mapstructure:"key"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind ComponentIntentContentModelElemKind `json:"kind" yaml:"kind" mapstructure:"kind"`
+}
+
+type ComponentIntentContentModelElemKind string
+
+const ComponentIntentContentModelElemKindImage ComponentIntentContentModelElemKind = "image"
+const ComponentIntentContentModelElemKindLink ComponentIntentContentModelElemKind = "link"
+const ComponentIntentContentModelElemKindList ComponentIntentContentModelElemKind = "list"
+const ComponentIntentContentModelElemKindRichText ComponentIntentContentModelElemKind = "rich-text"
+const ComponentIntentContentModelElemKindText ComponentIntentContentModelElemKind = "text"
+
+var enumValues_ComponentIntentContentModelElemKind = []interface{}{
+	"text",
+	"rich-text",
+	"image",
+	"link",
+	"list",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentContentModelElemKind) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentIntentContentModelElemKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentIntentContentModelElemKind, v)
+	}
+	*j = ComponentIntentContentModelElemKind(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentContentModelElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["description"]; raw != nil && !ok {
+		return fmt.Errorf("field description in ComponentIntentContentModelElem: required")
+	}
+	if _, ok := raw["key"]; raw != nil && !ok {
+		return fmt.Errorf("field key in ComponentIntentContentModelElem: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ComponentIntentContentModelElem: required")
+	}
+	type Plain ComponentIntentContentModelElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Description)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "description", 512)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9._-]*$`, string(plain.Key)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Key", `^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.Key)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "key", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Key)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "key", 128)
+	}
+	*j = ComponentIntentContentModelElem(plain)
+	return nil
+}
+
+type ComponentIntentInteractionsElem struct {
+	// Effect corresponds to the JSON schema field "effect".
+	Effect string `json:"effect" yaml:"effect" mapstructure:"effect"`
+
+	// Trigger corresponds to the JSON schema field "trigger".
+	Trigger string `json:"trigger" yaml:"trigger" mapstructure:"trigger"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentInteractionsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["effect"]; raw != nil && !ok {
+		return fmt.Errorf("field effect in ComponentIntentInteractionsElem: required")
+	}
+	if _, ok := raw["trigger"]; raw != nil && !ok {
+		return fmt.Errorf("field trigger in ComponentIntentInteractionsElem: required")
+	}
+	type Plain ComponentIntentInteractionsElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Effect)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "effect", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Effect)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "effect", 512)
+	}
+	if utf8.RuneCountInString(string(plain.Trigger)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "trigger", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Trigger)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "trigger", 128)
+	}
+	*j = ComponentIntentInteractionsElem(plain)
+	return nil
+}
+
+type ComponentIntentName struct {
+	// ComponentName corresponds to the JSON schema field "componentName".
+	ComponentName string `json:"componentName" yaml:"componentName" mapstructure:"componentName"`
+
+	// ComponentSlug corresponds to the JSON schema field "componentSlug".
+	ComponentSlug string `json:"componentSlug" yaml:"componentSlug" mapstructure:"componentSlug"`
+
+	// PackageName corresponds to the JSON schema field "packageName".
+	PackageName string `json:"packageName" yaml:"packageName" mapstructure:"packageName"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentName) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["componentName"]; raw != nil && !ok {
+		return fmt.Errorf("field componentName in ComponentIntentName: required")
+	}
+	if _, ok := raw["componentSlug"]; raw != nil && !ok {
+		return fmt.Errorf("field componentSlug in ComponentIntentName: required")
+	}
+	if _, ok := raw["packageName"]; raw != nil && !ok {
+		return fmt.Errorf("field packageName in ComponentIntentName: required")
+	}
+	type Plain ComponentIntentName
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Z][A-Za-z0-9]{0,63}$`, string(plain.ComponentName)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentName", `^[A-Z][A-Za-z0-9]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentName)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentName", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentName)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentName", 64)
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z0-9-]{0,63}$`, string(plain.ComponentSlug)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentSlug", `^[a-z][a-z0-9-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentSlug)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentSlug", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentSlug)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentSlug", 64)
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`, string(plain.PackageName)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "PackageName", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.PackageName)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "packageName", 1)
+	}
+	if utf8.RuneCountInString(string(plain.PackageName)) > 214 {
+		return fmt.Errorf("field %s length: must be <= %d", "packageName", 214)
+	}
+	*j = ComponentIntentName(plain)
+	return nil
+}
+
+type ComponentIntentPublicApi struct {
+	// Events corresponds to the JSON schema field "events".
+	Events []string `json:"events" yaml:"events" mapstructure:"events"`
+
+	// Props corresponds to the JSON schema field "props".
+	Props []ComponentIntentPublicApiPropsElem `json:"props" yaml:"props" mapstructure:"props"`
+
+	// Slots corresponds to the JSON schema field "slots".
+	Slots []string `json:"slots" yaml:"slots" mapstructure:"slots"`
+}
+
+type ComponentIntentPublicApiPropsElem struct {
+	// Control corresponds to the JSON schema field "control".
+	Control string `json:"control" yaml:"control" mapstructure:"control"`
+
+	// Default corresponds to the JSON schema field "default".
+	Default *string `json:"default,omitempty,omitzero" yaml:"default,omitempty" mapstructure:"default,omitempty"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// Required corresponds to the JSON schema field "required".
+	Required bool `json:"required" yaml:"required" mapstructure:"required"`
+
+	// Type corresponds to the JSON schema field "type".
+	Type string `json:"type" yaml:"type" mapstructure:"type"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentPublicApiPropsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["control"]; raw != nil && !ok {
+		return fmt.Errorf("field control in ComponentIntentPublicApiPropsElem: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ComponentIntentPublicApiPropsElem: required")
+	}
+	if _, ok := raw["required"]; raw != nil && !ok {
+		return fmt.Errorf("field required in ComponentIntentPublicApiPropsElem: required")
+	}
+	if _, ok := raw["type"]; raw != nil && !ok {
+		return fmt.Errorf("field type in ComponentIntentPublicApiPropsElem: required")
+	}
+	type Plain ComponentIntentPublicApiPropsElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z0-9-]{0,63}$`, string(plain.Control)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Control", `^[a-z][a-z0-9-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Control)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "control", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Control)) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "control", 32)
+	}
+	if plain.Default != nil && utf8.RuneCountInString(string(*plain.Default)) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "default", 1024)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.Name)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Name", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "name", 64)
+	}
+	if utf8.RuneCountInString(string(plain.Type)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "type", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Type)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "type", 256)
+	}
+	*j = ComponentIntentPublicApiPropsElem(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentPublicApi) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["events"]; raw != nil && !ok {
+		return fmt.Errorf("field events in ComponentIntentPublicApi: required")
+	}
+	if _, ok := raw["props"]; raw != nil && !ok {
+		return fmt.Errorf("field props in ComponentIntentPublicApi: required")
+	}
+	if _, ok := raw["slots"]; raw != nil && !ok {
+		return fmt.Errorf("field slots in ComponentIntentPublicApi: required")
+	}
+	type Plain ComponentIntentPublicApi
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.Events) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "events", 32)
+	}
+	if len(plain.Props) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "props", 64)
+	}
+	if len(plain.Slots) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "slots", 32)
+	}
+	*j = ComponentIntentPublicApi(plain)
+	return nil
+}
+
+type ComponentIntentPurpose struct {
+	// Rationale corresponds to the JSON schema field "rationale".
+	Rationale string `json:"rationale" yaml:"rationale" mapstructure:"rationale"`
+
+	// Summary corresponds to the JSON schema field "summary".
+	Summary string `json:"summary" yaml:"summary" mapstructure:"summary"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentPurpose) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["rationale"]; raw != nil && !ok {
+		return fmt.Errorf("field rationale in ComponentIntentPurpose: required")
+	}
+	if _, ok := raw["summary"]; raw != nil && !ok {
+		return fmt.Errorf("field summary in ComponentIntentPurpose: required")
+	}
+	type Plain ComponentIntentPurpose
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Rationale)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "rationale", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Rationale)) > 2048 {
+		return fmt.Errorf("field %s length: must be <= %d", "rationale", 2048)
+	}
+	if utf8.RuneCountInString(string(plain.Summary)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "summary", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Summary)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "summary", 512)
+	}
+	*j = ComponentIntentPurpose(plain)
+	return nil
+}
+
+type ComponentIntentResponsiveness struct {
+	// Breakpoints corresponds to the JSON schema field "breakpoints".
+	Breakpoints []string `json:"breakpoints" yaml:"breakpoints" mapstructure:"breakpoints"`
+
+	// Rules corresponds to the JSON schema field "rules".
+	Rules []ComponentIntentResponsivenessRulesElem `json:"rules" yaml:"rules" mapstructure:"rules"`
+}
+
+type ComponentIntentResponsivenessRulesElem struct {
+	// Breakpoint corresponds to the JSON schema field "breakpoint".
+	Breakpoint string `json:"breakpoint" yaml:"breakpoint" mapstructure:"breakpoint"`
+
+	// Rule corresponds to the JSON schema field "rule".
+	Rule string `json:"rule" yaml:"rule" mapstructure:"rule"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentResponsivenessRulesElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["breakpoint"]; raw != nil && !ok {
+		return fmt.Errorf("field breakpoint in ComponentIntentResponsivenessRulesElem: required")
+	}
+	if _, ok := raw["rule"]; raw != nil && !ok {
+		return fmt.Errorf("field rule in ComponentIntentResponsivenessRulesElem: required")
+	}
+	type Plain ComponentIntentResponsivenessRulesElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z0-9-]{0,31}$`, string(plain.Breakpoint)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Breakpoint", `^[a-z][a-z0-9-]{0,31}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Breakpoint)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "breakpoint", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Breakpoint)) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "breakpoint", 32)
+	}
+	if utf8.RuneCountInString(string(plain.Rule)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "rule", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Rule)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "rule", 512)
+	}
+	*j = ComponentIntentResponsivenessRulesElem(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentResponsiveness) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["breakpoints"]; raw != nil && !ok {
+		return fmt.Errorf("field breakpoints in ComponentIntentResponsiveness: required")
+	}
+	if _, ok := raw["rules"]; raw != nil && !ok {
+		return fmt.Errorf("field rules in ComponentIntentResponsiveness: required")
+	}
+	type Plain ComponentIntentResponsiveness
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.Breakpoints) > 8 {
+		return fmt.Errorf("field %s length: must be <= %d", "breakpoints", 8)
+	}
+	if len(plain.Rules) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "rules", 32)
+	}
+	*j = ComponentIntentResponsiveness(plain)
+	return nil
+}
+
+type ComponentIntentStatesElem struct {
+	// Description corresponds to the JSON schema field "description".
+	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
+	// State corresponds to the JSON schema field "state".
+	State string `json:"state" yaml:"state" mapstructure:"state"`
+
+	// Trigger corresponds to the JSON schema field "trigger".
+	Trigger string `json:"trigger" yaml:"trigger" mapstructure:"trigger"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentStatesElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["description"]; raw != nil && !ok {
+		return fmt.Errorf("field description in ComponentIntentStatesElem: required")
+	}
+	if _, ok := raw["state"]; raw != nil && !ok {
+		return fmt.Errorf("field state in ComponentIntentStatesElem: required")
+	}
+	if _, ok := raw["trigger"]; raw != nil && !ok {
+		return fmt.Errorf("field trigger in ComponentIntentStatesElem: required")
+	}
+	type Plain ComponentIntentStatesElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Description)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "description", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Description)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "description", 512)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.State)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "State", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.State)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "state", 1)
+	}
+	if utf8.RuneCountInString(string(plain.State)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "state", 64)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.Trigger)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Trigger", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Trigger)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "trigger", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Trigger)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "trigger", 64)
+	}
+	*j = ComponentIntentStatesElem(plain)
+	return nil
+}
+
+type ComponentIntentTargetScope struct {
+	// DistributionIntent corresponds to the JSON schema field "distributionIntent".
+	DistributionIntent ComponentIntentTargetScopeDistributionIntent `json:"distributionIntent" yaml:"distributionIntent" mapstructure:"distributionIntent"`
+
+	// ProjectId corresponds to the JSON schema field "projectId".
+	ProjectId SharedPrimitivesOpaqueId `json:"projectId" yaml:"projectId" mapstructure:"projectId"`
+
+	// WorkspaceId corresponds to the JSON schema field "workspaceId".
+	WorkspaceId SharedPrimitivesOpaqueId `json:"workspaceId" yaml:"workspaceId" mapstructure:"workspaceId"`
+}
+
+type ComponentIntentTargetScopeDistributionIntent string
+
+const ComponentIntentTargetScopeDistributionIntentPrivate ComponentIntentTargetScopeDistributionIntent = "private"
+const ComponentIntentTargetScopeDistributionIntentPublic ComponentIntentTargetScopeDistributionIntent = "public"
+
+var enumValues_ComponentIntentTargetScopeDistributionIntent = []interface{}{
+	"private",
+	"public",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentTargetScopeDistributionIntent) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentIntentTargetScopeDistributionIntent {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentIntentTargetScopeDistributionIntent, v)
+	}
+	*j = ComponentIntentTargetScopeDistributionIntent(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentTargetScope) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["distributionIntent"]; raw != nil && !ok {
+		return fmt.Errorf("field distributionIntent in ComponentIntentTargetScope: required")
+	}
+	if _, ok := raw["projectId"]; raw != nil && !ok {
+		return fmt.Errorf("field projectId in ComponentIntentTargetScope: required")
+	}
+	if _, ok := raw["workspaceId"]; raw != nil && !ok {
+		return fmt.Errorf("field workspaceId in ComponentIntentTargetScope: required")
+	}
+	type Plain ComponentIntentTargetScope
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ComponentIntentTargetScope(plain)
+	return nil
+}
+
+type ComponentIntentUnresolvedElem struct {
+	// Blocking corresponds to the JSON schema field "blocking".
+	Blocking bool `json:"blocking" yaml:"blocking" mapstructure:"blocking"`
+
+	// Question corresponds to the JSON schema field "question".
+	Question string `json:"question" yaml:"question" mapstructure:"question"`
+
+	// ResponseSchema corresponds to the JSON schema field "responseSchema".
+	ResponseSchema SharedPrimitivesSchemaReference `json:"responseSchema" yaml:"responseSchema" mapstructure:"responseSchema"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentUnresolvedElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["blocking"]; raw != nil && !ok {
+		return fmt.Errorf("field blocking in ComponentIntentUnresolvedElem: required")
+	}
+	if _, ok := raw["question"]; raw != nil && !ok {
+		return fmt.Errorf("field question in ComponentIntentUnresolvedElem: required")
+	}
+	if _, ok := raw["responseSchema"]; raw != nil && !ok {
+		return fmt.Errorf("field responseSchema in ComponentIntentUnresolvedElem: required")
+	}
+	type Plain ComponentIntentUnresolvedElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Question)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "question", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Question)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "question", 512)
+	}
+	*j = ComponentIntentUnresolvedElem(plain)
+	return nil
+}
+
+type ComponentIntentVariantsElem struct {
+	// Description corresponds to the JSON schema field "description".
+	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntentVariantsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["description"]; raw != nil && !ok {
+		return fmt.Errorf("field description in ComponentIntentVariantsElem: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ComponentIntentVariantsElem: required")
+	}
+	type Plain ComponentIntentVariantsElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Description)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "description", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Description)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "description", 512)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.Name)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Name", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "name", 64)
+	}
+	*j = ComponentIntentVariantsElem(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIntent) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["accessibility"]; raw != nil && !ok {
+		return fmt.Errorf("field accessibility in ComponentIntent: required")
+	}
+	if _, ok := raw["assumptions"]; raw != nil && !ok {
+		return fmt.Errorf("field assumptions in ComponentIntent: required")
+	}
+	if _, ok := raw["brandSnapshotRef"]; raw != nil && !ok {
+		return fmt.Errorf("field brandSnapshotRef in ComponentIntent: required")
+	}
+	if _, ok := raw["catalogEvidence"]; raw != nil && !ok {
+		return fmt.Errorf("field catalogEvidence in ComponentIntent: required")
+	}
+	if _, ok := raw["contentModel"]; raw != nil && !ok {
+		return fmt.Errorf("field contentModel in ComponentIntent: required")
+	}
+	if _, ok := raw["interactions"]; raw != nil && !ok {
+		return fmt.Errorf("field interactions in ComponentIntent: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ComponentIntent: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ComponentIntent: required")
+	}
+	if _, ok := raw["publicApi"]; raw != nil && !ok {
+		return fmt.Errorf("field publicApi in ComponentIntent: required")
+	}
+	if _, ok := raw["purpose"]; raw != nil && !ok {
+		return fmt.Errorf("field purpose in ComponentIntent: required")
+	}
+	if _, ok := raw["responsiveness"]; raw != nil && !ok {
+		return fmt.Errorf("field responsiveness in ComponentIntent: required")
+	}
+	if _, ok := raw["states"]; raw != nil && !ok {
+		return fmt.Errorf("field states in ComponentIntent: required")
+	}
+	if _, ok := raw["targetScope"]; raw != nil && !ok {
+		return fmt.Errorf("field targetScope in ComponentIntent: required")
+	}
+	if _, ok := raw["unresolved"]; raw != nil && !ok {
+		return fmt.Errorf("field unresolved in ComponentIntent: required")
+	}
+	if _, ok := raw["variants"]; raw != nil && !ok {
+		return fmt.Errorf("field variants in ComponentIntent: required")
+	}
+	type Plain ComponentIntent
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.Assumptions) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "assumptions", 32)
+	}
+	if len(plain.ContentModel) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "contentModel", 64)
+	}
+	if len(plain.Interactions) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "interactions", 32)
+	}
+	if len(plain.States) > 16 {
+		return fmt.Errorf("field %s length: must be <= %d", "states", 16)
+	}
+	if len(plain.Unresolved) > 12 {
+		return fmt.Errorf("field %s length: must be <= %d", "unresolved", 12)
+	}
+	if len(plain.Variants) > 16 {
+		return fmt.Errorf("field %s length: must be <= %d", "variants", 16)
+	}
+	*j = ComponentIntent(plain)
+	return nil
+}
+
+// Canonical editable component model on the package path (PRD-CAT-0001 §9.5,
+// CAT-FR-007, CAT-FR-008; artifact kind component-ir). It is a superset of the
+// ComponentDesignSpec design (identity, props with their Puck field types and
+// JSON-encoded serializable defaults, slots, a flat parent-linked composition tree
+// of catalog components and primitives, variants, states, responsive overrides,
+// accessibility semantics) plus its realization: design-token references by stable
+// id from the Brand Context snapshot, approved asset references, the motion
+// policy, the allowlisted dependency set, catalog lineage, locale content, the
+// file plan naming which files the model writes and which the scaffold derives,
+// and the generation binding (generator version and the Contract BOM, catalog,
+// brand snapshot, and policy digests). schemaVersion is the IR content version: a
+// document carrying an unknown version or field fails closed with
+// COMPONENT_IR_INVALID. version is the monotonic edit counter advanced by each
+// accepted patch. Studio, the generator, the Worker, and Pagix consume this one
+// schema.
+type ComponentIr struct {
+	// Accessibility corresponds to the JSON schema field "accessibility".
+	Accessibility ComponentIrAccessibility `json:"accessibility" yaml:"accessibility" mapstructure:"accessibility"`
+
+	// Assets corresponds to the JSON schema field "assets".
+	Assets []ComponentIrAssetsElem `json:"assets" yaml:"assets" mapstructure:"assets"`
+
+	// CatalogLineage corresponds to the JSON schema field "catalogLineage".
+	CatalogLineage []ComponentIrCatalogLineageElem `json:"catalogLineage" yaml:"catalogLineage" mapstructure:"catalogLineage"`
+
+	// Composition corresponds to the JSON schema field "composition".
+	Composition []ComponentIrCompositionElem `json:"composition" yaml:"composition" mapstructure:"composition"`
+
+	// Content corresponds to the JSON schema field "content".
+	Content []ComponentIrContentElem `json:"content" yaml:"content" mapstructure:"content"`
+
+	// Dependencies corresponds to the JSON schema field "dependencies".
+	Dependencies []ComponentIrDependenciesElem `json:"dependencies" yaml:"dependencies" mapstructure:"dependencies"`
+
+	// FilePlan corresponds to the JSON schema field "filePlan".
+	FilePlan []ComponentIrFilePlanElem `json:"filePlan" yaml:"filePlan" mapstructure:"filePlan"`
+
+	// Generation corresponds to the JSON schema field "generation".
+	Generation ComponentIrGeneration `json:"generation" yaml:"generation" mapstructure:"generation"`
+
+	// Identity corresponds to the JSON schema field "identity".
+	Identity ComponentIrIdentity `json:"identity" yaml:"identity" mapstructure:"identity"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Motion corresponds to the JSON schema field "motion".
+	Motion ComponentIrMotion `json:"motion" yaml:"motion" mapstructure:"motion"`
+
+	// Props corresponds to the JSON schema field "props".
+	Props []ComponentIrPropsElem `json:"props" yaml:"props" mapstructure:"props"`
+
+	// Responsive corresponds to the JSON schema field "responsive".
+	Responsive []ComponentIrResponsiveElem `json:"responsive" yaml:"responsive" mapstructure:"responsive"`
+
+	// SchemaVersion corresponds to the JSON schema field "schemaVersion".
+	SchemaVersion int `json:"schemaVersion" yaml:"schemaVersion" mapstructure:"schemaVersion"`
+
+	// Slots corresponds to the JSON schema field "slots".
+	Slots []ComponentIrSlotsElem `json:"slots" yaml:"slots" mapstructure:"slots"`
+
+	// States corresponds to the JSON schema field "states".
+	States []ComponentIrStatesElem `json:"states" yaml:"states" mapstructure:"states"`
+
+	// Tokens corresponds to the JSON schema field "tokens".
+	Tokens []ComponentIrTokensElem `json:"tokens" yaml:"tokens" mapstructure:"tokens"`
+
+	// Variants corresponds to the JSON schema field "variants".
+	Variants []ComponentIrVariantsElem `json:"variants" yaml:"variants" mapstructure:"variants"`
+
+	// Version corresponds to the JSON schema field "version".
+	Version int `json:"version" yaml:"version" mapstructure:"version"`
+}
+
+type ComponentIrAccessibility struct {
+	// Aria corresponds to the JSON schema field "aria".
+	Aria []ComponentIrAccessibilityAriaElem `json:"aria" yaml:"aria" mapstructure:"aria"`
+
+	// ContrastPolicy corresponds to the JSON schema field "contrastPolicy".
+	ContrastPolicy ComponentIrAccessibilityContrastPolicy `json:"contrastPolicy" yaml:"contrastPolicy" mapstructure:"contrastPolicy"`
+
+	// Keyboard corresponds to the JSON schema field "keyboard".
+	Keyboard []ComponentIrAccessibilityKeyboardElem `json:"keyboard" yaml:"keyboard" mapstructure:"keyboard"`
+
+	// Role corresponds to the JSON schema field "role".
+	Role string `json:"role" yaml:"role" mapstructure:"role"`
+}
+
+type ComponentIrAccessibilityAriaElem struct {
+	// Attribute corresponds to the JSON schema field "attribute".
+	Attribute string `json:"attribute" yaml:"attribute" mapstructure:"attribute"`
+
+	// Value corresponds to the JSON schema field "value".
+	Value string `json:"value" yaml:"value" mapstructure:"value"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrAccessibilityAriaElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["attribute"]; raw != nil && !ok {
+		return fmt.Errorf("field attribute in ComponentIrAccessibilityAriaElem: required")
+	}
+	if _, ok := raw["value"]; raw != nil && !ok {
+		return fmt.Errorf("field value in ComponentIrAccessibilityAriaElem: required")
+	}
+	type Plain ComponentIrAccessibilityAriaElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^aria-[a-z]+$`, string(plain.Attribute)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Attribute", `^aria-[a-z]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.Attribute)) < 6 {
+		return fmt.Errorf("field %s length: must be >= %d", "attribute", 6)
+	}
+	if utf8.RuneCountInString(string(plain.Attribute)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "attribute", 64)
+	}
+	if utf8.RuneCountInString(string(plain.Value)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "value", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Value)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "value", 256)
+	}
+	*j = ComponentIrAccessibilityAriaElem(plain)
+	return nil
+}
+
+type ComponentIrAccessibilityContrastPolicy string
+
+const ComponentIrAccessibilityContrastPolicyWcagAa ComponentIrAccessibilityContrastPolicy = "wcag-aa"
+const ComponentIrAccessibilityContrastPolicyWcagAaa ComponentIrAccessibilityContrastPolicy = "wcag-aaa"
+
+var enumValues_ComponentIrAccessibilityContrastPolicy = []interface{}{
+	"wcag-aa",
+	"wcag-aaa",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrAccessibilityContrastPolicy) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentIrAccessibilityContrastPolicy {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentIrAccessibilityContrastPolicy, v)
+	}
+	*j = ComponentIrAccessibilityContrastPolicy(v)
+	return nil
+}
+
+type ComponentIrAccessibilityKeyboardElem struct {
+	// Action corresponds to the JSON schema field "action".
+	Action string `json:"action" yaml:"action" mapstructure:"action"`
+
+	// Key corresponds to the JSON schema field "key".
+	Key string `json:"key" yaml:"key" mapstructure:"key"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrAccessibilityKeyboardElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["action"]; raw != nil && !ok {
+		return fmt.Errorf("field action in ComponentIrAccessibilityKeyboardElem: required")
+	}
+	if _, ok := raw["key"]; raw != nil && !ok {
+		return fmt.Errorf("field key in ComponentIrAccessibilityKeyboardElem: required")
+	}
+	type Plain ComponentIrAccessibilityKeyboardElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Action)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "action", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Action)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "action", 256)
+	}
+	if utf8.RuneCountInString(string(plain.Key)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "key", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Key)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "key", 64)
+	}
+	*j = ComponentIrAccessibilityKeyboardElem(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrAccessibility) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["aria"]; raw != nil && !ok {
+		return fmt.Errorf("field aria in ComponentIrAccessibility: required")
+	}
+	if _, ok := raw["contrastPolicy"]; raw != nil && !ok {
+		return fmt.Errorf("field contrastPolicy in ComponentIrAccessibility: required")
+	}
+	if _, ok := raw["keyboard"]; raw != nil && !ok {
+		return fmt.Errorf("field keyboard in ComponentIrAccessibility: required")
+	}
+	if _, ok := raw["role"]; raw != nil && !ok {
+		return fmt.Errorf("field role in ComponentIrAccessibility: required")
+	}
+	type Plain ComponentIrAccessibility
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.Aria) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "aria", 32)
+	}
+	if len(plain.Keyboard) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "keyboard", 32)
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z-]{0,63}$`, string(plain.Role)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Role", `^[a-z][a-z-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Role)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "role", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Role)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "role", 64)
+	}
+	*j = ComponentIrAccessibility(plain)
+	return nil
+}
+
+type ComponentIrAssetsElem struct {
+	// AssetRef corresponds to the JSON schema field "assetRef".
+	AssetRef SharedPrimitivesArtifactReference `json:"assetRef" yaml:"assetRef" mapstructure:"assetRef"`
+
+	// Slot corresponds to the JSON schema field "slot".
+	Slot string `json:"slot" yaml:"slot" mapstructure:"slot"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrAssetsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["assetRef"]; raw != nil && !ok {
+		return fmt.Errorf("field assetRef in ComponentIrAssetsElem: required")
+	}
+	if _, ok := raw["slot"]; raw != nil && !ok {
+		return fmt.Errorf("field slot in ComponentIrAssetsElem: required")
+	}
+	type Plain ComponentIrAssetsElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.Slot)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Slot", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Slot)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "slot", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Slot)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "slot", 64)
+	}
+	*j = ComponentIrAssetsElem(plain)
+	return nil
+}
+
+type ComponentIrCatalogLineageElem struct {
+	// ComponentId corresponds to the JSON schema field "componentId".
+	ComponentId string `json:"componentId" yaml:"componentId" mapstructure:"componentId"`
+
+	// Role corresponds to the JSON schema field "role".
+	Role ComponentIrCatalogLineageElemRole `json:"role" yaml:"role" mapstructure:"role"`
+}
+
+type ComponentIrCatalogLineageElemRole string
+
+const ComponentIrCatalogLineageElemRoleDependency ComponentIrCatalogLineageElemRole = "dependency"
+const ComponentIrCatalogLineageElemRoleReference ComponentIrCatalogLineageElemRole = "reference"
+const ComponentIrCatalogLineageElemRoleReuse ComponentIrCatalogLineageElemRole = "reuse"
+
+var enumValues_ComponentIrCatalogLineageElemRole = []interface{}{
+	"reuse",
+	"reference",
+	"dependency",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrCatalogLineageElemRole) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentIrCatalogLineageElemRole {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentIrCatalogLineageElemRole, v)
+	}
+	*j = ComponentIrCatalogLineageElemRole(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrCatalogLineageElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["componentId"]; raw != nil && !ok {
+		return fmt.Errorf("field componentId in ComponentIrCatalogLineageElem: required")
+	}
+	if _, ok := raw["role"]; raw != nil && !ok {
+		return fmt.Errorf("field role in ComponentIrCatalogLineageElem: required")
+	}
+	type Plain ComponentIrCatalogLineageElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`, string(plain.ComponentId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentId", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentId", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentId)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentId", 256)
+	}
+	*j = ComponentIrCatalogLineageElem(plain)
+	return nil
+}
+
+type ComponentIrCompositionElem struct {
+	// NodeId corresponds to the JSON schema field "nodeId".
+	NodeId string `json:"nodeId" yaml:"nodeId" mapstructure:"nodeId"`
+
+	// ParentNodeId corresponds to the JSON schema field "parentNodeId".
+	ParentNodeId string `json:"parentNodeId" yaml:"parentNodeId" mapstructure:"parentNodeId"`
+
+	// Ref corresponds to the JSON schema field "ref".
+	Ref string `json:"ref" yaml:"ref" mapstructure:"ref"`
+
+	// Slot corresponds to the JSON schema field "slot".
+	Slot string `json:"slot" yaml:"slot" mapstructure:"slot"`
+
+	// Source corresponds to the JSON schema field "source".
+	Source ComponentIrCompositionElemSource `json:"source" yaml:"source" mapstructure:"source"`
+}
+
+type ComponentIrCompositionElemSource string
+
+const ComponentIrCompositionElemSourceCatalog ComponentIrCompositionElemSource = "catalog"
+const ComponentIrCompositionElemSourcePrimitive ComponentIrCompositionElemSource = "primitive"
+
+var enumValues_ComponentIrCompositionElemSource = []interface{}{
+	"catalog",
+	"primitive",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrCompositionElemSource) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentIrCompositionElemSource {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentIrCompositionElemSource, v)
+	}
+	*j = ComponentIrCompositionElemSource(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrCompositionElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["nodeId"]; raw != nil && !ok {
+		return fmt.Errorf("field nodeId in ComponentIrCompositionElem: required")
+	}
+	if _, ok := raw["parentNodeId"]; raw != nil && !ok {
+		return fmt.Errorf("field parentNodeId in ComponentIrCompositionElem: required")
+	}
+	if _, ok := raw["ref"]; raw != nil && !ok {
+		return fmt.Errorf("field ref in ComponentIrCompositionElem: required")
+	}
+	if _, ok := raw["slot"]; raw != nil && !ok {
+		return fmt.Errorf("field slot in ComponentIrCompositionElem: required")
+	}
+	if _, ok := raw["source"]; raw != nil && !ok {
+		return fmt.Errorf("field source in ComponentIrCompositionElem: required")
+	}
+	type Plain ComponentIrCompositionElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.NodeId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "NodeId", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.NodeId)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "nodeId", 1)
+	}
+	if utf8.RuneCountInString(string(plain.NodeId)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "nodeId", 64)
+	}
+	if matched, _ := regexp.MatchString(`^([A-Za-z][A-Za-z0-9_-]{0,63})?$`, string(plain.ParentNodeId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ParentNodeId", `^([A-Za-z][A-Za-z0-9_-]{0,63})?$`)
+	}
+	if utf8.RuneCountInString(string(plain.ParentNodeId)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "parentNodeId", 64)
+	}
+	if utf8.RuneCountInString(string(plain.Ref)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "ref", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Ref)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "ref", 256)
+	}
+	if matched, _ := regexp.MatchString(`^([A-Za-z][A-Za-z0-9_-]{0,63})?$`, string(plain.Slot)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Slot", `^([A-Za-z][A-Za-z0-9_-]{0,63})?$`)
+	}
+	if utf8.RuneCountInString(string(plain.Slot)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "slot", 64)
+	}
+	*j = ComponentIrCompositionElem(plain)
+	return nil
+}
+
+type ComponentIrContentElem struct {
+	// Key corresponds to the JSON schema field "key".
+	Key string `json:"key" yaml:"key" mapstructure:"key"`
+
+	// Locale corresponds to the JSON schema field "locale".
+	Locale string `json:"locale" yaml:"locale" mapstructure:"locale"`
+
+	// Value corresponds to the JSON schema field "value".
+	Value string `json:"value" yaml:"value" mapstructure:"value"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrContentElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["key"]; raw != nil && !ok {
+		return fmt.Errorf("field key in ComponentIrContentElem: required")
+	}
+	if _, ok := raw["locale"]; raw != nil && !ok {
+		return fmt.Errorf("field locale in ComponentIrContentElem: required")
+	}
+	if _, ok := raw["value"]; raw != nil && !ok {
+		return fmt.Errorf("field value in ComponentIrContentElem: required")
+	}
+	type Plain ComponentIrContentElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9._-]*$`, string(plain.Key)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Key", `^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.Key)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "key", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Key)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "key", 128)
+	}
+	if matched, _ := regexp.MatchString(`^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$`, string(plain.Locale)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Locale", `^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$`)
+	}
+	if utf8.RuneCountInString(string(plain.Locale)) < 2 {
+		return fmt.Errorf("field %s length: must be >= %d", "locale", 2)
+	}
+	if utf8.RuneCountInString(string(plain.Locale)) > 12 {
+		return fmt.Errorf("field %s length: must be <= %d", "locale", 12)
+	}
+	if utf8.RuneCountInString(string(plain.Value)) > 4096 {
+		return fmt.Errorf("field %s length: must be <= %d", "value", 4096)
+	}
+	*j = ComponentIrContentElem(plain)
+	return nil
+}
+
+type ComponentIrDependenciesElem struct {
+	// PackageName corresponds to the JSON schema field "packageName".
+	PackageName string `json:"packageName" yaml:"packageName" mapstructure:"packageName"`
+
+	// Source corresponds to the JSON schema field "source".
+	Source interface{} `json:"source" yaml:"source" mapstructure:"source"`
+
+	// VersionRange corresponds to the JSON schema field "versionRange".
+	VersionRange string `json:"versionRange" yaml:"versionRange" mapstructure:"versionRange"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrDependenciesElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["packageName"]; raw != nil && !ok {
+		return fmt.Errorf("field packageName in ComponentIrDependenciesElem: required")
+	}
+	if _, ok := raw["source"]; raw != nil && !ok {
+		return fmt.Errorf("field source in ComponentIrDependenciesElem: required")
+	}
+	if _, ok := raw["versionRange"]; raw != nil && !ok {
+		return fmt.Errorf("field versionRange in ComponentIrDependenciesElem: required")
+	}
+	type Plain ComponentIrDependenciesElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`, string(plain.PackageName)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "PackageName", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.PackageName)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "packageName", 1)
+	}
+	if utf8.RuneCountInString(string(plain.PackageName)) > 214 {
+		return fmt.Errorf("field %s length: must be <= %d", "packageName", 214)
+	}
+	if matched, _ := regexp.MatchString(`^[\x20-\x7E]+$`, string(plain.VersionRange)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "VersionRange", `^[\x20-\x7E]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.VersionRange)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "versionRange", 1)
+	}
+	if utf8.RuneCountInString(string(plain.VersionRange)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "versionRange", 64)
+	}
+	*j = ComponentIrDependenciesElem(plain)
+	return nil
+}
+
+type ComponentIrFilePlanElem struct {
+	// Generator corresponds to the JSON schema field "generator".
+	Generator ComponentIrFilePlanElemGenerator `json:"generator" yaml:"generator" mapstructure:"generator"`
+
+	// Path corresponds to the JSON schema field "path".
+	Path string `json:"path" yaml:"path" mapstructure:"path"`
+}
+
+type ComponentIrFilePlanElemGenerator string
+
+const ComponentIrFilePlanElemGeneratorModel ComponentIrFilePlanElemGenerator = "model"
+const ComponentIrFilePlanElemGeneratorScaffold ComponentIrFilePlanElemGenerator = "scaffold"
+
+var enumValues_ComponentIrFilePlanElemGenerator = []interface{}{
+	"model",
+	"scaffold",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrFilePlanElemGenerator) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentIrFilePlanElemGenerator {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentIrFilePlanElemGenerator, v)
+	}
+	*j = ComponentIrFilePlanElemGenerator(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrFilePlanElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["generator"]; raw != nil && !ok {
+		return fmt.Errorf("field generator in ComponentIrFilePlanElem: required")
+	}
+	if _, ok := raw["path"]; raw != nil && !ok {
+		return fmt.Errorf("field path in ComponentIrFilePlanElem: required")
+	}
+	type Plain ComponentIrFilePlanElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`, string(plain.Path)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Path", `^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.Path)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "path", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Path)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "path", 256)
+	}
+	*j = ComponentIrFilePlanElem(plain)
+	return nil
+}
+
+type ComponentIrGeneration struct {
+	// BrandSnapshotDigest corresponds to the JSON schema field "brandSnapshotDigest".
+	BrandSnapshotDigest SharedPrimitivesDigest `json:"brandSnapshotDigest" yaml:"brandSnapshotDigest" mapstructure:"brandSnapshotDigest"`
+
+	// CatalogDigest corresponds to the JSON schema field "catalogDigest".
+	CatalogDigest SharedPrimitivesDigest `json:"catalogDigest" yaml:"catalogDigest" mapstructure:"catalogDigest"`
+
+	// ContractBomDigest corresponds to the JSON schema field "contractBomDigest".
+	ContractBomDigest SharedPrimitivesDigest `json:"contractBomDigest" yaml:"contractBomDigest" mapstructure:"contractBomDigest"`
+
+	// GeneratorVersion corresponds to the JSON schema field "generatorVersion".
+	GeneratorVersion string `json:"generatorVersion" yaml:"generatorVersion" mapstructure:"generatorVersion"`
+
+	// PolicyDigest corresponds to the JSON schema field "policyDigest".
+	PolicyDigest SharedPrimitivesDigest `json:"policyDigest" yaml:"policyDigest" mapstructure:"policyDigest"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrGeneration) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["brandSnapshotDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field brandSnapshotDigest in ComponentIrGeneration: required")
+	}
+	if _, ok := raw["catalogDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field catalogDigest in ComponentIrGeneration: required")
+	}
+	if _, ok := raw["contractBomDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field contractBomDigest in ComponentIrGeneration: required")
+	}
+	if _, ok := raw["generatorVersion"]; raw != nil && !ok {
+		return fmt.Errorf("field generatorVersion in ComponentIrGeneration: required")
+	}
+	if _, ok := raw["policyDigest"]; raw != nil && !ok {
+		return fmt.Errorf("field policyDigest in ComponentIrGeneration: required")
+	}
+	type Plain ComponentIrGeneration
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`, string(plain.GeneratorVersion)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "GeneratorVersion", `^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.GeneratorVersion)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "generatorVersion", 1)
+	}
+	if utf8.RuneCountInString(string(plain.GeneratorVersion)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "generatorVersion", 64)
+	}
+	*j = ComponentIrGeneration(plain)
+	return nil
+}
+
+type ComponentIrIdentity struct {
+	// ComponentName corresponds to the JSON schema field "componentName".
+	ComponentName string `json:"componentName" yaml:"componentName" mapstructure:"componentName"`
+
+	// ComponentSlug corresponds to the JSON schema field "componentSlug".
+	ComponentSlug string `json:"componentSlug" yaml:"componentSlug" mapstructure:"componentSlug"`
+
+	// PackageName corresponds to the JSON schema field "packageName".
+	PackageName string `json:"packageName" yaml:"packageName" mapstructure:"packageName"`
+
+	// PackageVersion corresponds to the JSON schema field "packageVersion".
+	PackageVersion string `json:"packageVersion" yaml:"packageVersion" mapstructure:"packageVersion"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrIdentity) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["componentName"]; raw != nil && !ok {
+		return fmt.Errorf("field componentName in ComponentIrIdentity: required")
+	}
+	if _, ok := raw["componentSlug"]; raw != nil && !ok {
+		return fmt.Errorf("field componentSlug in ComponentIrIdentity: required")
+	}
+	if _, ok := raw["packageName"]; raw != nil && !ok {
+		return fmt.Errorf("field packageName in ComponentIrIdentity: required")
+	}
+	if _, ok := raw["packageVersion"]; raw != nil && !ok {
+		return fmt.Errorf("field packageVersion in ComponentIrIdentity: required")
+	}
+	type Plain ComponentIrIdentity
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Z][A-Za-z0-9]{0,63}$`, string(plain.ComponentName)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentName", `^[A-Z][A-Za-z0-9]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentName)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentName", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentName)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentName", 64)
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z0-9-]{0,63}$`, string(plain.ComponentSlug)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "ComponentSlug", `^[a-z][a-z0-9-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentSlug)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "componentSlug", 1)
+	}
+	if utf8.RuneCountInString(string(plain.ComponentSlug)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "componentSlug", 64)
+	}
+	if matched, _ := regexp.MatchString(`^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`, string(plain.PackageName)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "PackageName", `^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.PackageName)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "packageName", 1)
+	}
+	if utf8.RuneCountInString(string(plain.PackageName)) > 214 {
+		return fmt.Errorf("field %s length: must be <= %d", "packageName", 214)
+	}
+	if matched, _ := regexp.MatchString(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`, string(plain.PackageVersion)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "PackageVersion", `^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$`)
+	}
+	if utf8.RuneCountInString(string(plain.PackageVersion)) < 5 {
+		return fmt.Errorf("field %s length: must be >= %d", "packageVersion", 5)
+	}
+	if utf8.RuneCountInString(string(plain.PackageVersion)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "packageVersion", 64)
+	}
+	*j = ComponentIrIdentity(plain)
+	return nil
+}
+
+type ComponentIrMotion struct {
+	// Presets corresponds to the JSON schema field "presets".
+	Presets []ComponentIrMotionPresetsElem `json:"presets" yaml:"presets" mapstructure:"presets"`
+
+	// ReducedMotion corresponds to the JSON schema field "reducedMotion".
+	ReducedMotion bool `json:"reducedMotion" yaml:"reducedMotion" mapstructure:"reducedMotion"`
+}
+
+type ComponentIrMotionPresetsElem struct {
+	// Params corresponds to the JSON schema field "params".
+	Params SharedPrimitivesBoundedStringMap `json:"params" yaml:"params" mapstructure:"params"`
+
+	// Preset corresponds to the JSON schema field "preset".
+	Preset string `json:"preset" yaml:"preset" mapstructure:"preset"`
+
+	// Target corresponds to the JSON schema field "target".
+	Target string `json:"target" yaml:"target" mapstructure:"target"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrMotionPresetsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["params"]; raw != nil && !ok {
+		return fmt.Errorf("field params in ComponentIrMotionPresetsElem: required")
+	}
+	if _, ok := raw["preset"]; raw != nil && !ok {
+		return fmt.Errorf("field preset in ComponentIrMotionPresetsElem: required")
+	}
+	if _, ok := raw["target"]; raw != nil && !ok {
+		return fmt.Errorf("field target in ComponentIrMotionPresetsElem: required")
+	}
+	type Plain ComponentIrMotionPresetsElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z0-9-]{0,63}$`, string(plain.Preset)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Preset", `^[a-z][a-z0-9-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Preset)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "preset", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Preset)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "preset", 64)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.Target)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Target", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Target)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "target", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Target)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "target", 64)
+	}
+	*j = ComponentIrMotionPresetsElem(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrMotion) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["presets"]; raw != nil && !ok {
+		return fmt.Errorf("field presets in ComponentIrMotion: required")
+	}
+	if _, ok := raw["reducedMotion"]; raw != nil && !ok {
+		return fmt.Errorf("field reducedMotion in ComponentIrMotion: required")
+	}
+	type Plain ComponentIrMotion
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.Presets) > 16 {
+		return fmt.Errorf("field %s length: must be <= %d", "presets", 16)
+	}
+	*j = ComponentIrMotion(plain)
+	return nil
+}
+
+type ComponentIrPropsElem struct {
+	// Control corresponds to the JSON schema field "control".
+	Control string `json:"control" yaml:"control" mapstructure:"control"`
+
+	// Default corresponds to the JSON schema field "default".
+	Default string `json:"default" yaml:"default" mapstructure:"default"`
+
+	// Description corresponds to the JSON schema field "description".
+	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// PuckField corresponds to the JSON schema field "puckField".
+	PuckField ComponentIrPropsElemPuckField `json:"puckField" yaml:"puckField" mapstructure:"puckField"`
+
+	// Required corresponds to the JSON schema field "required".
+	Required bool `json:"required" yaml:"required" mapstructure:"required"`
+
+	// Type corresponds to the JSON schema field "type".
+	Type string `json:"type" yaml:"type" mapstructure:"type"`
+}
+
+type ComponentIrPropsElemPuckField string
+
+const ComponentIrPropsElemPuckFieldArray ComponentIrPropsElemPuckField = "array"
+const ComponentIrPropsElemPuckFieldCustom ComponentIrPropsElemPuckField = "custom"
+const ComponentIrPropsElemPuckFieldExternal ComponentIrPropsElemPuckField = "external"
+const ComponentIrPropsElemPuckFieldNumber ComponentIrPropsElemPuckField = "number"
+const ComponentIrPropsElemPuckFieldObject ComponentIrPropsElemPuckField = "object"
+const ComponentIrPropsElemPuckFieldRadio ComponentIrPropsElemPuckField = "radio"
+const ComponentIrPropsElemPuckFieldSelect ComponentIrPropsElemPuckField = "select"
+const ComponentIrPropsElemPuckFieldSlot ComponentIrPropsElemPuckField = "slot"
+const ComponentIrPropsElemPuckFieldText ComponentIrPropsElemPuckField = "text"
+const ComponentIrPropsElemPuckFieldTextarea ComponentIrPropsElemPuckField = "textarea"
+
+var enumValues_ComponentIrPropsElemPuckField = []interface{}{
+	"text",
+	"textarea",
+	"number",
+	"select",
+	"radio",
+	"array",
+	"object",
+	"external",
+	"custom",
+	"slot",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrPropsElemPuckField) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentIrPropsElemPuckField {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentIrPropsElemPuckField, v)
+	}
+	*j = ComponentIrPropsElemPuckField(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrPropsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["control"]; raw != nil && !ok {
+		return fmt.Errorf("field control in ComponentIrPropsElem: required")
+	}
+	if _, ok := raw["default"]; raw != nil && !ok {
+		return fmt.Errorf("field default in ComponentIrPropsElem: required")
+	}
+	if _, ok := raw["description"]; raw != nil && !ok {
+		return fmt.Errorf("field description in ComponentIrPropsElem: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ComponentIrPropsElem: required")
+	}
+	if _, ok := raw["puckField"]; raw != nil && !ok {
+		return fmt.Errorf("field puckField in ComponentIrPropsElem: required")
+	}
+	if _, ok := raw["required"]; raw != nil && !ok {
+		return fmt.Errorf("field required in ComponentIrPropsElem: required")
+	}
+	if _, ok := raw["type"]; raw != nil && !ok {
+		return fmt.Errorf("field type in ComponentIrPropsElem: required")
+	}
+	type Plain ComponentIrPropsElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z0-9-]{0,63}$`, string(plain.Control)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Control", `^[a-z][a-z0-9-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Control)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "control", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Control)) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "control", 32)
+	}
+	if utf8.RuneCountInString(string(plain.Default)) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "default", 1024)
+	}
+	if utf8.RuneCountInString(string(plain.Description)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "description", 512)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.Name)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Name", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "name", 64)
+	}
+	if utf8.RuneCountInString(string(plain.Type)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "type", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Type)) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "type", 256)
+	}
+	*j = ComponentIrPropsElem(plain)
+	return nil
+}
+
+type ComponentIrResponsiveElem struct {
+	// Breakpoint corresponds to the JSON schema field "breakpoint".
+	Breakpoint string `json:"breakpoint" yaml:"breakpoint" mapstructure:"breakpoint"`
+
+	// Overrides corresponds to the JSON schema field "overrides".
+	Overrides SharedPrimitivesBoundedStringMap `json:"overrides" yaml:"overrides" mapstructure:"overrides"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrResponsiveElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["breakpoint"]; raw != nil && !ok {
+		return fmt.Errorf("field breakpoint in ComponentIrResponsiveElem: required")
+	}
+	if _, ok := raw["overrides"]; raw != nil && !ok {
+		return fmt.Errorf("field overrides in ComponentIrResponsiveElem: required")
+	}
+	type Plain ComponentIrResponsiveElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z0-9-]{0,31}$`, string(plain.Breakpoint)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Breakpoint", `^[a-z][a-z0-9-]{0,31}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Breakpoint)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "breakpoint", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Breakpoint)) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "breakpoint", 32)
+	}
+	*j = ComponentIrResponsiveElem(plain)
+	return nil
+}
+
+type ComponentIrSlotsElem struct {
+	// AllowedComponents corresponds to the JSON schema field "allowedComponents".
+	AllowedComponents []string `json:"allowedComponents" yaml:"allowedComponents" mapstructure:"allowedComponents"`
+
+	// MaxDepth corresponds to the JSON schema field "maxDepth".
+	MaxDepth int `json:"maxDepth" yaml:"maxDepth" mapstructure:"maxDepth"`
+
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrSlotsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["allowedComponents"]; raw != nil && !ok {
+		return fmt.Errorf("field allowedComponents in ComponentIrSlotsElem: required")
+	}
+	if _, ok := raw["maxDepth"]; raw != nil && !ok {
+		return fmt.Errorf("field maxDepth in ComponentIrSlotsElem: required")
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ComponentIrSlotsElem: required")
+	}
+	type Plain ComponentIrSlotsElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.AllowedComponents) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "allowedComponents", 64)
+	}
+	if 32 < plain.MaxDepth {
+		return fmt.Errorf("field %s: must be <= %v", "maxDepth", 32)
+	}
+	if 0 > plain.MaxDepth {
+		return fmt.Errorf("field %s: must be >= %v", "maxDepth", 0)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.Name)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Name", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "name", 64)
+	}
+	*j = ComponentIrSlotsElem(plain)
+	return nil
+}
+
+type ComponentIrStatesElem struct {
+	// Description corresponds to the JSON schema field "description".
+	Description string `json:"description" yaml:"description" mapstructure:"description"`
+
+	// State corresponds to the JSON schema field "state".
+	State string `json:"state" yaml:"state" mapstructure:"state"`
+
+	// Trigger corresponds to the JSON schema field "trigger".
+	Trigger string `json:"trigger" yaml:"trigger" mapstructure:"trigger"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrStatesElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["description"]; raw != nil && !ok {
+		return fmt.Errorf("field description in ComponentIrStatesElem: required")
+	}
+	if _, ok := raw["state"]; raw != nil && !ok {
+		return fmt.Errorf("field state in ComponentIrStatesElem: required")
+	}
+	if _, ok := raw["trigger"]; raw != nil && !ok {
+		return fmt.Errorf("field trigger in ComponentIrStatesElem: required")
+	}
+	type Plain ComponentIrStatesElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if utf8.RuneCountInString(string(plain.Description)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "description", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Description)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "description", 512)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.State)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "State", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.State)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "state", 1)
+	}
+	if utf8.RuneCountInString(string(plain.State)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "state", 64)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.Trigger)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Trigger", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Trigger)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "trigger", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Trigger)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "trigger", 64)
+	}
+	*j = ComponentIrStatesElem(plain)
+	return nil
+}
+
+type ComponentIrTokensElem struct {
+	// Path corresponds to the JSON schema field "path".
+	Path string `json:"path" yaml:"path" mapstructure:"path"`
+
+	// TokenRef corresponds to the JSON schema field "tokenRef".
+	TokenRef string `json:"tokenRef" yaml:"tokenRef" mapstructure:"tokenRef"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrTokensElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["path"]; raw != nil && !ok {
+		return fmt.Errorf("field path in ComponentIrTokensElem: required")
+	}
+	if _, ok := raw["tokenRef"]; raw != nil && !ok {
+		return fmt.Errorf("field tokenRef in ComponentIrTokensElem: required")
+	}
+	type Plain ComponentIrTokensElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_.-]{0,127}$`, string(plain.Path)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Path", `^[A-Za-z][A-Za-z0-9_.-]{0,127}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Path)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "path", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Path)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "path", 128)
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z0-9.-]{0,127}$`, string(plain.TokenRef)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "TokenRef", `^[a-z][a-z0-9.-]{0,127}$`)
+	}
+	if utf8.RuneCountInString(string(plain.TokenRef)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "tokenRef", 1)
+	}
+	if utf8.RuneCountInString(string(plain.TokenRef)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "tokenRef", 128)
+	}
+	*j = ComponentIrTokensElem(plain)
+	return nil
+}
+
+type ComponentIrVariantsElem struct {
+	// Name corresponds to the JSON schema field "name".
+	Name string `json:"name" yaml:"name" mapstructure:"name"`
+
+	// PropOverrides corresponds to the JSON schema field "propOverrides".
+	PropOverrides SharedPrimitivesBoundedStringMap `json:"propOverrides" yaml:"propOverrides" mapstructure:"propOverrides"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIrVariantsElem) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["name"]; raw != nil && !ok {
+		return fmt.Errorf("field name in ComponentIrVariantsElem: required")
+	}
+	if _, ok := raw["propOverrides"]; raw != nil && !ok {
+		return fmt.Errorf("field propOverrides in ComponentIrVariantsElem: required")
+	}
+	type Plain ComponentIrVariantsElem
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(plain.Name)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Name", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "name", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Name)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "name", 64)
+	}
+	*j = ComponentIrVariantsElem(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentIr) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["accessibility"]; raw != nil && !ok {
+		return fmt.Errorf("field accessibility in ComponentIr: required")
+	}
+	if _, ok := raw["assets"]; raw != nil && !ok {
+		return fmt.Errorf("field assets in ComponentIr: required")
+	}
+	if _, ok := raw["catalogLineage"]; raw != nil && !ok {
+		return fmt.Errorf("field catalogLineage in ComponentIr: required")
+	}
+	if _, ok := raw["composition"]; raw != nil && !ok {
+		return fmt.Errorf("field composition in ComponentIr: required")
+	}
+	if _, ok := raw["content"]; raw != nil && !ok {
+		return fmt.Errorf("field content in ComponentIr: required")
+	}
+	if _, ok := raw["dependencies"]; raw != nil && !ok {
+		return fmt.Errorf("field dependencies in ComponentIr: required")
+	}
+	if _, ok := raw["filePlan"]; raw != nil && !ok {
+		return fmt.Errorf("field filePlan in ComponentIr: required")
+	}
+	if _, ok := raw["generation"]; raw != nil && !ok {
+		return fmt.Errorf("field generation in ComponentIr: required")
+	}
+	if _, ok := raw["identity"]; raw != nil && !ok {
+		return fmt.Errorf("field identity in ComponentIr: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ComponentIr: required")
+	}
+	if _, ok := raw["motion"]; raw != nil && !ok {
+		return fmt.Errorf("field motion in ComponentIr: required")
+	}
+	if _, ok := raw["props"]; raw != nil && !ok {
+		return fmt.Errorf("field props in ComponentIr: required")
+	}
+	if _, ok := raw["responsive"]; raw != nil && !ok {
+		return fmt.Errorf("field responsive in ComponentIr: required")
+	}
+	if _, ok := raw["schemaVersion"]; raw != nil && !ok {
+		return fmt.Errorf("field schemaVersion in ComponentIr: required")
+	}
+	if _, ok := raw["slots"]; raw != nil && !ok {
+		return fmt.Errorf("field slots in ComponentIr: required")
+	}
+	if _, ok := raw["states"]; raw != nil && !ok {
+		return fmt.Errorf("field states in ComponentIr: required")
+	}
+	if _, ok := raw["tokens"]; raw != nil && !ok {
+		return fmt.Errorf("field tokens in ComponentIr: required")
+	}
+	if _, ok := raw["variants"]; raw != nil && !ok {
+		return fmt.Errorf("field variants in ComponentIr: required")
+	}
+	if _, ok := raw["version"]; raw != nil && !ok {
+		return fmt.Errorf("field version in ComponentIr: required")
+	}
+	type Plain ComponentIr
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.Assets) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "assets", 32)
+	}
+	if len(plain.CatalogLineage) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "catalogLineage", 64)
+	}
+	if len(plain.Composition) > 256 {
+		return fmt.Errorf("field %s length: must be <= %d", "composition", 256)
+	}
+	if len(plain.Content) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "content", 1024)
+	}
+	if len(plain.Dependencies) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "dependencies", 32)
+	}
+	if len(plain.FilePlan) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "filePlan", 64)
+	}
+	if len(plain.Props) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "props", 64)
+	}
+	if len(plain.Responsive) > 8 {
+		return fmt.Errorf("field %s length: must be <= %d", "responsive", 8)
+	}
+	if 1 < plain.SchemaVersion {
+		return fmt.Errorf("field %s: must be <= %v", "schemaVersion", 1)
+	}
+	if 1 > plain.SchemaVersion {
+		return fmt.Errorf("field %s: must be >= %v", "schemaVersion", 1)
+	}
+	if len(plain.Slots) > 32 {
+		return fmt.Errorf("field %s length: must be <= %d", "slots", 32)
+	}
+	if len(plain.States) > 16 {
+		return fmt.Errorf("field %s length: must be <= %d", "states", 16)
+	}
+	if len(plain.Tokens) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "tokens", 64)
+	}
+	if len(plain.Variants) > 16 {
+		return fmt.Errorf("field %s length: must be <= %d", "variants", 16)
+	}
+	if 9007199254740991 < plain.Version {
+		return fmt.Errorf("field %s: must be <= %v", "version", 9007199254740991)
+	}
+	if 1 > plain.Version {
+		return fmt.Errorf("field %s: must be >= %v", "version", 1)
+	}
+	*j = ComponentIr(plain)
+	return nil
+}
+
 // Bounded ComponentPackageSpec wire contract governed by PRD 0012.
 type ComponentPackageSpec struct {
 	// BuildPolicy corresponds to the JSON schema field "buildPolicy".
@@ -6344,6 +10627,324 @@ func (j *ComponentPackageSpec) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("field %s length: must be <= %d", "validationConstraints", 32)
 	}
 	*j = ComponentPackageSpec(plain)
+	return nil
+}
+
+// Structured component request a Studio user submits to start a component-design
+// or component-package run (PRD-CAT-0001 §9.5; master §8.1 / UX-FR-002). It
+// carries the bounded prompt, naming and package-scope hints, the target project,
+// preferred catalog components, brand and asset constraints, responsive,
+// accessibility, and motion preferences, a recorded (never authorizing)
+// distribution intent, and the caller's idempotency key. It is caller intent only:
+// no run identity, workspace, actor, or authority is carried, and it is
+// transported as CreateAgentRunRequest.input.componentRequest.
+type ComponentRequest struct {
+	// Accessibility corresponds to the JSON schema field "accessibility".
+	Accessibility *ComponentRequestAccessibility `json:"accessibility,omitempty,omitzero" yaml:"accessibility,omitempty" mapstructure:"accessibility,omitempty"`
+
+	// AssetConstraints corresponds to the JSON schema field "assetConstraints".
+	AssetConstraints *ComponentRequestAssetConstraints `json:"assetConstraints,omitempty,omitzero" yaml:"assetConstraints,omitempty" mapstructure:"assetConstraints,omitempty"`
+
+	// BrandId corresponds to the JSON schema field "brandId".
+	BrandId *SharedPrimitivesOpaqueId `json:"brandId,omitempty,omitzero" yaml:"brandId,omitempty" mapstructure:"brandId,omitempty"`
+
+	// DistributionIntent corresponds to the JSON schema field "distributionIntent".
+	DistributionIntent *ComponentRequestDistributionIntent `json:"distributionIntent,omitempty,omitzero" yaml:"distributionIntent,omitempty" mapstructure:"distributionIntent,omitempty"`
+
+	// IdempotencyKey corresponds to the JSON schema field "idempotencyKey".
+	IdempotencyKey string `json:"idempotencyKey" yaml:"idempotencyKey" mapstructure:"idempotencyKey"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Motion corresponds to the JSON schema field "motion".
+	Motion *ComponentRequestMotion `json:"motion,omitempty,omitzero" yaml:"motion,omitempty" mapstructure:"motion,omitempty"`
+
+	// NameHint corresponds to the JSON schema field "nameHint".
+	NameHint *string `json:"nameHint,omitempty,omitzero" yaml:"nameHint,omitempty" mapstructure:"nameHint,omitempty"`
+
+	// PackageScope corresponds to the JSON schema field "packageScope".
+	PackageScope *string `json:"packageScope,omitempty,omitzero" yaml:"packageScope,omitempty" mapstructure:"packageScope,omitempty"`
+
+	// PreferredComponents corresponds to the JSON schema field "preferredComponents".
+	PreferredComponents []string `json:"preferredComponents,omitempty,omitzero" yaml:"preferredComponents,omitempty" mapstructure:"preferredComponents,omitempty"`
+
+	// Prompt corresponds to the JSON schema field "prompt".
+	Prompt string `json:"prompt" yaml:"prompt" mapstructure:"prompt"`
+
+	// Responsive corresponds to the JSON schema field "responsive".
+	Responsive *ComponentRequestResponsive `json:"responsive,omitempty,omitzero" yaml:"responsive,omitempty" mapstructure:"responsive,omitempty"`
+
+	// TargetProjectId corresponds to the JSON schema field "targetProjectId".
+	TargetProjectId SharedPrimitivesOpaqueId `json:"targetProjectId" yaml:"targetProjectId" mapstructure:"targetProjectId"`
+}
+
+type ComponentRequestAccessibility struct {
+	// Level corresponds to the JSON schema field "level".
+	Level ComponentRequestAccessibilityLevel `json:"level" yaml:"level" mapstructure:"level"`
+}
+
+type ComponentRequestAccessibilityLevel string
+
+const ComponentRequestAccessibilityLevelA ComponentRequestAccessibilityLevel = "A"
+const ComponentRequestAccessibilityLevelAA ComponentRequestAccessibilityLevel = "AA"
+const ComponentRequestAccessibilityLevelAAA ComponentRequestAccessibilityLevel = "AAA"
+
+var enumValues_ComponentRequestAccessibilityLevel = []interface{}{
+	"A",
+	"AA",
+	"AAA",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentRequestAccessibilityLevel) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentRequestAccessibilityLevel {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentRequestAccessibilityLevel, v)
+	}
+	*j = ComponentRequestAccessibilityLevel(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentRequestAccessibility) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["level"]; raw != nil && !ok {
+		return fmt.Errorf("field level in ComponentRequestAccessibility: required")
+	}
+	type Plain ComponentRequestAccessibility
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ComponentRequestAccessibility(plain)
+	return nil
+}
+
+type ComponentRequestAssetConstraints struct {
+	// AllowedAssetIds corresponds to the JSON schema field "allowedAssetIds".
+	AllowedAssetIds []SharedPrimitivesOpaqueId `json:"allowedAssetIds" yaml:"allowedAssetIds" mapstructure:"allowedAssetIds"`
+
+	// Disallowed corresponds to the JSON schema field "disallowed".
+	Disallowed []SharedPrimitivesOpaqueId `json:"disallowed" yaml:"disallowed" mapstructure:"disallowed"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentRequestAssetConstraints) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["allowedAssetIds"]; raw != nil && !ok {
+		return fmt.Errorf("field allowedAssetIds in ComponentRequestAssetConstraints: required")
+	}
+	if _, ok := raw["disallowed"]; raw != nil && !ok {
+		return fmt.Errorf("field disallowed in ComponentRequestAssetConstraints: required")
+	}
+	type Plain ComponentRequestAssetConstraints
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if len(plain.AllowedAssetIds) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "allowedAssetIds", 64)
+	}
+	if len(plain.Disallowed) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "disallowed", 64)
+	}
+	*j = ComponentRequestAssetConstraints(plain)
+	return nil
+}
+
+type ComponentRequestDistributionIntent string
+
+const ComponentRequestDistributionIntentPrivate ComponentRequestDistributionIntent = "private"
+const ComponentRequestDistributionIntentPublic ComponentRequestDistributionIntent = "public"
+
+var enumValues_ComponentRequestDistributionIntent = []interface{}{
+	"private",
+	"public",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentRequestDistributionIntent) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ComponentRequestDistributionIntent {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ComponentRequestDistributionIntent, v)
+	}
+	*j = ComponentRequestDistributionIntent(v)
+	return nil
+}
+
+type ComponentRequestMotion struct {
+	// Allowed corresponds to the JSON schema field "allowed".
+	Allowed bool `json:"allowed" yaml:"allowed" mapstructure:"allowed"`
+
+	// ReducedMotion corresponds to the JSON schema field "reducedMotion".
+	ReducedMotion bool `json:"reducedMotion" yaml:"reducedMotion" mapstructure:"reducedMotion"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentRequestMotion) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["allowed"]; raw != nil && !ok {
+		return fmt.Errorf("field allowed in ComponentRequestMotion: required")
+	}
+	if _, ok := raw["reducedMotion"]; raw != nil && !ok {
+		return fmt.Errorf("field reducedMotion in ComponentRequestMotion: required")
+	}
+	type Plain ComponentRequestMotion
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	*j = ComponentRequestMotion(plain)
+	return nil
+}
+
+type ComponentRequestResponsive struct {
+	// Breakpoints corresponds to the JSON schema field "breakpoints".
+	Breakpoints []string `json:"breakpoints" yaml:"breakpoints" mapstructure:"breakpoints"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentRequestResponsive) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["breakpoints"]; raw != nil && !ok {
+		return fmt.Errorf("field breakpoints in ComponentRequestResponsive: required")
+	}
+	type Plain ComponentRequestResponsive
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.Breakpoints != nil && len(plain.Breakpoints) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "breakpoints", 1)
+	}
+	if len(plain.Breakpoints) > 8 {
+		return fmt.Errorf("field %s length: must be <= %d", "breakpoints", 8)
+	}
+	*j = ComponentRequestResponsive(plain)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ComponentRequest) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["idempotencyKey"]; raw != nil && !ok {
+		return fmt.Errorf("field idempotencyKey in ComponentRequest: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ComponentRequest: required")
+	}
+	if _, ok := raw["prompt"]; raw != nil && !ok {
+		return fmt.Errorf("field prompt in ComponentRequest: required")
+	}
+	if _, ok := raw["targetProjectId"]; raw != nil && !ok {
+		return fmt.Errorf("field targetProjectId in ComponentRequest: required")
+	}
+	type Plain ComponentRequest
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`, string(plain.IdempotencyKey)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "IdempotencyKey", `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	}
+	if utf8.RuneCountInString(string(plain.IdempotencyKey)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "idempotencyKey", 1)
+	}
+	if utf8.RuneCountInString(string(plain.IdempotencyKey)) > 128 {
+		return fmt.Errorf("field %s length: must be <= %d", "idempotencyKey", 128)
+	}
+	if plain.NameHint != nil {
+		if matched, _ := regexp.MatchString(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`, string(*plain.NameHint)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "NameHint", `^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
+		}
+	}
+	if plain.NameHint != nil && utf8.RuneCountInString(string(*plain.NameHint)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "nameHint", 1)
+	}
+	if plain.NameHint != nil && utf8.RuneCountInString(string(*plain.NameHint)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "nameHint", 64)
+	}
+	if plain.PackageScope != nil {
+		if matched, _ := regexp.MatchString(`^@[a-z0-9][a-z0-9-]{0,63}$`, string(*plain.PackageScope)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "PackageScope", `^@[a-z0-9][a-z0-9-]{0,63}$`)
+		}
+	}
+	if plain.PackageScope != nil && utf8.RuneCountInString(string(*plain.PackageScope)) < 2 {
+		return fmt.Errorf("field %s length: must be >= %d", "packageScope", 2)
+	}
+	if plain.PackageScope != nil && utf8.RuneCountInString(string(*plain.PackageScope)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "packageScope", 64)
+	}
+	if plain.PreferredComponents != nil && len(plain.PreferredComponents) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "preferredComponents", 1)
+	}
+	if len(plain.PreferredComponents) > 16 {
+		return fmt.Errorf("field %s length: must be <= %d", "preferredComponents", 16)
+	}
+	if utf8.RuneCountInString(string(plain.Prompt)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "prompt", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Prompt)) > 8192 {
+		return fmt.Errorf("field %s length: must be <= %d", "prompt", 8192)
+	}
+	*j = ComponentRequest(plain)
 	return nil
 }
 
@@ -7548,18 +12149,42 @@ type ContractsBundleJson struct {
 	// "ArtifactContentGrant".
 	ArtifactContentGrant *ArtifactContentGrant `json:"ArtifactContentGrant,omitempty,omitzero" yaml:"ArtifactContentGrant,omitempty" mapstructure:"ArtifactContentGrant,omitempty"`
 
+	// CatalogReuseEvidence corresponds to the JSON schema field
+	// "CatalogReuseEvidence".
+	CatalogReuseEvidence *CatalogReuseEvidence `json:"CatalogReuseEvidence,omitempty,omitzero" yaml:"CatalogReuseEvidence,omitempty" mapstructure:"CatalogReuseEvidence,omitempty"`
+
+	// CatalogSearchRequest corresponds to the JSON schema field
+	// "CatalogSearchRequest".
+	CatalogSearchRequest *CatalogSearchRequest `json:"CatalogSearchRequest,omitempty,omitzero" yaml:"CatalogSearchRequest,omitempty" mapstructure:"CatalogSearchRequest,omitempty"`
+
+	// CatalogSearchResult corresponds to the JSON schema field "CatalogSearchResult".
+	CatalogSearchResult *CatalogSearchResult `json:"CatalogSearchResult,omitempty,omitzero" yaml:"CatalogSearchResult,omitempty" mapstructure:"CatalogSearchResult,omitempty"`
+
 	// CatalogSnapshot corresponds to the JSON schema field "CatalogSnapshot".
 	CatalogSnapshot *CatalogSnapshot `json:"CatalogSnapshot,omitempty,omitzero" yaml:"CatalogSnapshot,omitempty" mapstructure:"CatalogSnapshot,omitempty"`
 
 	// CompiledContext corresponds to the JSON schema field "CompiledContext".
 	CompiledContext *CompiledContext `json:"CompiledContext,omitempty,omitzero" yaml:"CompiledContext,omitempty" mapstructure:"CompiledContext,omitempty"`
 
+	// ComponentCatalogArtifact corresponds to the JSON schema field
+	// "ComponentCatalogArtifact".
+	ComponentCatalogArtifact *ComponentCatalogArtifact `json:"ComponentCatalogArtifact,omitempty,omitzero" yaml:"ComponentCatalogArtifact,omitempty" mapstructure:"ComponentCatalogArtifact,omitempty"`
+
 	// ComponentDesignSpec corresponds to the JSON schema field "ComponentDesignSpec".
 	ComponentDesignSpec *ComponentDesignSpec `json:"ComponentDesignSpec,omitempty,omitzero" yaml:"ComponentDesignSpec,omitempty" mapstructure:"ComponentDesignSpec,omitempty"`
+
+	// ComponentIntent corresponds to the JSON schema field "ComponentIntent".
+	ComponentIntent *ComponentIntent `json:"ComponentIntent,omitempty,omitzero" yaml:"ComponentIntent,omitempty" mapstructure:"ComponentIntent,omitempty"`
+
+	// ComponentIr corresponds to the JSON schema field "ComponentIr".
+	ComponentIr *ComponentIr `json:"ComponentIr,omitempty,omitzero" yaml:"ComponentIr,omitempty" mapstructure:"ComponentIr,omitempty"`
 
 	// ComponentPackageSpec corresponds to the JSON schema field
 	// "ComponentPackageSpec".
 	ComponentPackageSpec *ComponentPackageSpec `json:"ComponentPackageSpec,omitempty,omitzero" yaml:"ComponentPackageSpec,omitempty" mapstructure:"ComponentPackageSpec,omitempty"`
+
+	// ComponentRequest corresponds to the JSON schema field "ComponentRequest".
+	ComponentRequest *ComponentRequest `json:"ComponentRequest,omitempty,omitzero" yaml:"ComponentRequest,omitempty" mapstructure:"ComponentRequest,omitempty"`
 
 	// ContractBom corresponds to the JSON schema field "ContractBom".
 	ContractBom *ContractBom `json:"ContractBom,omitempty,omitzero" yaml:"ContractBom,omitempty" mapstructure:"ContractBom,omitempty"`
@@ -7663,6 +12288,9 @@ type ContractsBundleJson struct {
 
 	// UsageObservation corresponds to the JSON schema field "UsageObservation".
 	UsageObservation *UsageObservation `json:"UsageObservation,omitempty,omitzero" yaml:"UsageObservation,omitempty" mapstructure:"UsageObservation,omitempty"`
+
+	// ValidationFinding corresponds to the JSON schema field "ValidationFinding".
+	ValidationFinding *ValidationFinding `json:"ValidationFinding,omitempty,omitzero" yaml:"ValidationFinding,omitempty" mapstructure:"ValidationFinding,omitempty"`
 
 	// WorkerLease corresponds to the JSON schema field "WorkerLease".
 	WorkerLease *WorkerLease `json:"WorkerLease,omitempty,omitzero" yaml:"WorkerLease,omitempty" mapstructure:"WorkerLease,omitempty"`
@@ -12690,6 +17318,336 @@ func (j *UsageObservation) UnmarshalJSON(value []byte) error {
 		return fmt.Errorf("field %s: must be >= %v", "recoveryEpoch", 0)
 	}
 	*j = UsageObservation(plain)
+	return nil
+}
+
+// One validation finding in the shape shared by validation-report artifacts,
+// WorkerResult findings, the validateComponentModel response, and Studio's finding
+// UI (PRD-CAT-0001 §9.7; WORK-FR-018, UX-FR-017). It names the stable check that
+// produced it (for example puck.serializable-props), the governed problem code,
+// the severity, the location by file, line, column, or IR pointer, a user-safe
+// message, an optional remediation, the governed retryability, an optional
+// evidence digest, and the producer kind and version. Messages carry no internal
+// diagnostics, stack traces, credentials, or raw upstream bodies.
+type ValidationFinding struct {
+	// CheckId corresponds to the JSON schema field "checkId".
+	CheckId string `json:"checkId" yaml:"checkId" mapstructure:"checkId"`
+
+	// Code corresponds to the JSON schema field "code".
+	Code string `json:"code" yaml:"code" mapstructure:"code"`
+
+	// EvidenceDigest corresponds to the JSON schema field "evidenceDigest".
+	EvidenceDigest *SharedPrimitivesDigest `json:"evidenceDigest,omitempty,omitzero" yaml:"evidenceDigest,omitempty" mapstructure:"evidenceDigest,omitempty"`
+
+	// Kind corresponds to the JSON schema field "kind".
+	Kind interface{} `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Location corresponds to the JSON schema field "location".
+	Location ValidationFindingLocation `json:"location" yaml:"location" mapstructure:"location"`
+
+	// Message corresponds to the JSON schema field "message".
+	Message string `json:"message" yaml:"message" mapstructure:"message"`
+
+	// Producer corresponds to the JSON schema field "producer".
+	Producer ValidationFindingProducer `json:"producer" yaml:"producer" mapstructure:"producer"`
+
+	// Remediation corresponds to the JSON schema field "remediation".
+	Remediation *string `json:"remediation,omitempty,omitzero" yaml:"remediation,omitempty" mapstructure:"remediation,omitempty"`
+
+	// Retryability corresponds to the JSON schema field "retryability".
+	Retryability ValidationFindingRetryability `json:"retryability" yaml:"retryability" mapstructure:"retryability"`
+
+	// Severity corresponds to the JSON schema field "severity".
+	Severity ValidationFindingSeverity `json:"severity" yaml:"severity" mapstructure:"severity"`
+}
+
+type ValidationFindingLocation struct {
+	// Column corresponds to the JSON schema field "column".
+	Column *int `json:"column,omitempty,omitzero" yaml:"column,omitempty" mapstructure:"column,omitempty"`
+
+	// File corresponds to the JSON schema field "file".
+	File *string `json:"file,omitempty,omitzero" yaml:"file,omitempty" mapstructure:"file,omitempty"`
+
+	// IrPath corresponds to the JSON schema field "irPath".
+	IrPath *string `json:"irPath,omitempty,omitzero" yaml:"irPath,omitempty" mapstructure:"irPath,omitempty"`
+
+	// Line corresponds to the JSON schema field "line".
+	Line *int `json:"line,omitempty,omitzero" yaml:"line,omitempty" mapstructure:"line,omitempty"`
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ValidationFindingLocation) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	type Plain ValidationFindingLocation
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if plain.Column != nil && 1000000000 < *plain.Column {
+		return fmt.Errorf("field %s: must be <= %v", "column", 1000000000)
+	}
+	if plain.Column != nil && 1 > *plain.Column {
+		return fmt.Errorf("field %s: must be >= %v", "column", 1)
+	}
+	if plain.File != nil {
+		if matched, _ := regexp.MatchString(`^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`, string(*plain.File)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "File", `^[A-Za-z0-9._-][A-Za-z0-9._/-]*$`)
+		}
+	}
+	if plain.File != nil && utf8.RuneCountInString(string(*plain.File)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "file", 1)
+	}
+	if plain.File != nil && utf8.RuneCountInString(string(*plain.File)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "file", 512)
+	}
+	if plain.IrPath != nil {
+		if matched, _ := regexp.MatchString(`^/.*$`, string(*plain.IrPath)); !matched {
+			return fmt.Errorf("field %s pattern match: must match %s", "IrPath", `^/.*$`)
+		}
+	}
+	if plain.IrPath != nil && utf8.RuneCountInString(string(*plain.IrPath)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "irPath", 1)
+	}
+	if plain.IrPath != nil && utf8.RuneCountInString(string(*plain.IrPath)) > 512 {
+		return fmt.Errorf("field %s length: must be <= %d", "irPath", 512)
+	}
+	if plain.Line != nil && 1000000000 < *plain.Line {
+		return fmt.Errorf("field %s: must be <= %v", "line", 1000000000)
+	}
+	if plain.Line != nil && 1 > *plain.Line {
+		return fmt.Errorf("field %s: must be >= %v", "line", 1)
+	}
+	*j = ValidationFindingLocation(plain)
+	return nil
+}
+
+type ValidationFindingProducer struct {
+	// Kind corresponds to the JSON schema field "kind".
+	Kind ValidationFindingProducerKind `json:"kind" yaml:"kind" mapstructure:"kind"`
+
+	// Version corresponds to the JSON schema field "version".
+	Version string `json:"version" yaml:"version" mapstructure:"version"`
+}
+
+type ValidationFindingProducerKind string
+
+const ValidationFindingProducerKindAgentService ValidationFindingProducerKind = "agent-service"
+const ValidationFindingProducerKindContractRuntime ValidationFindingProducerKind = "contract-runtime"
+const ValidationFindingProducerKindWorker ValidationFindingProducerKind = "worker"
+
+var enumValues_ValidationFindingProducerKind = []interface{}{
+	"contract-runtime",
+	"worker",
+	"agent-service",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ValidationFindingProducerKind) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ValidationFindingProducerKind {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ValidationFindingProducerKind, v)
+	}
+	*j = ValidationFindingProducerKind(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ValidationFindingProducer) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ValidationFindingProducer: required")
+	}
+	if _, ok := raw["version"]; raw != nil && !ok {
+		return fmt.Errorf("field version in ValidationFindingProducer: required")
+	}
+	type Plain ValidationFindingProducer
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`, string(plain.Version)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Version", `^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$`)
+	}
+	if utf8.RuneCountInString(string(plain.Version)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "version", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Version)) > 64 {
+		return fmt.Errorf("field %s length: must be <= %d", "version", 64)
+	}
+	*j = ValidationFindingProducer(plain)
+	return nil
+}
+
+type ValidationFindingRetryability string
+
+const ValidationFindingRetryabilityAfterApproval ValidationFindingRetryability = "after-approval"
+const ValidationFindingRetryabilityAfterInput ValidationFindingRetryability = "after-input"
+const ValidationFindingRetryabilityAfterRebase ValidationFindingRetryability = "after-rebase"
+const ValidationFindingRetryabilityNever ValidationFindingRetryability = "never"
+const ValidationFindingRetryabilityOperatorAction ValidationFindingRetryability = "operator-action"
+const ValidationFindingRetryabilitySafeAfterBackoff ValidationFindingRetryability = "safe-after-backoff"
+const ValidationFindingRetryabilitySafeImmediate ValidationFindingRetryability = "safe-immediate"
+
+var enumValues_ValidationFindingRetryability = []interface{}{
+	"never",
+	"safe-immediate",
+	"safe-after-backoff",
+	"after-input",
+	"after-approval",
+	"after-rebase",
+	"operator-action",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ValidationFindingRetryability) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ValidationFindingRetryability {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ValidationFindingRetryability, v)
+	}
+	*j = ValidationFindingRetryability(v)
+	return nil
+}
+
+type ValidationFindingSeverity string
+
+const ValidationFindingSeverityBlocking ValidationFindingSeverity = "blocking"
+const ValidationFindingSeverityCorrectable ValidationFindingSeverity = "correctable"
+const ValidationFindingSeverityInfo ValidationFindingSeverity = "info"
+const ValidationFindingSeverityWarning ValidationFindingSeverity = "warning"
+
+var enumValues_ValidationFindingSeverity = []interface{}{
+	"blocking",
+	"correctable",
+	"warning",
+	"info",
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ValidationFindingSeverity) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var v string
+	if err := json.Unmarshal(value, &v); err != nil {
+		return err
+	}
+	var ok bool
+	for _, expected := range enumValues_ValidationFindingSeverity {
+		if reflect.DeepEqual(v, expected) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("invalid value (expected one of %#v): %#v", enumValues_ValidationFindingSeverity, v)
+	}
+	*j = ValidationFindingSeverity(v)
+	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (j *ValidationFinding) UnmarshalJSON(value []byte) error {
+	if err := rejectUnknownJSONFields(value, reflect.TypeOf(*j)); err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return err
+	}
+	if _, ok := raw["checkId"]; raw != nil && !ok {
+		return fmt.Errorf("field checkId in ValidationFinding: required")
+	}
+	if _, ok := raw["code"]; raw != nil && !ok {
+		return fmt.Errorf("field code in ValidationFinding: required")
+	}
+	if _, ok := raw["kind"]; raw != nil && !ok {
+		return fmt.Errorf("field kind in ValidationFinding: required")
+	}
+	if _, ok := raw["location"]; raw != nil && !ok {
+		return fmt.Errorf("field location in ValidationFinding: required")
+	}
+	if _, ok := raw["message"]; raw != nil && !ok {
+		return fmt.Errorf("field message in ValidationFinding: required")
+	}
+	if _, ok := raw["producer"]; raw != nil && !ok {
+		return fmt.Errorf("field producer in ValidationFinding: required")
+	}
+	if _, ok := raw["retryability"]; raw != nil && !ok {
+		return fmt.Errorf("field retryability in ValidationFinding: required")
+	}
+	if _, ok := raw["severity"]; raw != nil && !ok {
+		return fmt.Errorf("field severity in ValidationFinding: required")
+	}
+	type Plain ValidationFinding
+	var plain Plain
+	if err := json.Unmarshal(value, &plain); err != nil {
+		return err
+	}
+	if matched, _ := regexp.MatchString(`^[a-z][a-z0-9-]*\.[a-z][a-z0-9.-]*$`, string(plain.CheckId)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "CheckId", `^[a-z][a-z0-9-]*\.[a-z][a-z0-9.-]*$`)
+	}
+	if utf8.RuneCountInString(string(plain.CheckId)) < 3 {
+		return fmt.Errorf("field %s length: must be >= %d", "checkId", 3)
+	}
+	if utf8.RuneCountInString(string(plain.CheckId)) > 96 {
+		return fmt.Errorf("field %s length: must be <= %d", "checkId", 96)
+	}
+	if matched, _ := regexp.MatchString(`^[A-Z][A-Z0-9_.-]+$`, string(plain.Code)); !matched {
+		return fmt.Errorf("field %s pattern match: must match %s", "Code", `^[A-Z][A-Z0-9_.-]+$`)
+	}
+	if utf8.RuneCountInString(string(plain.Code)) < 3 {
+		return fmt.Errorf("field %s length: must be >= %d", "code", 3)
+	}
+	if utf8.RuneCountInString(string(plain.Code)) > 96 {
+		return fmt.Errorf("field %s length: must be <= %d", "code", 96)
+	}
+	if utf8.RuneCountInString(string(plain.Message)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "message", 1)
+	}
+	if utf8.RuneCountInString(string(plain.Message)) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "message", 1024)
+	}
+	if plain.Remediation != nil && utf8.RuneCountInString(string(*plain.Remediation)) < 1 {
+		return fmt.Errorf("field %s length: must be >= %d", "remediation", 1)
+	}
+	if plain.Remediation != nil && utf8.RuneCountInString(string(*plain.Remediation)) > 1024 {
+		return fmt.Errorf("field %s length: must be <= %d", "remediation", 1024)
+	}
+	*j = ValidationFinding(plain)
 	return nil
 }
 

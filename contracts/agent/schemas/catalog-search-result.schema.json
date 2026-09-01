@@ -1,0 +1,152 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/catalog-search-result.schema.json",
+  "title": "CatalogSearchResult contract",
+  "description": "Ranked, scoped catalog search page (PRD-CAT-0001 §9.3, CAT-FR-018 to CAT-FR-020). It binds the page to the catalog revision and digest it was answered from and to the fingerprint (digest of the canonical request) that identifies the query, and lists the authorized entries with their identity, package, name, description, tags, decimal score, the fields that matched, visibility, status, and exemplar flag, followed by the page information. A cached page must be byte-identical to the authoritative page for the same revision, scope, query, filters, and policy.",
+  "type": "object",
+  "minProperties": 6,
+  "maxProperties": 6,
+  "required": [
+    "kind",
+    "catalogRevision",
+    "catalogDigest",
+    "fingerprint",
+    "entries",
+    "pageInfo"
+  ],
+  "properties": {
+    "kind": {
+      "const": "CatalogSearchResult"
+    },
+    "catalogRevision": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "catalogDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "fingerprint": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "minProperties": 11,
+        "maxProperties": 11,
+        "required": [
+          "componentId",
+          "packageName",
+          "packageVersion",
+          "componentName",
+          "description",
+          "tags",
+          "score",
+          "matchedFields",
+          "visibility",
+          "status",
+          "exemplar"
+        ],
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+          },
+          "packageName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 214,
+            "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$"
+          },
+          "packageVersion": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 64,
+            "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+          },
+          "componentName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Z][A-Za-z0-9]{0,63}$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 1024
+          },
+          "tags": {
+            "type": "array",
+            "minItems": 0,
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9-]{0,63}$"
+            }
+          },
+          "score": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/DecimalString"
+          },
+          "matchedFields": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 7,
+            "items": {
+              "enum": [
+                "identity",
+                "name",
+                "description",
+                "tags",
+                "props",
+                "capabilities",
+                "compatibility"
+              ]
+            }
+          },
+          "visibility": {
+            "enum": [
+              "public",
+              "workspace",
+              "project"
+            ]
+          },
+          "status": {
+            "enum": [
+              "approved",
+              "deprecated",
+              "withdrawn"
+            ]
+          },
+          "exemplar": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "pageInfo": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/PageInfo"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "CatalogSearchResult",
+    "componentName": "anvilkit.contract.schema.catalog-search-result",
+    "owner": "Platform Contracts owner",
+    "stability": "experimental",
+    "identityFields": [
+      "/catalogRevision",
+      "/catalogDigest",
+      "/fingerprint",
+      "/entries",
+      "/pageInfo"
+    ],
+    "maximumSerializedBytes": 262144,
+    "descriptions": []
+  }
+}

@@ -1,0 +1,552 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/component-catalog-artifact.schema.json",
+  "title": "ComponentCatalogArtifact contract",
+  "description": "Producer-side signed component catalog bundle (PRD-CAT-0001 §9.1, §9.4; CAT-FR-011, CAT-FR-012, CAT-FR-016). Components CI exports the unsigned catalog and exemplar sources with provenance for one qualified commit; the catalog authority (ADR-026 §D11, the Pagix Component Registry) merges its scoped private components and signs the result with the catalog-release key registered in the platform contract trust root. It carries the catalog revision, the source repository, commit, and workflow run, the Contract BOM digest, the Puck and React runtime ranges, one closed entry per component with identity, package, description, tags, props, slots, variants, capabilities, style targets, i18n keys, peer dependencies, exports, visibility, status, preview reference, source evidence, and exemplar flag, the component-by-runtime compatibility matrix, the carried files by path, digest, size, and role, and the signature block. Descriptions and every other text field are data: nothing in this artifact instructs an agent. Agent Service verifies the signature, digest, Contract BOM compatibility, and schema before activation (CAT-FR-013); CatalogSnapshot remains the Run-local pinned view derived from one activated revision.",
+  "type": "object",
+  "minProperties": 17,
+  "maxProperties": 17,
+  "required": [
+    "kind",
+    "schemaVersion",
+    "catalogRevision",
+    "sourceRepository",
+    "sourceCommit",
+    "sourceWorkflowRun",
+    "createdAt",
+    "contractBomDigest",
+    "puckRuntime",
+    "reactRuntime",
+    "components",
+    "compatibilityMatrix",
+    "files",
+    "signatureAlgorithm",
+    "signingKeyId",
+    "signingPurpose",
+    "signature"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ComponentCatalogArtifact"
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1
+    },
+    "catalogRevision": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/OpaqueId"
+    },
+    "sourceRepository": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[a-z0-9][a-z0-9._/-]*$"
+    },
+    "sourceCommit": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "sourceWorkflowRun": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "createdAt": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Timestamp"
+    },
+    "contractBomDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "puckRuntime": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[\\x20-\\x7E]+$"
+    },
+    "reactRuntime": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[\\x20-\\x7E]+$"
+    },
+    "components": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 2048,
+      "items": {
+        "$ref": "#/$defs/Entry"
+      }
+    },
+    "compatibilityMatrix": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "minProperties": 4,
+        "maxProperties": 4,
+        "required": [
+          "componentId",
+          "puckRuntime",
+          "reactRuntime",
+          "compatible"
+        ],
+        "properties": {
+          "componentId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+          },
+          "puckRuntime": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[\\x20-\\x7E]+$"
+          },
+          "reactRuntime": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[\\x20-\\x7E]+$"
+          },
+          "compatible": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 8192,
+      "items": {
+        "type": "object",
+        "minProperties": 4,
+        "maxProperties": 4,
+        "required": [
+          "path",
+          "digest",
+          "size",
+          "role"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[A-Za-z0-9._-][A-Za-z0-9._/-]*$"
+          },
+          "digest": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1073741824
+          },
+          "role": {
+            "enum": [
+              "metadata",
+              "exemplar-source",
+              "preview"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "signatureAlgorithm": {
+      "enum": [
+        "dsse-ed25519-v1",
+        "jws-eddsa-v1"
+      ]
+    },
+    "signingKeyId": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 256,
+      "pattern": "^urn:anvilkit:key:[a-z0-9][a-z0-9:-]{14,255}$"
+    },
+    "signingPurpose": {
+      "const": "catalog-release"
+    },
+    "signature": {
+      "type": "string",
+      "minLength": 86,
+      "maxLength": 512,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "Entry": {
+      "type": "object",
+      "minProperties": 22,
+      "maxProperties": 22,
+      "required": [
+        "componentId",
+        "packageName",
+        "packageVersion",
+        "componentName",
+        "componentSlug",
+        "scaffoldType",
+        "category",
+        "description",
+        "tags",
+        "props",
+        "slots",
+        "variants",
+        "capabilities",
+        "styleTargets",
+        "i18nKeys",
+        "peerDependencies",
+        "exports",
+        "visibility",
+        "status",
+        "previewRef",
+        "sourceEvidence",
+        "exemplar"
+      ],
+      "properties": {
+        "componentId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+        },
+        "packageName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 214,
+          "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$"
+        },
+        "packageVersion": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 64,
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+        },
+        "componentName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Z][A-Za-z0-9]{0,63}$"
+        },
+        "componentSlug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "scaffoldType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 1024
+        },
+        "tags": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          }
+        },
+        "props": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "minProperties": 4,
+            "maxProperties": 4,
+            "required": [
+              "name",
+              "puckField",
+              "default",
+              "required"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+              },
+              "puckField": {
+                "enum": [
+                  "text",
+                  "textarea",
+                  "number",
+                  "select",
+                  "radio",
+                  "array",
+                  "object",
+                  "external",
+                  "custom",
+                  "slot"
+                ]
+              },
+              "default": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 1024
+              },
+              "required": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "slots": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "minProperties": 3,
+            "maxProperties": 3,
+            "required": [
+              "name",
+              "allowedComponents",
+              "maxDepth"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+              },
+              "allowedComponents": {
+                "type": "array",
+                "minItems": 0,
+                "maxItems": 256,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[@A-Za-z0-9*][A-Za-z0-9._/@-]*$"
+                }
+              },
+              "maxDepth": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 32
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "variants": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          }
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          }
+        },
+        "styleTargets": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9-]{0,63}$"
+          }
+        },
+        "i18nKeys": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 512,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          }
+        },
+        "peerDependencies": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/BoundedStringMap"
+        },
+        "exports": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "minProperties": 4,
+            "maxProperties": 4,
+            "required": [
+              "subpath",
+              "esm",
+              "cjs",
+              "types"
+            ],
+            "properties": {
+              "subpath": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^\\.(/[A-Za-z0-9._/-]+)?$"
+              },
+              "esm": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 256,
+                "pattern": "^\\./[A-Za-z0-9._/-]+$"
+              },
+              "cjs": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 256,
+                "pattern": "^\\./[A-Za-z0-9._/-]+$"
+              },
+              "types": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 256,
+                "pattern": "^\\./[A-Za-z0-9._/-]+$"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "visibility": {
+          "enum": [
+            "public",
+            "workspace",
+            "project"
+          ]
+        },
+        "status": {
+          "enum": [
+            "approved",
+            "deprecated",
+            "withdrawn"
+          ]
+        },
+        "previewRef": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[A-Za-z0-9._-][A-Za-z0-9._/-]*$"
+        },
+        "sourceEvidence": {
+          "type": "object",
+          "minProperties": 3,
+          "maxProperties": 3,
+          "required": [
+            "commit",
+            "path",
+            "files"
+          ],
+          "properties": {
+            "commit": {
+              "type": "string",
+              "minLength": 40,
+              "maxLength": 40,
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512,
+              "pattern": "^[A-Za-z0-9._-][A-Za-z0-9._/-]*$"
+            },
+            "files": {
+              "type": "array",
+              "minItems": 0,
+              "maxItems": 512,
+              "items": {
+                "type": "object",
+                "minProperties": 2,
+                "maxProperties": 2,
+                "required": [
+                  "path",
+                  "digest"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^[A-Za-z0-9._-][A-Za-z0-9._/-]*$"
+                  },
+                  "digest": {
+                    "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "exemplar": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "ComponentCatalogArtifact",
+    "componentName": "anvilkit.contract.schema.component-catalog-artifact",
+    "owner": "Platform Contracts owner",
+    "stability": "experimental",
+    "identityFields": [
+      "/schemaVersion",
+      "/catalogRevision",
+      "/sourceRepository",
+      "/sourceCommit",
+      "/sourceWorkflowRun",
+      "/createdAt",
+      "/contractBomDigest",
+      "/puckRuntime",
+      "/reactRuntime",
+      "/components",
+      "/compatibilityMatrix",
+      "/files"
+    ],
+    "maximumSerializedBytes": 1048576,
+    "descriptions": []
+  }
+}

@@ -1,0 +1,500 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/component-intent.schema.json",
+  "title": "ComponentIntent contract",
+  "description": "Interpreted component request (PRD-CAT-0001 §9.5, CAT-FR-006; artifact kind component-intent). It records the purpose (extending the intent member of ComponentDesignSpec with summary and rationale), the resolved naming, the public API of props, slots, and events, the variants, states, interactions, responsiveness, accessibility, and content model, the assumptions made and the questions still unresolved for a human, the target scope with the recorded distribution intent, the catalog reuse evidence the interpretation rests on, and the Brand Context snapshot it was interpreted against. It is a reviewable interpretation only and authorizes no generation, build, or publication.",
+  "type": "object",
+  "minProperties": 15,
+  "maxProperties": 15,
+  "required": [
+    "kind",
+    "purpose",
+    "name",
+    "publicApi",
+    "variants",
+    "states",
+    "interactions",
+    "responsiveness",
+    "accessibility",
+    "contentModel",
+    "assumptions",
+    "unresolved",
+    "targetScope",
+    "catalogEvidence",
+    "brandSnapshotRef"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ComponentIntent"
+    },
+    "purpose": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "summary",
+        "rationale"
+      ],
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        }
+      },
+      "additionalProperties": false
+    },
+    "name": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "componentName",
+        "componentSlug",
+        "packageName"
+      ],
+      "properties": {
+        "componentName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Z][A-Za-z0-9]{0,63}$"
+        },
+        "componentSlug": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9-]{0,63}$"
+        },
+        "packageName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 214,
+          "pattern": "^(@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "publicApi": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "props",
+        "slots",
+        "events"
+      ],
+      "properties": {
+        "props": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "minProperties": 4,
+            "maxProperties": 5,
+            "required": [
+              "name",
+              "type",
+              "required",
+              "control"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+              },
+              "type": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "default": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 1024
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "control": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "pattern": "^[a-z][a-z0-9-]{0,63}$"
+              }
+            },
+            "additionalProperties": false,
+            "x-anvilkit-omittedSemantics": {
+              "default": "omitted when the prop has no default and must be supplied"
+            }
+          }
+        },
+        "slots": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          }
+        },
+        "events": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 66,
+            "pattern": "^on[A-Z][A-Za-z0-9]{0,63}$"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "variants": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "name",
+          "description"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "states": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "state",
+          "trigger",
+          "description"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "trigger": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,63}$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "interactions": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "minProperties": 2,
+        "maxProperties": 2,
+        "required": [
+          "trigger",
+          "effect"
+        ],
+        "properties": {
+          "trigger": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "effect": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "responsiveness": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "breakpoints",
+        "rules"
+      ],
+      "properties": {
+        "breakpoints": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z0-9-]{0,31}$"
+          }
+        },
+        "rules": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "minProperties": 2,
+            "maxProperties": 2,
+            "required": [
+              "breakpoint",
+              "rule"
+            ],
+            "properties": {
+              "breakpoint": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32,
+                "pattern": "^[a-z][a-z0-9-]{0,31}$"
+              },
+              "rule": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "accessibility": {
+      "type": "object",
+      "minProperties": 4,
+      "maxProperties": 4,
+      "required": [
+        "role",
+        "labels",
+        "keyboard",
+        "reducedMotion"
+      ],
+      "properties": {
+        "role": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z-]{0,63}$"
+        },
+        "labels": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 16,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          }
+        },
+        "keyboard": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "minProperties": 2,
+            "maxProperties": 2,
+            "required": [
+              "key",
+              "action"
+            ],
+            "properties": {
+              "key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "action": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "reducedMotion": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "contentModel": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "key",
+          "kind",
+          "description"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "kind": {
+            "enum": [
+              "text",
+              "rich-text",
+              "image",
+              "link",
+              "list"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 512
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      }
+    },
+    "unresolved": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "minProperties": 3,
+        "maxProperties": 3,
+        "required": [
+          "question",
+          "responseSchema",
+          "blocking"
+        ],
+        "properties": {
+          "question": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "responseSchema": {
+            "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/SchemaReference"
+          },
+          "blocking": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "targetScope": {
+      "type": "object",
+      "minProperties": 3,
+      "maxProperties": 3,
+      "required": [
+        "workspaceId",
+        "projectId",
+        "distributionIntent"
+      ],
+      "properties": {
+        "workspaceId": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/WorkspaceId"
+        },
+        "projectId": {
+          "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ProjectId"
+        },
+        "distributionIntent": {
+          "enum": [
+            "private",
+            "public"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "catalogEvidence": {
+      "$ref": "anvilkit://schema/catalog-reuse-evidence?digest=sha256:0817469a38b0f31afdb9aea1cba618352fe42419f068eae54be4de7eb80f2cbe"
+    },
+    "brandSnapshotRef": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/ArtifactReference"
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-contract": {
+    "logicalId": "ComponentIntent",
+    "componentName": "anvilkit.contract.schema.component-intent",
+    "owner": "Platform Contracts owner",
+    "stability": "experimental",
+    "identityFields": [
+      "/purpose",
+      "/name",
+      "/publicApi",
+      "/variants",
+      "/states",
+      "/interactions",
+      "/responsiveness",
+      "/accessibility",
+      "/contentModel",
+      "/assumptions",
+      "/unresolved",
+      "/targetScope",
+      "/catalogEvidence",
+      "/brandSnapshotRef"
+    ],
+    "maximumSerializedBytes": 131072,
+    "descriptions": []
+  }
+}

@@ -1,0 +1,154 @@
+{
+  "$schema": "https://contracts.anvilkit.dev/agent/schemas/meta/anvilkit-2020-12.schema.json",
+  "$id": "https://contracts.anvilkit.dev/agent/schemas/validation-finding.schema.json",
+  "title": "ValidationFinding contract",
+  "description": "One validation finding in the shape shared by validation-report artifacts, WorkerResult findings, the validateComponentModel response, and Studio's finding UI (PRD-CAT-0001 §9.7; WORK-FR-018, UX-FR-017). It names the stable check that produced it (for example puck.serializable-props), the governed problem code, the severity, the location by file, line, column, or IR pointer, a user-safe message, an optional remediation, the governed retryability, an optional evidence digest, and the producer kind and version. Messages carry no internal diagnostics, stack traces, credentials, or raw upstream bodies.",
+  "type": "object",
+  "minProperties": 8,
+  "maxProperties": 10,
+  "required": [
+    "kind",
+    "checkId",
+    "code",
+    "severity",
+    "location",
+    "message",
+    "retryability",
+    "producer"
+  ],
+  "properties": {
+    "kind": {
+      "const": "ValidationFinding"
+    },
+    "checkId": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 96,
+      "pattern": "^[a-z][a-z0-9-]*\\.[a-z][a-z0-9.-]*$"
+    },
+    "code": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 96,
+      "pattern": "^[A-Z][A-Z0-9_.-]+$"
+    },
+    "severity": {
+      "enum": [
+        "blocking",
+        "correctable",
+        "warning",
+        "info"
+      ]
+    },
+    "location": {
+      "type": "object",
+      "minProperties": 0,
+      "maxProperties": 4,
+      "required": [],
+      "properties": {
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[A-Za-z0-9._-][A-Za-z0-9._/-]*$"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000000
+        },
+        "column": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000000
+        },
+        "irPath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^/.*$"
+        }
+      },
+      "additionalProperties": false,
+      "x-anvilkit-omittedSemantics": {
+        "file": "omitted when the finding is not bound to a file",
+        "line": "omitted when the finding has no line",
+        "column": "omitted when the finding has no column",
+        "irPath": "omitted when the finding is not bound to a ComponentIR location"
+      }
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "remediation": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "retryability": {
+      "enum": [
+        "never",
+        "safe-immediate",
+        "safe-after-backoff",
+        "after-input",
+        "after-approval",
+        "after-rebase",
+        "operator-action"
+      ]
+    },
+    "evidenceDigest": {
+      "$ref": "anvilkit://schema/shared-primitives?digest=sha256:49d3142e660e7835a4b99a2e9479c4b21709a197829279f5191daa247fcc6576#/$defs/Digest"
+    },
+    "producer": {
+      "type": "object",
+      "minProperties": 2,
+      "maxProperties": 2,
+      "required": [
+        "kind",
+        "version"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "contract-runtime",
+            "worker",
+            "agent-service"
+          ]
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "x-anvilkit-omittedSemantics": {
+    "remediation": "omitted when no remediation is known",
+    "evidenceDigest": "omitted when the check produced no evidence artifact"
+  },
+  "x-anvilkit-contract": {
+    "logicalId": "ValidationFinding",
+    "componentName": "anvilkit.contract.schema.validation-finding",
+    "owner": "Platform Contracts owner",
+    "stability": "experimental",
+    "identityFields": [
+      "/checkId",
+      "/code",
+      "/severity",
+      "/location",
+      "/message",
+      "/remediation",
+      "/retryability",
+      "/evidenceDigest",
+      "/producer"
+    ],
+    "maximumSerializedBytes": 8192,
+    "descriptions": []
+  }
+}

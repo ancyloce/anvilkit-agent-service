@@ -2,7 +2,7 @@
   "traceVersion": 1,
   "language": "go",
   "packageVersion": "0.1.0",
-  "sourceSetSha256": "3cea58242c12f15c03478040e9b42a53a8e3f9b6d761821172971a55f04b16f6",
+  "sourceSetSha256": "ef1e2b1082164ade5cfdda31ca1d0abf760d4e355d52b6e4d12f96c9a5a65098",
   "sources": [
     {
       "path": "contracts/agent/schemas/agent-artifact.schema.json",
@@ -61,6 +61,18 @@
       "sha256": "d4608f216d773faf2747d5350440deb844e17d93a7602e06397d0f18d1c81a3c"
     },
     {
+      "path": "contracts/agent/schemas/catalog-reuse-evidence.schema.json",
+      "sha256": "0817469a38b0f31afdb9aea1cba618352fe42419f068eae54be4de7eb80f2cbe"
+    },
+    {
+      "path": "contracts/agent/schemas/catalog-search-request.schema.json",
+      "sha256": "cefd0c391f54917042f6af0f99ad6ef2b809429f7978180d359f05c54996f487"
+    },
+    {
+      "path": "contracts/agent/schemas/catalog-search-result.schema.json",
+      "sha256": "8bdd9bd16b68e325f3883a4165cbe0a31f173381dd21f522dd29d379fab634df"
+    },
+    {
       "path": "contracts/agent/schemas/catalog-snapshot.schema.json",
       "sha256": "b5eeea33cae5a3d543ecffaf9ce39cd0401d651468963174db6414b699a12573"
     },
@@ -69,12 +81,28 @@
       "sha256": "e535dd923ac156840b06932f5a54aa7e70ea6dcc6f0bce8314a6e562ad784c33"
     },
     {
+      "path": "contracts/agent/schemas/component-catalog-artifact.schema.json",
+      "sha256": "3f058a653af0b77d2bb17394820154ec05584f5b6d83180643af560a3be0ab7a"
+    },
+    {
       "path": "contracts/agent/schemas/component-design-spec.schema.json",
       "sha256": "6d27019db26929dca79a2d30871952e3e2c7b902ef4e67e30e2d6520d1702236"
     },
     {
+      "path": "contracts/agent/schemas/component-intent.schema.json",
+      "sha256": "dc2c1f480c2205c525fda46d7d915ea74091e43e727c5bc8c520e9e454736313"
+    },
+    {
+      "path": "contracts/agent/schemas/component-ir.schema.json",
+      "sha256": "da5017d65b60e12e75b46f72f877ea72126180f4fde9856f183c2711c01ed086"
+    },
+    {
       "path": "contracts/agent/schemas/component-package-spec.schema.json",
       "sha256": "d694500504b19346c06da12db9cfee37b0810f6e6bb6b07298e3b03c78518061"
+    },
+    {
+      "path": "contracts/agent/schemas/component-request.schema.json",
+      "sha256": "cefe70d96dcf20889f65e7ef372a6910add8ef9f2ab83d438b449e1d94db76f6"
     },
     {
       "path": "contracts/agent/schemas/contract-bom.schema.json",
@@ -193,6 +221,10 @@
       "sha256": "c3beabfc7abfa5565a082806b356585bc64ce8b6dd46f26606feff87677b5eb8"
     },
     {
+      "path": "contracts/agent/schemas/validation-finding.schema.json",
+      "sha256": "e5be31203f1bb3abf84370225b302c7853979c90fb6a0bddbc73a70f1b527ebe"
+    },
+    {
       "path": "contracts/agent/schemas/worker-lease.schema.json",
       "sha256": "969dbadb42316bc843b41538e260883572e5d73421f898ec94901d1a8b4cc107"
     },
@@ -214,11 +246,11 @@
     }
   ],
   "projections": {
-    "schemaBundleSha256": "1395059a205bff9c19c48abefc026a6a21eabd4f4f413c8e08b1651f35cee614",
+    "schemaBundleSha256": "2378be544249dad6540d0a10078a08e72757390e949e0ce985a703cd595877d2",
     "openapi": {
-      "agent-runtime": "bf0791a72f8fb0acca3249fac9b0470007af144604fbe0acd221b7d5baf5d309",
-      "agent-service": "d5186b30b0141e0562d398c5fae5a2cc1fbeee52bb774420905dc07e231d5133",
-      "pagix-agent-integration": "8c2fdf898e8234bd4c471bf9079a7661a74430292702d1ce5c6a936f2b93ba5b"
+      "agent-runtime": "f532a1dca336ffd0b7651253b0a845311414f06cd768e9b768d1a8f20699f589",
+      "agent-service": "8cb7c9b7354e21bdd62362036de93362b02f4840340eb68bd2948ef63a1d6819",
+      "pagix-agent-integration": "5161ea4751d05654ece55591dde2bd831636bc10e7c2810d2b1274e5680045b9"
     }
   },
   "generators": {
@@ -232,15 +264,15 @@
     }
   },
   "output": {
-    "bytes": 865208,
+    "bytes": 1271593,
     "files": 4,
-    "sha256": "b86df64b2f62b875b1826d4de5d43a7ebd841cd41b83b002157112ea6feb3a5e",
+    "sha256": "e710a28e8d507ded45933f86113337cd434d130fe00a61a7c4cd58657ed79e86",
     "directories": [
       {
         "directory": "generated",
-        "bytes": 865208,
+        "bytes": 1271593,
         "files": 4,
-        "sha256": "6001b5927fd1db24f50a5eb2243892f796e36538f6ede9ea48a6a3e43f12dc08"
+        "sha256": "c55b4d90abd86a48dd5bc1e7874ba7ad160231aa94f5aae6e51377db8845701b"
       }
     ]
   }
