@@ -1,7 +1,7 @@
 {
   "approval": {
-    "lockDigest": "sha256:3f40fd6f09c733f8397cd4b65733b8153acf4317ec6312b1383540663d5021d7",
-    "profileDigest": "sha256:b19e0d190b55ad58f1359c334d2673df5d983afcd08a504d450ce8bc6573f7a0"
+    "lockDigest": "sha256:753605c55c0ecb37ebb6fbf6f577ee0d94dc1babca8453f25497573ffc4f26ef",
+    "profileDigest": "sha256:c3afa2484aa0e35c18bb070b7a46599cbe7b1a90f2446e8b9a9cbb931cff8d6b"
   },
   "catalogVersion": 1,
   "releases": [
@@ -9,25 +9,25 @@
       "runtimeUnitId": "runtime.platform.page-candidate-specialist",
       "definitionId": "definition.platform.component-spec-specialist",
       "document": "release.platform.component-spec-specialist.json",
-      "documentDigest": "sha256:128e8150c8b53c9f390b05331dab88291ba9b2993ed2356cde08f4d4d4f80d7f"
+      "documentDigest": "sha256:1284a76d1993bcdac43cf10e8a70c8c422371f0266d71b078830328b985e42d6"
     },
     {
       "runtimeUnitId": "runtime.platform.page-change-manager",
       "definitionId": "definition.platform.manager",
       "document": "release.platform.manager.json",
-      "documentDigest": "sha256:ff79992d8ae877beabad4f03ddd88a3643dcbafc25ef9c36a980af318d545539"
+      "documentDigest": "sha256:df156e7471a67923af4beb2e72dbff6cd1eb33e095bff19589991032dfd6ce16"
     },
     {
       "runtimeUnitId": "runtime.platform.page-candidate-specialist",
       "definitionId": "definition.platform.page-candidate-specialist",
       "document": "release.platform.page-candidate-specialist.json",
-      "documentDigest": "sha256:1ae3fb0af63a221b0c29c56480563a3678be24fefb46dc65deacb5ea5a946051"
+      "documentDigest": "sha256:64490bc2570c7de2ec1f2910604399fba2ea9ed618e87a537d81338e8015e735"
     },
     {
       "runtimeUnitId": "runtime.platform.page-change-manager",
       "definitionId": "definition.platform.page-change-manager",
       "document": "release.platform.page-change-manager.json",
-      "documentDigest": "sha256:9483f80bc2beb1184b3774c302e7c6a9f692f8e9db7b53edc98ba07410d42b53"
+      "documentDigest": "sha256:c134661304d86d4eae7795b2df8bab2acb49ac893234cd53e3c3f9bb8417d004"
     }
   ]
 }

@@ -13,11 +13,11 @@
   "image": {
     "imageDigest": "sha256:8ee722dcc48b9b463021a2cfb3a946635fad2d0dfff1dd69684528954e784d65",
     "sourceCommit": "0000000000000000000000000000000000000000",
-    "provenanceDigest": "sha256:6ac00fac237b88168c8e2e9cf45bd6f72c8493cce61f61b998ca2a5ac0cfc714",
-    "signatureDigest": "sha256:ec959a82371dba5092a9b97236636018400c1f59314d6e2ad093a307ef0b6436"
+    "provenanceDigest": "sha256:83bc48b35f7a5f2479d869a5b94edd43986595cd945c58b91b51304615117927",
+    "signatureDigest": "sha256:09985053b038cec25c840c5f84b02d04a1d407a719940a1b5ccd8608a199fa7e"
   },
   "protocol": {
-    "invocationProtocolDigest": "sha256:a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450",
+    "invocationProtocolDigest": "sha256:7fb7fc7834470cbc4b5b833aed6505d0e4ee3ab8e880db81e7bf1170e68a5cdf",
     "contractBomReference": {
       "repository": "anvilkit/contracts",
       "bomDigest": "sha256:5c2f0068884c18d084be4b86b0379d24b161f1b8c056896d3e1e104a4c0826aa",
@@ -58,10 +58,10 @@
     "owner": "Agent Runtime Release owner",
     "rolloutPolicy": "new-runs-only",
     "drainSeconds": 30,
-    "rollbackTarget": "sha256:bb5639955b5ffd7cef8527e5dd42329a63bb9df337b5e54e3e2f2a9dadb5caa5"
+    "rollbackTarget": "sha256:8ee722dcc48b9b463021a2cfb3a946635fad2d0dfff1dd69684528954e784d65"
   },
   "lifecycle": {
     "state": "active",
-    "effectiveAt": "2026-08-27T00:00:00.000Z"
+    "effectiveAt": "2026-09-01T08:58:00.032Z"
   }
 }
