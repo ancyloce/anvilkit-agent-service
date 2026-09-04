@@ -16,7 +16,7 @@ import (
 
 // agentArtifactSchema pins the canonical wire contract every artifact
 // representation is proved against before it leaves.
-const agentArtifactSchema = "anvilkit://schema/agent-artifact?digest=sha256:0776014482233fa9db255075fd51ca229e421b2232c624213cb09d13795aac43"
+const agentArtifactSchema = "anvilkit://schema/agent-artifact?digest=sha256:ad13f62312765d898c106d12da58b77b5d1124211d8a4e8ecadd0db65a55e2b8"
 
 // AgentArtifactKind is the canonical representation discriminator.
 const AgentArtifactKind = "AgentArtifact"

@@ -74,6 +74,8 @@ const (
 	PagePreviewTask   Kind = "page-preview-task"
 	PagePreviewResult Kind = "page-preview-result"
 	ComponentDesign   Kind = "component-design-spec"
+	ComponentIntent   Kind = "component-intent"
+	ComponentIR       Kind = "component-ir"
 )
 
 // ValidKind reports whether a kind is one the governed vocabulary names. The
@@ -82,7 +84,8 @@ const (
 func ValidKind(value Kind) bool {
 	switch value {
 	case CompiledContext, TargetSnapshot, AgentPlan, WorkerResult, ValidationReport,
-		CatalogSnapshot, PageCandidate, PagePreviewTask, PagePreviewResult, ComponentDesign:
+		CatalogSnapshot, PageCandidate, PagePreviewTask, PagePreviewResult, ComponentDesign,
+		ComponentIntent, ComponentIR:
 		return true
 	}
 	return false

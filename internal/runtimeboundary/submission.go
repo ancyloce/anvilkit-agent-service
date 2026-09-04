@@ -91,15 +91,13 @@ func (SubmissionConflictError) Error() string {
 
 // recordedArtifact renders the canonical account of one recorded submission.
 //
-// The kind is the nearest value the canonical artifact schema's vocabulary
-// offers: the artifact-kind registry governs `page-candidate`, but the schema
-// enum does not yet carry it (a pre-existing canonical gap recorded during the
-// runtime work), so the widest honest value the contract admits is used until
-// the schema catches up under contract governance.
+// The kind is what the boundary just admitted: a canonical page candidate. The
+// schema enum mirrors the artifact-kind registry (plan 0009 C4-04), so the
+// registry's own value is recorded rather than a stand-in.
 func (b *Boundary) recordedArtifact(submission Submission) schema.AgentArtifact {
 	recordedAt := schema.SharedPrimitivesTimestamp(submission.SubmittedAt.UTC())
 	return schema.AgentArtifact{
-		Kind:         schema.AgentArtifactKindWorkerResult,
+		Kind:         schema.AgentArtifactKindPageCandidate,
 		ArtifactId:   schema.SharedPrimitivesOpaqueId(submission.ArtifactID),
 		ContractType: "AgentArtifact",
 		CreatedAt:    recordedAt,
