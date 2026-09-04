@@ -56,15 +56,15 @@
     "openapi": [
       {
         "path": "contracts/agent/openapi/agent-runtime.openapi.json",
-        "digest": "sha256:a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450"
+        "digest": "sha256:7fb7fc7834470cbc4b5b833aed6505d0e4ee3ab8e880db81e7bf1170e68a5cdf"
       },
       {
         "path": "contracts/agent/openapi/agent-service.openapi.json",
-        "digest": "sha256:13c64266794947b2c55d1e75832ec9d974fc404fefc71533484fca4b7c041da5"
+        "digest": "sha256:17f957850d675a9e44e540a3f48a3ea65185f2ebc8fdad96c6229d070642be0e"
       },
       {
         "path": "contracts/agent/openapi/pagix-agent-integration.openapi.json",
-        "digest": "sha256:1176b1d382cc64c51cef747efec0a83025237ece6b422a443c0802afe451a4be"
+        "digest": "sha256:52aa851aa9c493948890217801279fa0ad7a114465bb08828eee2f119ad93eec"
       }
     ],
     "asyncapi": [
@@ -79,7 +79,7 @@
     ],
     "fixtureManifest": {
       "path": "contracts/agent/fixtures/manifest.json",
-      "digest": "sha256:3ade865fc9dfcdd769bd0a65b6324e4910fc667c2af7e6928b7be5532bc1f8fa"
+      "digest": "sha256:d021769f73d95ca76b0f1805cbd2a4be063b02a24be806e7e5feb1fdbf972b4c"
     },
     "fixtureManifestSchema": {
       "path": "contracts/agent/fixtures/manifest.schema.json",
@@ -118,7 +118,7 @@
       "logicalId": "AgentArtifact",
       "componentName": "anvilkit.contract.schema.agent-artifact",
       "schemaPath": "contracts/agent/schemas/agent-artifact.schema.json",
-      "digest": "sha256:0776014482233fa9db255075fd51ca229e421b2232c624213cb09d13795aac43",
+      "digest": "sha256:ad13f62312765d898c106d12da58b77b5d1124211d8a4e8ecadd0db65a55e2b8",
       "owner": "Agent Service Metadata owner",
       "stability": "p0-kernel",
       "fixtureCoverage": [

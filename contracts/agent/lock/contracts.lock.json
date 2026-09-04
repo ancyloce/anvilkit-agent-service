@@ -3,7 +3,7 @@
   "description": "Canonical Agent contract lock (ADR-018). Regenerate with check-agent-profile.ts --update after a coordinated atomic refactor; CI verifies byte equality.",
   "profile": {
     "path": "contracts/agent/profile/p0-kernel-profile.json",
-    "sha256": "sha256:732db5da05d7822a8ea709fafbd1c09faeb890bf78f2f357e34fd7628f772a72"
+    "sha256": "sha256:c3afa2484aa0e35c18bb070b7a46599cbe7b1a90f2446e8b9a9cbb931cff8d6b"
   },
   "sources": {
     "contracts/agent/asyncapi/agent-events.asyncapi.json": "sha256:be4b6fe71d31ecdf98720bd488062e9d07ed1d43f76de3d3cc1498281d64d12d",
@@ -169,7 +169,7 @@
     "contracts/agent/fixtures/invalid/validation-finding.ungoverned-severity.json": "sha256:0623803a235023112fcb6b37b6c09629c79af0f549ca60ad8e227da6109b8a76",
     "contracts/agent/fixtures/invalid/worker-lease.missing-leaseEpoch.json": "sha256:d36a4d22b2ebf7fc2486c3290b9dbb109366214ed5604fc30598d915ee4f9155",
     "contracts/agent/fixtures/invalid/worker-result.missing-leaseEpoch.json": "sha256:d71f088d7933c8ac47f8af6501f8490e0b80cf2a10a2047fabc6586cfd001939",
-    "contracts/agent/fixtures/manifest.json": "sha256:3ade865fc9dfcdd769bd0a65b6324e4910fc667c2af7e6928b7be5532bc1f8fa",
+    "contracts/agent/fixtures/manifest.json": "sha256:d021769f73d95ca76b0f1805cbd2a4be063b02a24be806e7e5feb1fdbf972b4c",
     "contracts/agent/fixtures/manifest.schema.json": "sha256:0b6d424e1921b2a036ee0739d99bbaae6744bba6f069f116c8ef854e96d1fdf9",
     "contracts/agent/fixtures/signing/signature-cases.json": "sha256:864fdc7eb50c65685db38d135614a7634796c6e589c169b7c525b279a7607b71",
     "contracts/agent/fixtures/valid/agent-artifact.full.json": "sha256:b9d370fa6e8f963e0827bb180b14e66093bf319b7aca4697219272669e6283aa",
@@ -299,12 +299,12 @@
     "contracts/agent/fixtures/valid/worker-result.full.json": "sha256:5023cab48e731cd5e80ff5a92f57983fe12edfc940061494ea3e6bfd8e84737a",
     "contracts/agent/fixtures/valid/worker-result.maximum-bound.json": "sha256:c451f610dabc2131a877eda01e898c585b39adee464bd58a7e4629318fe5f125",
     "contracts/agent/fixtures/valid/worker-result.minimum.json": "sha256:27f62619891d79a3c08ec82933409025b9c9b7abf3c1544848dc8af9e9a7f2ed",
-    "contracts/agent/openapi/agent-runtime.openapi.json": "sha256:a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450",
-    "contracts/agent/openapi/agent-service.openapi.json": "sha256:13c64266794947b2c55d1e75832ec9d974fc404fefc71533484fca4b7c041da5",
-    "contracts/agent/openapi/pagix-agent-integration.openapi.json": "sha256:1176b1d382cc64c51cef747efec0a83025237ece6b422a443c0802afe451a4be",
+    "contracts/agent/openapi/agent-runtime.openapi.json": "sha256:7fb7fc7834470cbc4b5b833aed6505d0e4ee3ab8e880db81e7bf1170e68a5cdf",
+    "contracts/agent/openapi/agent-service.openapi.json": "sha256:17f957850d675a9e44e540a3f48a3ea65185f2ebc8fdad96c6229d070642be0e",
+    "contracts/agent/openapi/pagix-agent-integration.openapi.json": "sha256:52aa851aa9c493948890217801279fa0ad7a114465bb08828eee2f119ad93eec",
     "contracts/agent/registries/registry-set.json": "sha256:c995957fba218f6e5fab2280f01575645d5cb0eca0d60b0d9d015e69bfb2fb96",
     "contracts/agent/registries/registry-set.schema.json": "sha256:ea0816547877f5b0c1959eae6e888b0835f41247b45eb6c10f1d353c4ec93e63",
-    "contracts/agent/schemas/agent-artifact.schema.json": "sha256:0776014482233fa9db255075fd51ca229e421b2232c624213cb09d13795aac43",
+    "contracts/agent/schemas/agent-artifact.schema.json": "sha256:ad13f62312765d898c106d12da58b77b5d1124211d8a4e8ecadd0db65a55e2b8",
     "contracts/agent/schemas/agent-budget.schema.json": "sha256:e2942efa249ebe3c79c105b3356d50a8cc3c99e8b544616a6ed10fb44a0b8467",
     "contracts/agent/schemas/agent-definition.schema.json": "sha256:09122ada3e6c0814476bb44d0d291560ef7d95baa14a79f1c8587b300ee515e4",
     "contracts/agent/schemas/agent-event.schema.json": "sha256:2fdd8937381427507e721675ebbd66144595a193b53ba460534e9712df9b774a",
@@ -376,23 +376,23 @@
   "generated": {
     "goTrace": {
       "path": "packages/contracts-go/generated/trace.json",
-      "sha256": "sha256:df4a36fdf4369c9b256dd02106ccd654499242b7cacfe406cd6b286de576926d"
+      "sha256": "sha256:78bc13f853470ace119e95a8989a6169fb8eba0e8527ce44caafed951b66d12a"
     },
     "typescriptTrace": {
       "path": "packages/contracts-typescript/src/generated/trace.json",
-      "sha256": "sha256:1282bfe2d5995208b6e206d8072b020b3b2de1b6124f79c8d507a7c8eba67564"
+      "sha256": "sha256:ceb6a718405e0a671e3e126aeac42bd96d46b51f3f982f15584dd44c36e470b8"
     },
     "agentServiceIntakeTrace": {
       "path": "services/agent-service/contracts/generated/trace.json",
-      "sha256": "sha256:df4a36fdf4369c9b256dd02106ccd654499242b7cacfe406cd6b286de576926d"
+      "sha256": "sha256:78bc13f853470ace119e95a8989a6169fb8eba0e8527ce44caafed951b66d12a"
     },
     "agentRuntimesBinding": {
       "path": "services/agent-runtimes/contracts/generated/schema/contracts.gen.go",
-      "sha256": "sha256:129737987426a9b9bdfca3e27940530321ffc29e755fe409aacd82737051e8be"
+      "sha256": "sha256:16e6440c17fee324ef1441ab61eb7a767ed0cb1ce06de82cba7f39349625c237"
     },
     "previewWorkerBinding": {
       "path": "services/preview-worker/contracts/generated/schema.ts",
-      "sha256": "sha256:dd0d7b3fc3eebe97023245fdd686569aa4c5bed62b5e01b805032d19cc683e52"
+      "sha256": "sha256:6b11b9af12073b10280df0fa3d777daba38642379d53f5eeac9692b74377554f"
     }
   },
   "legacyExportLock": {

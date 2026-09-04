@@ -775,7 +775,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "anvilkit://schema/agent-artifact?digest=sha256:0776014482233fa9db255075fd51ca229e421b2232c624213cb09d13795aac43"
+                  "$ref": "anvilkit://schema/agent-artifact?digest=sha256:ad13f62312765d898c106d12da58b77b5d1124211d8a4e8ecadd0db65a55e2b8"
                 }
               }
             }
@@ -939,7 +939,7 @@
         "$ref": "anvilkit://schema/page-candidate?digest=sha256:21292ad166afb23da381528343829ea2be75d7520364839759e9bd1d05f38e69"
       },
       "AgentArtifact": {
-        "$ref": "anvilkit://schema/agent-artifact?digest=sha256:0776014482233fa9db255075fd51ca229e421b2232c624213cb09d13795aac43"
+        "$ref": "anvilkit://schema/agent-artifact?digest=sha256:ad13f62312765d898c106d12da58b77b5d1124211d8a4e8ecadd0db65a55e2b8"
       },
       "ProblemDetails": {
         "$ref": "anvilkit://schema/problem-details?digest=sha256:d42f44ad527b3a165aca0c56ab00b2b01ea28e3f7bb8346850a5334a7f438087"

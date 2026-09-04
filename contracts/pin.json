@@ -3,11 +3,11 @@
   "state": "canonical",
   "profile": {
     "path": "agent/profile/p0-kernel-profile.json",
-    "sha256": "sha256:732db5da05d7822a8ea709fafbd1c09faeb890bf78f2f357e34fd7628f772a72"
+    "sha256": "sha256:c3afa2484aa0e35c18bb070b7a46599cbe7b1a90f2446e8b9a9cbb931cff8d6b"
   },
   "lock": {
     "path": "agent/lock/contracts.lock.json",
-    "sha256": "sha256:eb9902a3a97c2d4b3ec371ff1174ab0c806f0e643b2db4cce79dbff83b6cec6e"
+    "sha256": "sha256:753605c55c0ecb37ebb6fbf6f577ee0d94dc1babca8453f25497573ffc4f26ef"
   },
   "source": "anvilkit-platform contracts/agent (ADR-018 canonical cutover)"
 }

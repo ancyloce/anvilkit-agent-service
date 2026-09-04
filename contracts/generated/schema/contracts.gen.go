@@ -51,7 +51,14 @@ type AgentArtifact struct {
 type AgentArtifactKind string
 
 const AgentArtifactKindAgentPlan AgentArtifactKind = "agent-plan"
+const AgentArtifactKindCatalogSnapshot AgentArtifactKind = "catalog-snapshot"
 const AgentArtifactKindCompiledContext AgentArtifactKind = "compiled-context"
+const AgentArtifactKindComponentDesignSpec AgentArtifactKind = "component-design-spec"
+const AgentArtifactKindComponentIntent AgentArtifactKind = "component-intent"
+const AgentArtifactKindComponentIr AgentArtifactKind = "component-ir"
+const AgentArtifactKindPageCandidate AgentArtifactKind = "page-candidate"
+const AgentArtifactKindPagePreviewResult AgentArtifactKind = "page-preview-result"
+const AgentArtifactKindPagePreviewTask AgentArtifactKind = "page-preview-task"
 const AgentArtifactKindTargetSnapshot AgentArtifactKind = "target-snapshot"
 const AgentArtifactKindValidationReport AgentArtifactKind = "validation-report"
 const AgentArtifactKindWorkerResult AgentArtifactKind = "worker-result"
@@ -62,6 +69,13 @@ var enumValues_AgentArtifactKind = []interface{}{
 	"agent-plan",
 	"worker-result",
 	"validation-report",
+	"catalog-snapshot",
+	"page-candidate",
+	"page-preview-task",
+	"page-preview-result",
+	"component-design-spec",
+	"component-intent",
+	"component-ir",
 }
 
 // UnmarshalJSON implements json.Unmarshaler.

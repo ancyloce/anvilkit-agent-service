@@ -32,7 +32,14 @@
         "target-snapshot",
         "agent-plan",
         "worker-result",
-        "validation-report"
+        "validation-report",
+        "catalog-snapshot",
+        "page-candidate",
+        "page-preview-task",
+        "page-preview-result",
+        "component-design-spec",
+        "component-intent",
+        "component-ir"
       ]
     },
     "schema": {
