@@ -117,6 +117,12 @@ func runCut(request cutRequest) error {
 	// Apply the mutations to every release document of each touched unit.
 	for _, entry := range store.entries {
 		document := store.releaseDocs[entry.document]
+		// The invocation protocol is contract material, not a build input: every
+		// release speaks the protocol the pinned runtime boundary description
+		// declares, so a description change moves all of them in the same cut.
+		if err := document.setString(protocolDigest, "protocol", "invocationProtocolDigest"); err != nil {
+			return fmt.Errorf("release %s: %w", entry.document, err)
+		}
 		if imageDigest, changed := request.images[entry.runtimeUnitID]; changed {
 			previous, err := document.stringAt("image", "imageDigest")
 			if err != nil {
