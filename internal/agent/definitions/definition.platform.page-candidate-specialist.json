@@ -1,6 +1,6 @@
 {
   "allowedDelegates": [],
-  "definitionDigest": "sha256:48513f1c6472c8f4b908ba58696aeae17701056ba09c5a51b811dcff7c6a696e",
+  "definitionDigest": "sha256:e15b528e9829199f1f099aed37f8f6feab25b4f1462c7f9d8614428279f1c72f",
   "definitionId": "definition.platform.page-candidate-specialist",
   "domain": "pagix-page",
   "evaluators": [],
@@ -39,9 +39,9 @@
   "role": "specialist",
   "runtimeBinding": {
     "runtimeUnitId": "runtime.platform.page-candidate-specialist",
-    "runtimeManifestDigest": "sha256:1ae3fb0af63a221b0c29c56480563a3678be24fefb46dc65deacb5ea5a946051",
+    "runtimeManifestDigest": "sha256:64490bc2570c7de2ec1f2910604399fba2ea9ed618e87a537d81338e8015e735",
     "runtimeImageDigest": "sha256:8ee722dcc48b9b463021a2cfb3a946635fad2d0dfff1dd69684528954e784d65",
-    "invocationProtocolDigest": "sha256:a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450",
+    "invocationProtocolDigest": "sha256:7fb7fc7834470cbc4b5b833aed6505d0e4ee3ab8e880db81e7bf1170e68a5cdf",
     "runtimeAudience": "urn:anvilkit:audience:runtime-page-candidate-specialist"
   },
   "stopConditions": [

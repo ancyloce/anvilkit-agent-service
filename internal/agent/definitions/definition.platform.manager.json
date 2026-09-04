@@ -2,7 +2,7 @@
   "allowedDelegates": [
     "definition.platform.component-spec-specialist"
   ],
-  "definitionDigest": "sha256:20c0b44e422bfcf42f4becbf9f6ee115f9ad67df402766c0a56e1767c492314f",
+  "definitionDigest": "sha256:e87a96c96e453a98accbdf16176f64796e9d73397aabc9d7c54f7dc15ea40c43",
   "definitionId": "definition.platform.manager",
   "domain": "platform-agent",
   "evaluators": [],
@@ -41,9 +41,9 @@
   "role": "manager",
   "runtimeBinding": {
     "runtimeUnitId": "runtime.platform.page-change-manager",
-    "runtimeManifestDigest": "sha256:ff79992d8ae877beabad4f03ddd88a3643dcbafc25ef9c36a980af318d545539",
+    "runtimeManifestDigest": "sha256:df156e7471a67923af4beb2e72dbff6cd1eb33e095bff19589991032dfd6ce16",
     "runtimeImageDigest": "sha256:a7a3dd30f9042ce87cb0f7e971ed7ee7dc083b1b41d10ddba443019d8357d23b",
-    "invocationProtocolDigest": "sha256:a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450",
+    "invocationProtocolDigest": "sha256:7fb7fc7834470cbc4b5b833aed6505d0e4ee3ab8e880db81e7bf1170e68a5cdf",
     "runtimeAudience": "urn:anvilkit:audience:runtime-page-change-manager"
   },
   "stopConditions": [

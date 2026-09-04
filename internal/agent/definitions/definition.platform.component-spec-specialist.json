@@ -1,6 +1,6 @@
 {
   "allowedDelegates": [],
-  "definitionDigest": "sha256:4496b7f6e9f39757d54d3550f97c3ea7fb94524ab85b0a7db81bba75fdb5959c",
+  "definitionDigest": "sha256:966a4e483f1134984bd96b209b2c25ceea34406b354ae2cb07c799d65841f175",
   "definitionId": "definition.platform.component-spec-specialist",
   "domain": "platform-agent",
   "evaluators": [],
@@ -39,9 +39,9 @@
   "role": "specialist",
   "runtimeBinding": {
     "runtimeUnitId": "runtime.platform.page-candidate-specialist",
-    "runtimeManifestDigest": "sha256:128e8150c8b53c9f390b05331dab88291ba9b2993ed2356cde08f4d4d4f80d7f",
+    "runtimeManifestDigest": "sha256:1284a76d1993bcdac43cf10e8a70c8c422371f0266d71b078830328b985e42d6",
     "runtimeImageDigest": "sha256:8ee722dcc48b9b463021a2cfb3a946635fad2d0dfff1dd69684528954e784d65",
-    "invocationProtocolDigest": "sha256:a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450",
+    "invocationProtocolDigest": "sha256:7fb7fc7834470cbc4b5b833aed6505d0e4ee3ab8e880db81e7bf1170e68a5cdf",
     "runtimeAudience": "urn:anvilkit:audience:runtime-page-candidate-specialist"
   },
   "stopConditions": [

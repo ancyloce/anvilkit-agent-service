@@ -2,7 +2,7 @@
   "allowedDelegates": [
     "definition.platform.page-candidate-specialist"
   ],
-  "definitionDigest": "sha256:c88c0a0126624434ebd770b3c3f0072db0c3217895a266561946ff4ffd7cccd4",
+  "definitionDigest": "sha256:9709bd2f4bc673be7706c3cefbdebdb68f44e90c9ea0833484748688736c4d5e",
   "definitionId": "definition.platform.page-change-manager",
   "domain": "pagix-page",
   "evaluators": [],
@@ -41,9 +41,9 @@
   "role": "manager",
   "runtimeBinding": {
     "runtimeUnitId": "runtime.platform.page-change-manager",
-    "runtimeManifestDigest": "sha256:9483f80bc2beb1184b3774c302e7c6a9f692f8e9db7b53edc98ba07410d42b53",
+    "runtimeManifestDigest": "sha256:c134661304d86d4eae7795b2df8bab2acb49ac893234cd53e3c3f9bb8417d004",
     "runtimeImageDigest": "sha256:a7a3dd30f9042ce87cb0f7e971ed7ee7dc083b1b41d10ddba443019d8357d23b",
-    "invocationProtocolDigest": "sha256:a3a0207267ea536fc3c022063186d1e07a413d1dfbeb4db821cfb40622ae9450",
+    "invocationProtocolDigest": "sha256:7fb7fc7834470cbc4b5b833aed6505d0e4ee3ab8e880db81e7bf1170e68a5cdf",
     "runtimeAudience": "urn:anvilkit:audience:runtime-page-change-manager"
   },
   "stopConditions": [
